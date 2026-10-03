@@ -28,33 +28,68 @@ jobs:
       - name: 安装依赖
         run: pip install -r requirements.txt pyinstaller
 
-      - name: 打包主程序
+      - name: 准备 ffmpeg
+        run: python tools/setup_ffmpeg.py --dest vendor --force
+
+      # 轻量版：不含 ffmpeg，10MB 左右
+      - name: 打包主程序（轻量版）
         run: python -m PyInstaller bili_submit.spec --noconfirm --clean
 
-      - name: 准备 ffmpeg
-        run: python tools/setup_ffmpeg.py --dest dist
+      # 内置版：ffmpeg 打进归档，单个 exe 开箱即用（约 69MB，解压后约 94MB）
+      - name: 打包主程序（内置 ffmpeg 版）
+        env:
+          BUNDLE_FFMPEG: '1'
+          EXE_NAME: bilibili-submit-standalone
+        run: python -m PyInstaller bili_submit.spec --noconfirm
+
+      # GUI 版：windowed（无控制台黑框）+ 带上 tkinter
+      - name: 打包图形界面版
+        env:
+          GUI: '1'
+          EXE_NAME: bilibili-submit-gui
+        run: python -m PyInstaller bili_submit.spec --noconfirm
+
+      # 外置份给 full 包用：启动比内嵌快，也不用每次解压 85MB
+      - name: 复制外置 ffmpeg 到 dist
+        shell: pwsh
+        run: Copy-Item vendor\ffmpeg.exe dist\ffmpeg.exe -Force
 
       - name: 冒烟测试
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = ".\dist\bilibili-submit.exe"
 
-          # 这两条在任何环境下都必须干净退出。--help 会渲染中文帮助，
-          # 曾经因 stdout 编码是 cp1252 而抛 UnicodeEncodeError。
-          & $exe --version
-          if ($LASTEXITCODE -ne 0) { throw "--version 失败 ($LASTEXITCODE)" }
+          # 轻量版
+          & .\dist\bilibili-submit.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "轻量版 --version 失败 ($LASTEXITCODE)" }
+          & .\dist\bilibili-submit.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "轻量版 --help 失败 ($LASTEXITCODE)" }
 
-          & $exe --help
-          if ($LASTEXITCODE -ne 0) { throw "--help 失败 ($LASTEXITCODE)" }
+          # 内置版：check 里能看到 ffmpeg 来源，验证内嵌真的生效
+          & .\dist\bilibili-submit-standalone.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "内置版 --version 失败 ($LASTEXITCODE)" }
+          & .\dist\bilibili-submit-standalone.exe check
 
           # tid 需要网络，偶发失败不阻断打包
-          & $exe tid
+          & .\dist\bilibili-submit.exe tid
           if ($LASTEXITCODE -ne 0) { Write-Host "警告: tid 返回 $LASTEXITCODE（网络问题，不阻断）" }
 
           # check 在未登录时按设计返回 1（登录检查未过），只看能否正常启动。
-          & $exe check
+          & .\dist\bilibili-submit.exe check
           Write-Host "check 退出码 $LASTEXITCODE（未登录返回 1 属正常）"
+
+          # GUI 是 windowed 程序：没有 stdout，不能靠 --version 验证。
+          # 改为「启动后看它是否立刻退出」——缺 tkinter 时它会静默失败，
+          # 这是唯一能自动发现该问题的手段。
+          $gui = ".\dist\bilibili-submit-gui.exe"
+          if (-not (Test-Path $gui)) { throw "GUI exe 未生成: $gui" }
+          $proc = Start-Process -FilePath $gui -PassThru
+          Start-Sleep -Seconds 6
+          if ($proc.HasExited) {
+            throw "GUI 启动后立即退出（退出码 $($proc.ExitCode)），可能缺少 tkinter"
+          }
+          Stop-Process -Id $proc.Id -Force
+          Write-Host "GUI 启动正常，已关闭"
 
           # PowerShell 的 step 退出码取自最后一条原生命令的 $LASTEXITCODE，
           # 不显式归零的话，check 的 1 会让整个 step 判为失败。
@@ -65,24 +100,30 @@ jobs:
         run: |
           # 注意：config 和 README 来自仓库根，不是 dist\。
           # spec 里的 datas 是打进 exe 归档（sys._MEIPASS），不会落到 dist\ 下。
-          # 轻量版：不含 ffmpeg，需用户自备（仅影响 cover: auto）
+          # 轻量包：轻量 exe + config + README，不含 ffmpeg
           New-Item -ItemType Directory -Force -Path stage-mini | Out-Null
           Copy-Item dist\bilibili-submit.exe stage-mini\
           Copy-Item config stage-mini\ -Recurse
           Copy-Item README.md stage-mini\
+          Copy-Item CHANGELOG.md stage-mini\
           Compress-Archive -Path stage-mini\* -DestinationPath `
             dist\bilibili-submit-mini-windows.zip -Force
 
-          # 完整版：自带 ffmpeg，开箱即用
+          # 完整包：轻量 exe + 外置 ffmpeg + config + README。
+          # 启动比内嵌版快（不用每次解压 85MB），代价是要带着 ffmpeg.exe 一起拷。
           New-Item -ItemType Directory -Force -Path stage-full | Out-Null
           Copy-Item dist\bilibili-submit.exe stage-full\
           Copy-Item dist\ffmpeg.exe stage-full\
           Copy-Item config stage-full\ -Recurse
           Copy-Item README.md stage-full\
+          Copy-Item CHANGELOG.md stage-full\
           Compress-Archive -Path stage-full\* -DestinationPath `
             dist\bilibili-submit-full-windows.zip -Force
 
-          Get-ChildItem dist\*.zip | Format-Table Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+          # 两个裸 exe 本来就躺在 dist 下，直接作为资产上传。
+
+          Get-ChildItem dist\*.zip, dist\*.exe | Format-Table Name, `
+            @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
 
       - name: 创建 Release 并上传
         shell: pwsh
@@ -92,16 +133,37 @@ jobs:
         run: |
           $tag = $env:TAG
           $notes = @"
+          详见 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)。
+
           ## 下载
 
-          | 包 | 大小 | 说明 |
+          | 资产 | 大小 | 说明 |
           |---|---|---|
-          | `bilibili-submit-full-windows.zip` | ~87 MB | 自带 ffmpeg，开箱即用 |
-          | `bilibili-submit-mini-windows.zip` | ~11 MB | 不含 ffmpeg，需自备 |
+          | `bilibili-submit-gui.exe` | ~12 MB | **图形界面版**，双击开窗口操作 |
+          | `bilibili-submit-standalone.exe` | ~69 MB | 命令行单文件版，ffmpeg 已内置 |
+          | `bilibili-submit.exe` | ~10 MB | 命令行轻量 exe，需自备 ffmpeg |
+          | `bilibili-submit-full-windows.zip` | ~40 MB | 命令行 exe + 外置 ffmpeg.exe，启动最快 |
+          | `bilibili-submit-mini-windows.zip` | ~10 MB | 命令行 exe + config，不含 ffmpeg |
+
+          怎么选：
+
+          - **想要窗口界面** → `bilibili-submit-gui.exe`
+          - 想双击就用、不想管 ffmpeg → `standalone`
+          - 在意启动速度和体积 → `full`，让 `ffmpeg.exe` 跟着 exe 走
+
+          图形界面版自带扫码登录、投稿表单、批量任务、历史与设置，
+          和命令行共用同一套逻辑，两者可以混着用。
+
+          ffmpeg 只影响 `cover: auto` 自动抽帧，其他功能不依赖它。
 
           ## 使用
 
-          1. 解压
+          图形界面版：双击 `bilibili-submit-gui.exe`，先在「登录」页扫码，
+          再去「投稿」页选文件填写信息。
+
+          命令行版：
+
+          1. 解压（下载 exe 的话跳过这步）
           2. `bilibili-submit.exe login` 手机扫码登录（**扫完要在手机上点确认**）
           3. `bilibili-submit.exe upload 视频.mp4 --title "标题" --tid 21 --tag "标签"`
           4. `bilibili-submit.exe check` 自检
@@ -109,15 +171,19 @@ jobs:
           ## 注意事项
 
           - 首次运行可能被杀毒软件拦截：PyInstaller 的启动器常被误判，
-            请在 Windows Defender 里添加白名单。
+            请在 Windows Defender 里添加白名单。standalone 版启动时要把
+            内置的 ffmpeg 解压到临时目录，更容易触发误报。
           - 建议用 Windows Terminal 打开以正确显示二维码；
             传统 cmd 显示乱码时，复制链接到手机打开同样可以登录。
           - 新号投稿频控较严，批量投稿请设置任务间隔。
           - 仅供管理自己的账号投稿使用。
           "@
           gh release create $tag `
-            "dist\bilibili-submit-mini-windows.zip#轻量版（不含 ffmpeg，约 11MB）" `
-            "dist\bilibili-submit-full-windows.zip#完整版（自带 ffmpeg，约 87MB）" `
+            "dist\bilibili-submit-gui.exe#图形界面版（约 12MB）" `
+            "dist\bilibili-submit-standalone.exe#单文件版（内置 ffmpeg，约 69MB）" `
+            "dist\bilibili-submit.exe#轻量 exe（不含 ffmpeg，约 10MB）" `
+            "dist\bilibili-submit-full-windows.zip#完整版（外置 ffmpeg，约 40MB）" `
+            "dist\bilibili-submit-mini-windows.zip#轻量版（不含 ffmpeg，约 10MB）" `
             --repo ${{ github.repository }} `
             --title "bilibili-submit $tag" `
             --notes $notes
@@ -131,5 +197,8 @@ jobs:
           $repo = "${{ github.repository }}"
           Write-Host ""
           Write-Host "公开发布完成，下载链接：" -ForegroundColor Green
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-gui.exe"
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-standalone.exe"
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit.exe"
           Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-full-windows.zip"
           Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-mini-windows.zip"

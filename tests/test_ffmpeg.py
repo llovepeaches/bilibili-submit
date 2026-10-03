@@ -113,3 +113,73 @@ def test_missing_raises_with_actionable_hint(tmp_path, monkeypatch):
 def test_describe_is_human_readable(tmp_path):
     info = ff.FfmpegInfo("/usr/bin/ffmpeg", "system")
     assert "系统 PATH" in info.describe()
+
+
+# ---------------------------------------------------------------------------
+# 内嵌 ffmpeg（BUNDLE_FFMPEG=1 打包）
+# ---------------------------------------------------------------------------
+
+def test_meipass_dir_is_none_when_unfrozen(monkeypatch):
+    """源码运行时没有 _MEIPASS，内嵌这一级必须干净地退化掉。"""
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    assert ff._meipass_dir() is None
+
+
+def test_embedded_ffmpeg_is_found(tmp_path, monkeypatch):
+    """打包内嵌的 ffmpeg 应能被定位到，source 标为 embedded。"""
+    exe_dir = tmp_path / "app"
+    exe_dir.mkdir()
+    meipass = tmp_path / "_MEI123"
+    _make_ffmpeg(meipass)
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "app.exe"))
+    monkeypatch.setattr(sys, "_MEIPASS", str(meipass), raising=False)
+    monkeypatch.setattr(ff, "_from_imageio", lambda: None)
+    monkeypatch.setattr(ff.shutil, "which", lambda _n: None)
+
+    info = ff.find_ffmpeg()
+    assert info is not None
+    assert info.source == "embedded"
+    assert Path(info.path) == meipass / "ffmpeg"
+
+
+def test_bundled_beats_embedded(tmp_path, monkeypatch):
+    """用户放在 exe 旁边的 ffmpeg 优先于内嵌的那份——方便自行换版本。"""
+    exe_dir = tmp_path / "app"
+    exe_dir.mkdir()
+    meipass = tmp_path / "_MEI123"
+    _make_ffmpeg(meipass)          # 内嵌
+    _make_ffmpeg(exe_dir)          # 外置
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "app.exe"))
+    monkeypatch.setattr(sys, "_MEIPASS", str(meipass), raising=False)
+    monkeypatch.setattr(ff, "_from_imageio", lambda: None)
+
+    info = ff.find_ffmpeg()
+    assert info is not None
+    assert info.source == "bundled"
+    assert Path(info.path) == exe_dir / "ffmpeg"
+
+
+def test_embedded_beats_imageio(tmp_path, monkeypatch):
+    """内嵌优先于 imageio，避免明明自带了却去用 pip 装的。"""
+    exe_dir = tmp_path / "app"
+    exe_dir.mkdir()
+    meipass = tmp_path / "_MEI123"
+    _make_ffmpeg(meipass)
+    fake_imageio = _make_ffmpeg(tmp_path / "img")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "app.exe"))
+    monkeypatch.setattr(sys, "_MEIPASS", str(meipass), raising=False)
+    monkeypatch.setattr(ff, "_from_imageio", lambda: str(fake_imageio))
+
+    info = ff.find_ffmpeg()
+    assert info is not None
+    assert info.source == "embedded"
+
+
+def test_embedded_describe_is_human_readable():
+    assert "exe 内嵌" in ff.FfmpegInfo("/tmp/ffmpeg", "embedded").describe()

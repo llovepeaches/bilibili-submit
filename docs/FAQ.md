@@ -123,15 +123,23 @@ B 站不允许临近发布。`dtime_offset_hours` 调大到 4 以上，
 
 ### `cover: auto` 报找不到 ffmpeg
 
-只有自动抽帧需要 ffmpeg，其他功能不受影响。三个解法：
+只有自动抽帧需要 ffmpeg，其他功能不受影响。四个解法：
 
 ```
-1. pip install imageio-ffmpeg      # 最省事
-2. python tools/setup_ffmpeg.py --dest .   # 从 imageio 复制到项目根
-3. 把 cover 改成图片路径或 null   # 不用自动抽帧
+1. 下载 standalone 版 exe          # ffmpeg 已内置，最省事
+2. pip install imageio-ffmpeg      # 源码运行时最省事
+3. python tools/setup_ffmpeg.py --dest .   # 从 imageio 复制到项目根
+4. 把 cover 改成图片路径或 null   # 不用自动抽帧
 ```
 
-查看当前状态：`python run.py check`
+查看当前状态：`python run.py check`（会告诉你命中的是"程序同目录"、
+"exe 内嵌"、"imageio-ffmpeg"还是"系统 PATH"）。
+
+### 用了 standalone 版，check 还是说找不到 ffmpeg
+
+内嵌的 ffmpeg 在 `sys._MEIPASS` 下，只有打包出来的 exe 才有。
+如果你是把 zip 解开后跑里面的**轻量 exe**，那份本来就不带 ffmpeg——
+得下载 `bilibili-submit-standalone.exe`，或用 `full` 包（ffmpeg 外置）。
 
 ## Windows 特有
 

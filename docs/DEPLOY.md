@@ -153,15 +153,17 @@ upload:
 
 | 优先级 | 来源 | 怎么来的 |
 |---|---|---|
-| 1 | 程序同目录的 `ffmpeg.exe` | 打包时随包分发 |
-| 2 | `imageio-ffmpeg` 包内 | `pip install imageio-ffmpeg`（自动） |
-| 3 | 系统 `PATH` | 自行安装 |
+| 1 | 程序同目录的 `ffmpeg.exe` | 打包时随包分发；自己放一份可覆盖内置版 |
+| 2 | exe 内嵌（`sys._MEIPASS`） | 下载 `standalone` 版，或用 `BUNDLE_FFMPEG=1` 打包 |
+| 3 | `imageio-ffmpeg` 包内 | `pip install imageio-ffmpeg`（自动） |
+| 4 | 系统 `PATH` | 自行安装 |
 
 查看当前命中哪一个：
 
 ```bash
 python run.py check
-# ffmpeg: 就绪（bundled，版本 6.0-7.0）
+# ffmpeg: 就绪（bundled，版本 6.0-7.0）      程序同目录
+# ffmpeg: 就绪（embedded，版本 6.0-7.0）     exe 内嵌
 # ffmpeg: 未找到（仅影响 cover: auto 自动抽帧，其他功能不受影响）
 ```
 
@@ -174,6 +176,17 @@ python tools/setup_ffmpeg.py --dest .
 # 或自行下载后放项目根目录 / 放进 PATH
 # https://www.gyan.dev/ffmpeg/builds/
 ```
+
+要打包出**内置 ffmpeg 的单文件 exe**：
+
+```bash
+python tools/setup_ffmpeg.py --dest vendor   # 先备好源文件
+BUNDLE_FFMPEG=1 EXE_NAME=bilibili-submit-standalone \
+  python -m PyInstaller bili_submit.spec --noconfirm
+```
+
+⚠️ 内嵌会把 exe 从约 10 MB 撑到约 69 MB（解压后约 94 MB），且每次启动都要解压 ffmpeg 到
+临时目录（启动变慢、更易被杀软误判）。在意这两点就别内嵌。
 
 **不想用自动封面？** 把配置里 `cover: auto` 改成图片路径或 `null`，
 就不需要 ffmpeg 了。
@@ -271,7 +284,7 @@ build_windows.bat
 想发布给别人？推 tag 触发 GitHub Actions 出 Release 资产（公开直链）：
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.2 && git push origin v0.1.2   # 版本号换成你要发的
 ```
 
 ## 常见问题

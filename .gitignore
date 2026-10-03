@@ -8,5 +8,8 @@ config/my.yaml
 ffmpeg
 ffmpeg.exe
 
+# 内嵌打包用的 ffmpeg 落点（tools/setup_ffmpeg.py --dest vendor 生成，约 85MB）
+vendor/
+
 # 分发产物（由 tools/make_source_zip.py 生成）
 bilibili-submit-source.zip

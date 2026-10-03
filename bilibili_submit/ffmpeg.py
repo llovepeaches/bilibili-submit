@@ -3,11 +3,12 @@
 封面抽帧需要一个 ffmpeg 可执行文件。定位顺序（先命中先用）：
 
 1. **外置**——与 exe 同目录的 ``ffmpeg.exe``（或 ``ffmpeg/ffmpeg.exe``）。
-   这是打包场景的推荐方式：76MB 的 ffmpeg 不塞进单文件归档，
-   避免每次启动都解压到临时目录（慢且易被杀毒软件拦截）。
-   用户删掉它程序照常运行，只是不能自动生成封面。
-2. **imageio-ffmpeg** 自带的二进制（``pip install imageio-ffmpeg``）。
-3. **系统 PATH** 里的 ffmpeg。
+   用户自己放的版本优先于程序自带，方便换版本。
+2. **内嵌**——打进 exe 归档里的 ffmpeg（``sys._MEIPASS/ffmpeg.exe``）。
+   设 ``BUNDLE_FFMPEG=1`` 打包时才会带上，见 ``bili_submit.spec``。
+   内嵌让单个 exe 开箱即用，代价是体积和启动解压耗时变大。
+3. **imageio-ffmpeg** 自带的二进制（``pip install imageio-ffmpeg``）。
+4. **系统 PATH** 里的 ffmpeg。
 
 找不到时抛出带明确指引的异常，而不是静默跳过。
 """
@@ -40,19 +41,30 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _meipass_dir() -> Path | None:
+    """PyInstaller onefile 的解压目录（``sys._MEIPASS``）。
+
+    只有打包运行（且带内嵌资源）时才存在，源码运行时为 None。
+    内嵌的 ffmpeg 就躺在这个目录的根下。
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    return Path(base) if base else None
+
+
 @dataclass
 class FfmpegInfo:
     """一次定位结果。"""
 
     path: str
-    source: str  # bundled / system / imageio
+    source: str  # bundled / embedded / imageio / system
 
     def exists(self) -> bool:
         return bool(self.path) and Path(self.path).exists()
 
     def describe(self) -> str:
         labels = {
-            "bundled": "程序内置",
+            "bundled": "程序同目录",
+            "embedded": "exe 内嵌",
             "imageio": "imageio-ffmpeg",
             "system": "系统 PATH",
         }
@@ -65,6 +77,18 @@ def _candidates_in_app_dir() -> list[Path]:
     for name in _EXE_NAMES:
         out.append(base / name)
         # 支持 ffmpeg/ffmpeg.exe 这样的子目录布局
+        out.append(base / "ffmpeg" / name)
+    return out
+
+
+def _candidates_embedded() -> list[Path]:
+    """打包内嵌的 ffmpeg 候选路径。"""
+    base = _meipass_dir()
+    if base is None:
+        return []
+    out: list[Path] = []
+    for name in _EXE_NAMES:
+        out.append(base / name)
         out.append(base / "ffmpeg" / name)
     return out
 
@@ -86,9 +110,15 @@ def find_ffmpeg(required: bool = False) -> FfmpegInfo | None:
         required: 为 True 时找不到直接抛 BiliError（附带安装指引），
             否则返回 None。
     """
+    # ① 用户放在程序旁边的优先——想换 ffmpeg 版本时不必重新打包
     for candidate in _candidates_in_app_dir():
         if candidate.is_file():
             return FfmpegInfo(str(candidate), "bundled")
+
+    # ② 打进 exe 归档里的那份
+    for candidate in _candidates_embedded():
+        if candidate.is_file():
+            return FfmpegInfo(str(candidate), "embedded")
 
     from_imageio = _from_imageio()
     if from_imageio and Path(from_imageio).exists():

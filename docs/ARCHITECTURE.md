@@ -14,10 +14,15 @@ wbi / auth / exceptions      底层：签名、登录、错误类型
 upload / cover / submit      业务：上传、封面、投递
         ↓
 config / scheduler / cli     编排：配置、任务执行、命令行
+        ↓
+        ui                   界面（可选的一层，只在 GUI 版存在）
 ```
 
 底层不知道上层的存在。想换投递后端不用动上传，想换配置格式不用动签名。
 任一层可整体替换——`submit.py` 里的 `SubmitBackend` 抽象就是例子。
+
+`ui` 在最上面，只被 `cli.py` 的 `gui` 子命令引用。删掉整个 `ui/`
+目录，命令行功能不受任何影响。
 
 ## 模块职责
 
@@ -36,6 +41,13 @@ config / scheduler / cli     编排：配置、任务执行、命令行
 | `scheduler.py` | 任务执行编排、历史记录 | 具体业务步骤 |
 | `cli.py` | 参数解析、输出格式化、退出码 | 业务逻辑 |
 | `console.py` | Windows 控制台 UTF-8 适配 | 任何业务 |
+| `ui/` | 图形界面（tkinter）。见下方「界面层」 | 业务逻辑 |
+| `ui/theme.py` | 颜色/字体/间距的唯一来源 | 具体控件 |
+| `ui/widgets.py` | 可复用组件，不知道 B 站的存在 | 业务概念 |
+| `ui/qr.py` | 二维码矩阵 → Canvas 绘制 | 网络请求 |
+| `ui/workers.py` | 后台线程与取消 | UI 操作 |
+| `ui/views/` | 各页面：把数据画出来、把操作翻译成下层调用 | 业务逻辑 |
+| `ui/app.py` | 主窗口、导航、状态栏 | 业务判断 |
 
 ## 关键设计决策
 
@@ -108,6 +120,41 @@ if unknown:
 - `AppBackend`：需要 `access_key`。纯扫码登录拿不到，除非你另有渠道
 
 接口下线时改配置 `submit.backend` 即可切换，不用改代码。
+
+## 界面层
+
+GUI 用 **tkinter**（标准库）而不是 Qt/Web，理由是零新增依赖：
+不用引入 40MB+ 的第三方库，打包体积只增加约 2MB。
+
+几条硬性约束：
+
+### 界面不实现业务逻辑
+
+页面只做两件事：把下层数据画出来，把用户操作翻译成下层调用。
+投稿走的是和 CLI 完全相同的 `run_task`，登录用的是同一套
+`request_qrcode` / `poll_qrcode`。否则两套实现迟早走偏。
+
+`login_interactive` 是阻塞的且内部直接 `print`，**GUI 不用它**——
+改为自己驱动 `request_qrcode` + `poll_qrcode` 的轮询循环，
+这样才能一边轮询一边刷新界面、还能取消。
+
+### tkinter 不是线程安全的
+
+工作线程里直接改控件会让进程崩溃（Tcl 解释器不可重入）。
+所有耗时操作都走 `ui/workers.py`，结果用 `after()` 排回主线程。
+
+闭包捕获 `except ... as exc` 的变量要小心：except 块结束时 Python
+会 `del` 掉它，而 `after` 是延迟执行的，必须用默认参数绑定
+（`lambda e=exc: on_error(e)`）。
+
+### 二维码不依赖 Pillow
+
+`ui/qr.py` 从 `qrcode` 拿布尔矩阵，再用 Canvas 逐格画方块。
+打包配置里 PIL 是被排除的，为一张二维码把它拖进来不划算。
+
+### 颜色不写死在组件里
+
+所有颜色/字体/间距来自 `ui/theme.py`。改主题改一处即可。
 
 ## 添加新命令
 

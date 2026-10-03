@@ -38,7 +38,9 @@ def setup_console() -> None:
     3. 重配置失败（管道重定向、PyInstaller 的 ``sys.stdout`` 为 None 等）
        时套一层 replace 兜底流，宁可显示问号也不崩
     """
-    if is_windows():
+    # GUI（windowed）进程没有控制台，sys.stdout 是 None。
+    # 这时切代码页没有意义，还可能让系统闪出一个控制台窗口，直接跳过。
+    if is_windows() and getattr(sys, "stdout", None) is not None:
         _switch_codepage()
 
     # 第 2、3 层：所有平台都做。非 Windows 上原本就是 utf-8，reconfigure

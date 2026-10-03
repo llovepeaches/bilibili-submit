@@ -1,0 +1,149 @@
+# 更新日志
+
+本项目的版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)：
+`主版本.次版本.修订号`。处于 0.x 阶段时，次版本号变化可能包含不兼容改动。
+
+所有值得记录的变更都会写进这里。格式参考
+[Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
+
+## [未发布]
+
+暂无。
+
+## [0.1.4] - 2026-10-04
+
+### 修复
+
+- **投稿页表单控件全部叠在第一行**。根因是 Tk 的 `grid()` 始终作用于
+  `widget.master`：原实现里控件用外层 frame 当父容器创建，再塞进
+  `FormRow`，于是全被排到外层同一个单元格里。表现是六个输入框
+  互相压住、只看得见第一行——表单基本没法用。
+  `FormRow` 改为接收控件**类**并用内部容器实例化，从根上避免这个问题。
+- 投稿页输入框不再随窗口变宽拉伸（权重给错了列）。
+- 窗口压到最小尺寸（880x600）时，投稿页的「开始投稿」按钮和日志区
+  会被挤出可视范围，用户看不到也点不到。现将内容包进 `ScrollArea`，
+  超出时可滚动（滚轮也支持）。
+
+### 新增
+
+- `ScrollArea` 组件：纵向可滚动容器，内容装得下时自动隐藏滚动条。
+- 界面截图（`docs/images/`），README 与文档直接引用，不再只靠文字描述。
+
+### 变更
+
+- 版本号同步到 0.1.4（`__init__.py` / spec / `assets/version_info.txt`）。
+
+## [0.1.3] - 2026-10-04
+
+### 新增
+
+- **图形界面**：新增 `bilibili-submit-gui.exe` 资产与 `gui` 子命令。
+  五个页签：登录（二维码直接画在窗口里）、投稿（表单 + 进度）、
+  批量任务（列表 + 逐条状态）、历史、设置（代理 / cookie 路径 / 自检）。
+- GUI 用 **tkinter**（标准库），零新增依赖，打包体积只增加约 2 MB。
+- 二维码在 Canvas 上按矩阵逐格绘制，**不依赖 Pillow**——
+  打包配置里 PIL 是被排除的，为一张图把它拖进来不划算。
+- 界面跑在后台线程，窗口不会卡住；登录与投稿都支持随时取消。
+- 底部常驻状态栏，随时可见登录态与 ffmpeg 就绪情况。
+
+### 变更
+
+- `bili_submit.spec` 新增 `GUI=1` 模式：配套三件事——`console=False`、
+  把 tkinter 从 excludes 放出来、补 `tkinter.ttk` 等 hiddenimport
+  （tkinter 子模块是按需 import 的，静态分析扫不到）。
+- 依赖方向最上层增加 `ui`，只被 `cli.py` 的 `gui` 子命令引用。
+  删掉整个 `ui/` 目录，命令行功能不受影响。
+- `setup_console()` 在 windowed 进程（无 stdout）下不再切代码页——
+  那没有意义，还可能闪出一个控制台窗口。
+
+## [0.1.2] - 2026-10-04
+
+### 新增
+
+- **单个 exe 内置 ffmpeg**：新增 `bilibili-submit-standalone.exe` 资产，
+  ffmpeg 直接打进程序归档，双击即用，不必再管 `ffmpeg.exe` 放哪。
+  设 `BUNDLE_FFMPEG=1` 打包即可产出该版本。
+- ffmpeg 定位链新增**内嵌**一级（`sys._MEIPASS`）。完整顺序现在是：
+  程序同目录 → exe 内嵌 → imageio-ffmpeg → 系统 PATH。
+  放在程序旁边的 ffmpeg 仍然优先，方便自行换版本。
+- Release 同时提供**裸 exe 资产**，不用下 zip 再解压。
+
+### 变更
+
+- `bili_submit.spec` 支持 `EXE_NAME` 环境变量，同一份 spec 可产出不同名的 exe
+  （轻量版与内置 ffmpeg 版各一个）。
+- `tools/setup_ffmpeg.py` 新增 `--dest vendor` 用法：`vendor/` 是内嵌打包的
+  约定落点，spec 会去那儿找 `ffmpeg.exe`（也可用 `FFMPEG_EXE=<路径>` 指定）。
+- ffmpeg 内嵌走 `datas` 而非 `binaries`：`binaries` 会触发 bindepend 依赖扫描，
+  对 85MB 的静态 ffmpeg 极慢且扫不出有用信息；Windows 下能否执行只看扩展名。
+- Release 资产从 2 个扩到 4 个，覆盖"单文件 / 轻量 / 外置 ffmpeg"三种用法。
+
+### 修复
+
+- Release 说明里写的体积是错的（87MB / 11MB），实际为 40MB / 10MB。
+- **打包阶段被中文日志搞崩**：`bili_submit.spec` 里一句中文 `print` 导致
+  `UnicodeEncodeError: 'charmap' codec`——spec 是被 PyInstaller 自己的进程
+  exec 的，不走本项目 `console.py` 那层 UTF-8 兜底，Windows 上该进程 stdout
+  是 cp1252。修法两条：spec 里的输出改用 ASCII，并在 spec 顶部主动把
+  stdout/stderr 切成 UTF-8 兜底（防止以后再有人写中文时复踩）。
+  已加回归测试锁住。
+
+### 说明
+
+内置 ffmpeg 不是免费的：体积从约 10MB 涨到约 69MB（解压后约 94MB），且 onefile 每次启动都要
+把 ffmpeg 解压到临时目录，启动变慢、也更容易被杀毒软件误判。
+在意这两点的话用 `full` 包（外置 ffmpeg）更划算。
+
+实测：`BUNDLE_FFMPEG=1` 打的 standalone exe 为 69.32 MB；
+内嵌的 ffmpeg 源文件 83.6 MB，加上轻量 exe 本体 10.4 MB，启动解压后约 94 MB。
+
+## [0.1.1] - 2026-10-03
+
+### 新增
+
+- Release 提供裸 `bilibili-submit.exe` 资产，点击直接下载，无需解压。
+
+### 修复
+
+- README 未说明"源码 zip 里没有 exe"，容易让人以为程序没打包。
+  已补充醒目提示：exe 在 Releases → Assets，不是页面顶部的 `Source code (zip)`。
+
+## [0.1.0] - 2026-10-03
+
+首个可用版本。
+
+### 新增
+
+- **扫码登录**：`login` 命令生成二维码，手机 B 站 App 扫完点确认即写入 cookie。
+  cookie 存 `~/.config/bilibili_submit/cookie.json`，权限 0600。
+- **投稿**：`upload` 单文件投稿，`submit -c <配置>` 按配置批量/定时投稿，
+  支持 `--dry-run` 预览。
+- **自检**：`check` 一次报告配置、登录态、ffmpeg、分区 ID 的问题。
+- **辅助命令**：`tid` 列分区 ID、`history` 看本机投稿历史。
+- **自动封面**：`cover: auto` 用 ffmpeg 抽首帧当封面；ffmpeg 缺失时给出
+  三种可选修复方式，而不是静默失败。
+- **WBI 签名**：自研实现，不依赖第三方封装。
+- **分片上传**：upos 协议，支持断点续传（`--no-resume` 可关闭）。
+- **601 频控退避**：按 5/10/20/30/60 分钟阶梯退避并加随机抖动。
+- **GitHub Actions 云端打包**，产出公开直链 Release 资产。
+- 文档：`README.md`、`docs/DEPLOY.md`、`docs/FAQ.md`、`docs/ARCHITECTURE.md`。
+
+### 修复
+
+- Windows 控制台 cp1252 编码下 `--help` 抛 `UnicodeEncodeError`。
+  根因是编码切换排在 `parse_args` 之后，而帮助文本是在 `parse_args` 内部渲染的；
+  改为提前切换，并加了一层 replace 兜底流。
+- 图标文件名与 spec 不一致导致打包失败；改为从 spec 读 `APP_NAME`，单一真相源。
+- PowerShell 步骤退出码被 `check` 的 1 带偏，导致构建误判失败。
+- 组装包时从 `dist\config` 取文件取不到：spec 的 `datas` 打进 exe 归档内部，
+  不会落到 `dist\` 下，应从仓库根复制。
+- `login` 命令写死不走代理，境外网络下拿不到 cookie；
+  新增 `--proxy` 与 `-c`，优先级为 `--proxy` > 配置文件 > 直连。
+- 配置里 `proxy` 段位写错（`upload.proxy` 而非 `account.proxy`）会静默失效，
+  现改为直接报错。
+
+[未发布]: https://github.com/llovepeaches/bilibili-submit/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/llovepeaches/bilibili-submit/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/llovepeaches/bilibili-submit/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/llovepeaches/bilibili-submit/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/llovepeaches/bilibili-submit/releases/tag/v0.1.0

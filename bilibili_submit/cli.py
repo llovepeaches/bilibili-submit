@@ -5,6 +5,7 @@
     bili-submit submit    按配置文件批量/定时投稿
     bili-submit check     校验配置、登录态与分区
     bili-submit tid       列出可选分区
+    bili-submit gui       启动图形界面
     bili-submit history   查看本机投稿历史
 """
 
@@ -102,6 +103,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # tid
     sub.add_parser("tid", help="列出分区 ID")
+
+    # gui
+    sub.add_parser("gui", help="启动图形界面")
 
     # history
     p_hist = sub.add_parser("history", help="查看本机投稿历史")
@@ -286,6 +290,26 @@ def cmd_tid(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_gui(args: argparse.Namespace) -> int:
+    """启动图形界面。
+
+    tkinter 是软依赖：精简版 Python 可能没带。缺了要给出可操作的提示，
+    而不是抛一串 import traceback。
+    """
+    from .ui import gui_available, launch
+
+    ok, reason = gui_available()
+    if not ok:
+        print(f"无法启动界面：{reason}", file=sys.stderr)
+        print(
+            "Windows / macOS 官方 Python 安装包默认带 tkinter；\n"
+            "Linux 需要额外安装，例如：sudo apt install python3-tk",
+            file=sys.stderr,
+        )
+        return EXIT_FAIL
+    return launch()
+
+
 def cmd_history(args: argparse.Namespace) -> int:
     entries = read_history(args.file)
     if not entries:
@@ -328,6 +352,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "submit": cmd_submit,
         "check": cmd_check,
         "tid": cmd_tid,
+        "gui": cmd_gui,
         "history": cmd_history,
     }
     try:

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """把 ffmpeg 可执行文件复制到指定目录。
 
-打包脚本用它把 ffmpeg 放到 exe 同目录（外置），运行时程序会自动发现。
-直接从源码运行本项目时，也可以用它把 ffmmpeg 放到项目根目录。
+三种用途：
 
-    python tools/setup_ffmpeg.py --dest dist
+    python tools/setup_ffmpeg.py --dest dist      # 外置：放 exe 旁边
+    python tools/setup_ffmpeg.py --dest vendor    # 内嵌：BUNDLE_FFMPEG=1 打包时读这里
+    python tools/setup_ffmpeg.py --dest .         # 源码运行：放项目根目录
+
+``vendor/`` 是内嵌打包的约定落点，``bili_submit.spec`` 会去那儿找
+``ffmpeg.exe``（也可用 ``FFMPEG_EXE=<路径>`` 直接指定）。
 
 查找顺序与 :func:`bilibili_submit.ffmpeg.find_ffmpeg` 一致：
 imageio-ffmpeg 内置二进制 → 系统 PATH。
