@@ -149,8 +149,29 @@ Cookie 保存在 `~/.config/bilibili_submit/cookie.json`（权限 0600），有�
 
 ## 一键发布与外链下载
 
-想让别人通过链接直接下载 exe，推一个 tag 即可——GitHub Actions 会在 Windows 上
-自动打包并发布 Release，产出**公开直链**（任何人点开即可下载，无需登录）：
+拿到本项目的源码包（`bilibili-submit-source.zip`）后，解压会得到一个
+`bilibili-submit/` 文件夹。里面已经带好了 git 历史，**不需要**重新 `git init`。
+
+你只有两条路可选：
+
+| 目标 | 怎么做 | 需要什么 |
+|---|---|---|
+| 自己能用 | 双击 `build_windows.bat`，几分钟后拿到 `dist\bilibili-submit.exe` | 一台 Windows |
+| 想要一个能发别人的链接 | 双击 `publish.bat`，输入版本号 | 一台 Windows + GitHub 账号 |
+
+### 路线 A：本地打包（自己用）
+
+```
+双击 build_windows.bat
+```
+
+脚本会自建虚拟环境、装依赖、执行打包、跑一次 `--version` 验证产物能启动，
+并自动把 ffmpeg 复制到 `dist\`。就这一步，不需要 GitHub，不需要 Python 基础。
+
+### 路线 B：GitHub Release 公开直链（发给别人）
+
+推一个 tag 即可——GitHub Actions 会在 Windows 上自动打包并发布 Release，
+产出**公开直链**（任何人点开即可下载，无需登录）：
 
 ```
 https://github.com/你的账号/bilibili-submit/releases/download/v0.1.0/bilibili-submit-full-windows.zip
@@ -165,6 +186,7 @@ https://github.com/你的账号/bilibili-submit/releases/download/v0.1.0/bilibil
 **之后每次发版**：双击 `publish.bat`，输入版本号回车。
 
 脚本会自动完成：建公开仓库 → 提交推送 → 打 tag → 触发云端构建 → 打印下载链接。
+没装 GitHub CLI 或没登录时，它会逐项提示你，不会闷头失败。
 
 会发布两个包：
 
