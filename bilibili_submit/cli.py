@@ -100,7 +100,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _configure_logging(verbose: bool) -> None:
-    setup_console()
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(levelname)-7s %(message)s",
@@ -291,6 +290,11 @@ def _print_outcome(outcome: Any) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # 必须在 parse_args 之前切换编码：--help 与参数错误都由 argparse 在
+    # parse_args 内部直接写 sys.stdout（cp1252 时渲染中文 help 会抛
+    # UnicodeEncodeError），那时 _configure_logging 还没跑到。
+    setup_console()
+
     parser = build_parser()
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)

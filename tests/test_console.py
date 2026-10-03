@@ -88,3 +88,99 @@ def test_setup_console_is_safe_on_posix():
     if console.is_windows():
         pytest.skip("仅在非 Windows 环境验证")
     console.setup_console()  # 不抛异常即通过
+
+
+def test_setup_console_upgrades_cp1252_stream(monkeypatch):
+    """复现云端打包的真实崩溃：PowerShell 下 stdout 是 cp1252。
+
+    GitHub Actions 的冒烟测试就是这么炸的——``--help`` 渲染中文 help 时
+    ``UnicodeEncodeError: 'charmap' codec can't encode characters``。
+    """
+    stream = io.TextIOWrapper(
+        io.BytesIO(), encoding="cp1252", errors="strict", newline=""
+    )
+    monkeypatch.setattr(sys, "stdout", stream)
+    console.setup_console()
+    # 关键断言：中文必须能写出去（不抛 UnicodeEncodeError）
+    sys.stdout.write("中文测试：投稿、封面上传\n")
+    sys.stdout.flush()
+
+
+class _TrackingStdout(io.TextIOWrapper):
+    """能追踪实际写入字节的 cp1252 流。
+
+    不能直接用 ``io.TextIOWrapper(BytesIO(), cp1252)``：``reconfigure()`` 会
+    换掉内部 buffer，原 BytesIO 就再也收不到数据了。这里把 buffer 换成
+    自己实现的可追踪对象，reconfigure 后依然能读到写入内容。
+    """
+
+    def __init__(self, encoding):
+        self._chunks = []
+        super().__init__(_Collector(self._chunks), encoding=encoding,
+                         errors="strict", newline="")
+
+    def written(self) -> str:
+        return b"".join(self._chunks).decode("utf-8", "replace")
+
+
+class _Collector(io.RawIOBase):
+    """把写入的字节攒起来，供断言检查。
+
+    必须实现完整的流接口：``reconfigure()`` 之后 TextIOWrapper 会调用
+    ``readable()``，缺了会抛 AttributeError（argparse 渲染 help 时触发）。
+    """
+
+    def __init__(self, sink):
+        self._sink = sink
+
+    def writable(self):
+        return True
+
+    def readable(self):
+        return False
+
+    def seekable(self):
+        return False
+
+    def write(self, data):
+        self._sink.append(bytes(data))
+        return len(data)
+
+    def flush(self):
+        pass
+
+
+def test_setup_console_survives_cp1252_argparse_help(monkeypatch):
+    """完整复现崩溃路径：cp1252 控制台下 argparse 渲染 --help。
+
+    这正是 GitHub Actions 冒烟测试的真实失败原因：
+    ``UnicodeEncodeError: 'charmap' codec can't encode characters``，
+    崩在 argparse 的 ``_print_message`` 里。
+
+    修复前抛 UnicodeEncodeError、退出码 1；修复后正常退出 0。
+    """
+    from bilibili_submit import cli
+
+    stream = _TrackingStdout("cp1252")
+    monkeypatch.setattr(sys, "stdout", stream)
+    console.setup_console()
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--help"])
+    assert exc.value.code == 0
+
+
+def test_setup_console_handles_none_stream(monkeypatch):
+    """PyInstaller 在某些窗口模式下 sys.stdout 为 None，不能崩。"""
+    monkeypatch.setattr(sys, "stdout", None)
+    console.setup_console()
+    print("stdout 为 None 时也不能崩")
+    sys.stdout = sys.__stdout__  # 复位，避免影响其他测试
+
+
+def test_setup_console_is_idempotent():
+    """重复调用不应破坏已正常的流。"""
+    console.setup_console()
+    before = sys.stdout
+    console.setup_console()
+    assert sys.stdout is before or sys.stdout.encoding.lower().startswith("utf")
