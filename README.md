@@ -26,16 +26,16 @@ Releases 里的资产是**公开直链**，任何人点开即下，无需登录�
 
 | 资产 | 体积 | ffmpeg | 说明 |
 |---|---|---|---|
-| [`bilibili-submit-gui.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.4/bilibili-submit-gui.exe) | ~72 MB | 内置 | **双击开窗口**，扫码登录 + 表单投稿，不用管 ffmpeg 放哪 |
+| [`bilibili-submit-gui.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.5/bilibili-submit-gui.exe) | ~72 MB | 内置 | **双击开窗口**，扫码登录 + 表单投稿，不用管 ffmpeg 放哪 |
 
 **命令行版**：
 
 | 资产 | 体积 | ffmpeg | 说明 |
 |---|---|---|---|
-| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.4/bilibili-submit-standalone.exe) | ~69 MB | 内置 | **单个 exe，双击即用**，不用管 ffmpeg 放哪 |
-| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.4/bilibili-submit.exe) | ~10 MB | 需自备 | 轻量 exe |
-| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.4/bilibili-submit-full-windows.zip) | ~40 MB | 外置 | 轻量 exe + `ffmpeg.exe`，启动最快 |
-| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.4/bilibili-submit-mini-windows.zip) | ~10 MB | 需自备 | 轻量 exe + config + 文档 |
+| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.5/bilibili-submit-standalone.exe) | ~69 MB | 内置 | **单个 exe，双击即用**，不用管 ffmpeg 放哪 |
+| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.5/bilibili-submit.exe) | ~10 MB | 需自备 | 轻量 exe |
+| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.5/bilibili-submit-full-windows.zip) | ~40 MB | 外置 | 轻量 exe + `ffmpeg.exe`，启动最快 |
+| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.5/bilibili-submit-mini-windows.zip) | ~10 MB | 需自备 | 轻量 exe + config + 文档 |
 
 命令行版怎么选：只想双击就用、不想管 ffmpeg → `standalone`；
 在意体积和启动速度 → `full`，把 `ffmpeg.exe` 和 exe 放一起就行。
@@ -103,6 +103,10 @@ GUI 版内置了 ffmpeg，所以状态栏应该显示「ffmpeg 就绪（exe 内�
 ![历史页](docs/images/04-history.png)
 
 ![设置页](docs/images/05-settings.png)
+
+历史文件损坏时会明确告诉你出了什么事，而不是假装「暂无历史」：
+
+![历史页错误提示](docs/images/08-history-broken.png)
 
 窗口压到最小（880x600）时内容可滚动，按钮不会点不到：
 

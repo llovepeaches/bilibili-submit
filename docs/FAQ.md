@@ -123,23 +123,50 @@ B 站不允许临近发布。`dtime_offset_hours` 调大到 4 以上，
 
 ### `cover: auto` 报找不到 ffmpeg
 
-只有自动抽帧需要 ffmpeg，其他功能不受影响。四个解法：
+只有自动抽帧需要 ffmpeg，其他功能不受影响。
+
+**用图形界面版（`bilibili-submit-gui.exe`）的话不用管这个**——
+从 0.1.5 起 GUI 版已内置 ffmpeg，状态栏会显示「ffmpeg 就绪（exe 内嵌）」。
+嫌 GUI 体积大（72 MB）就换命令行版，按下面选：
 
 ```
-1. 下载 standalone 版 exe          # ffmpeg 已内置，最省事
-2. pip install imageio-ffmpeg      # 源码运行时最省事
-3. python tools/setup_ffmpeg.py --dest .   # 从 imageio 复制到项目根
+1. 下载 standalone 版 exe          # 命令行 + ffmpeg 内置，约 69MB
+2. 下载 full 包                     # ffmpeg 外置，约 40MB，启动最快
+3. pip install imageio-ffmpeg      # 源码运行时最省事
 4. 把 cover 改成图片路径或 null   # 不用自动抽帧
 ```
 
-查看当前状态：`python run.py check`（会告诉你命中的是"程序同目录"、
-"exe 内嵌"、"imageio-ffmpeg"还是"系统 PATH"）。
+查看当前状态：`python run.py check`，或 GUI 的「设置」页 /
+底部状态栏（会告诉你命中的是"exe 内嵌"、"程序同目录"、
+"imageio-ffmpeg"还是"系统 PATH"）。
 
 ### 用了 standalone 版，check 还是说找不到 ffmpeg
 
 内嵌的 ffmpeg 在 `sys._MEIPASS` 下，只有打包出来的 exe 才有。
 如果你是把 zip 解开后跑里面的**轻量 exe**，那份本来就不带 ffmpeg——
 得下载 `bilibili-submit-standalone.exe`，或用 `full` 包（ffmpeg 外置）。
+
+## 历史与记录
+
+### 历史页显示「历史文件读取失败」
+
+历史文件（`~/.config/bilibili_submit/history.json`）坏了。程序会明确
+告诉你而不是假装「暂无历史」——这很重要，否则你会以为投稿记录被弄丢了。
+
+原因通常是：上次运行中异常退出、磁盘写满、或者手动编辑过这个文件。
+
+处理：按提示里的路径找到文件，**直接删掉**，程序会自动重建。
+删掉不会影响投稿，只是丢了历史列表——投稿记录本身在 B 站后台能看到。
+
+```powershell
+del "$env:USERPROFILE\.config\bilibili_submit\history.json"
+```
+
+Linux / macOS：
+
+```bash
+rm ~/.config/bilibili_submit/history.json
+```
 
 ## Windows 特有
 
