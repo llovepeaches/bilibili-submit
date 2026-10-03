@@ -7,3 +7,6 @@ dist/
 config/my.yaml
 ffmpeg
 ffmpeg.exe
+
+# 分发产物（由 tools/make_source_zip.py 生成）
+bilibili-submit-source.zip
