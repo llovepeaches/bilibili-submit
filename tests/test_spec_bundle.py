@@ -185,3 +185,64 @@ def test_spec_survives_cp1252_stdout(tmp_path, monkeypatch):
     _exec_head({"BUNDLE_FFMPEG": "1", "FFMPEG_EXE": str(source)})
     # 兜底应真的把流切成了 utf-8
     assert fake.encoding == "utf-8"
+
+
+def test_gui_mode_embeds_ffmpeg_by_default(tmp_path):
+    """GUI 版默认内嵌 ffmpeg。
+
+    用窗口界面的人不会自己去装 ffmpeg，而 GUI 的卖点就是
+    「双击就能用」——为了省 60MB 让用户卡在 cover:auto 上不划算。
+    """
+    fake = tmp_path / "ffmpeg.exe"
+    fake.write_bytes(b"MZ fake")
+    ns = _exec_head({"GUI": "1", "FFMPEG_EXE": str(fake)})
+
+    assert ns["BUNDLE_FFMPEG"] is True
+    embedded = [d for d in ns["datas"] if str(d[0]).endswith("ffmpeg.exe")]
+    assert len(embedded) == 1, f"GUI 版应内嵌 ffmpeg，实际 {embedded}"
+    assert embedded[0][1] == ".", "应落在归档根，运行时即 sys._MEIPASS/ffmpeg.exe"
+    assert "imageio_ffmpeg" not in ns["excludes"], "带了 ffmpeg 就不必再排 imageio"
+
+
+def test_gui_mode_can_opt_out_of_ffmpeg():
+    """GUI 版也要能出「不带 ffmpeg 的小包」，用 NO_FFMPEG=1。"""
+    ns = _exec_head({"GUI": "1", "NO_FFMPEG": "1"})
+    assert ns["BUNDLE_FFMPEG"] is False
+    assert "imageio_ffmpeg" in ns["excludes"]
+
+
+def test_gui_without_ffmpeg_degrades_instead_of_failing(tmp_path):
+    """GUI 默认想带 ffmpeg 但找不到时，只警告并降级，不能硬失败。
+
+    否则一台没准备 ffmpeg 的机器（CI 首次运行、新同事clone 下来）
+    连 GUI 包都打不出来。降级后仍能出包，只是 cover:auto 不可用。
+    """
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    ns: dict = {"SPECPATH": str(empty), "__name__": "spec_probe"}
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("FFMPEG_EXE", raising=False)
+        mp.setenv("GUI", "1")
+        # 不抛 SystemExit 即通过
+        exec(compile(_HEAD, str(SPEC), "exec"), ns)
+
+    assert ns["BUNDLE_FFMPEG"] is False, "找不到 ffmpeg 应降级为不内嵌"
+    assert not any("ffmpeg.exe" in str(d[0]) for d in ns["datas"])
+    assert "imageio_ffmpeg" in ns["excludes"]
+
+
+def test_explicit_bundle_still_fails_loudly_without_ffmpeg(tmp_path):
+    """显式 BUNDLE_FFMPEG=1 却找不到 ffmpeg，必须硬失败。
+
+    静默产出一个不含 ffmpeg 的包，用户拿到手才发现 cover 不能用，
+    不如当场失败。上一条测试的降级只针对 GUI 的隐式默认。
+    """
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    ns: dict = {"SPECPATH": str(empty), "__name__": "spec_probe"}
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("FFMPEG_EXE", raising=False)
+        mp.setenv("GUI", "1")
+        mp.setenv("BUNDLE_FFMPEG", "1")
+        with pytest.raises(SystemExit):
+            exec(compile(_HEAD, str(SPEC), "exec"), ns)

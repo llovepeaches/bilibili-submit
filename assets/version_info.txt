@@ -18,12 +18,12 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'bili-submit'),
           StringStruct(u'FileDescription', u'哔哩哔哩自动投稿程序'),
-          StringStruct(u'FileVersion', u'0.1.4'),
+          StringStruct(u'FileVersion', u'0.1.5'),
           StringStruct(u'InternalName', u'bilibili-submit'),
           StringStruct(u'LegalCopyright', u'仅供个人账号投稿使用'),
           StringStruct(u'OriginalFilename', u'bilibili-submit.exe'),
           StringStruct(u'ProductName', u'bili-submit'),
-          StringStruct(u'ProductVersion', u'0.1.4'),
+          StringStruct(u'ProductVersion', u'0.1.5'),
         ]
       )
     ]),

@@ -24,21 +24,25 @@ Releases 里的资产是**公开直链**，任何人点开即下，无需登录�
 
 **图形界面版**（不想用命令行就下这个）：
 
-| 资产 | 体积 | 说明 |
-|---|---|---|
-| [`bilibili-submit-gui.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.3/bilibili-submit-gui.exe) | ~12 MB | 双击开窗口，扫码登录 + 表单投稿 |
+| 资产 | 体积 | ffmpeg | 说明 |
+|---|---|---|---|
+| [`bilibili-submit-gui.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.4/bilibili-submit-gui.exe) | ~72 MB | 内置 | **双击开窗口**，扫码登录 + 表单投稿，不用管 ffmpeg 放哪 |
 
 **命令行版**：
 
 | 资产 | 体积 | ffmpeg | 说明 |
 |---|---|---|---|
-| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.3/bilibili-submit-standalone.exe) | ~69 MB | 内置 | **单个 exe，双击即用**，不用管 ffmpeg 放哪 |
-| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.3/bilibili-submit.exe) | ~10 MB | 需自备 | 轻量 exe |
-| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.3/bilibili-submit-full-windows.zip) | ~40 MB | 外置 | 轻量 exe + `ffmpeg.exe`，启动最快 |
-| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.3/bilibili-submit-mini-windows.zip) | ~10 MB | 需自备 | 轻量 exe + config + 文档 |
+| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.4/bilibili-submit-standalone.exe) | ~69 MB | 内置 | **单个 exe，双击即用**，不用管 ffmpeg 放哪 |
+| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.4/bilibili-submit.exe) | ~10 MB | 需自备 | 轻量 exe |
+| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.4/bilibili-submit-full-windows.zip) | ~40 MB | 外置 | 轻量 exe + `ffmpeg.exe`，启动最快 |
+| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.1.4/bilibili-submit-mini-windows.zip) | ~10 MB | 需自备 | 轻量 exe + config + 文档 |
 
 命令行版怎么选：只想双击就用、不想管 ffmpeg → `standalone`；
 在意体积和启动速度 → `full`，把 `ffmpeg.exe` 和 exe 放一起就行。
+
+> GUI 版内置了 ffmpeg，是为了「下载下来双击就能用」——用窗口界面的人
+> 通常不会自己去装 ffmpeg。嫌大的话可以用 `full` 包里的命令行版，
+> 或者看下面的「内置 ffmpeg 的代价」。
 
 两种界面**共用同一套业务逻辑**，可以混着用：GUI 里填的表单和
 命令行 `upload` 的参数一一对应，cookie 也是同一份。
@@ -50,14 +54,14 @@ Releases 里的资产是**公开直链**，任何人点开即下，无需登录�
 
 ### 内置 ffmpeg 的代价
 
-`standalone` 把 ffmpeg 塞进了 exe 归档，换来"一个文件走天下"，代价是两条：
+`gui` 和 `standalone` 都把 ffmpeg 塞进了 exe 归档，换来"一个文件走天下"，代价是两条：
 
-- **体积**：约 10 MB → 约 69 MB（exe 归档有压缩；启动解压后约占 94 MB）。
+- **体积**：约 10~13 MB → 约 69~72 MB（exe 归档有压缩；启动解压后约占 94 MB）。
 - **启动**：单文件版每次启动都要把 ffmpeg 解压到临时目录，启动变慢；
   临时目录里的 exe 也更容易被杀毒软件误判。
 
 ffmpeg 只影响 `cover: auto` 自动抽帧，**不影响投稿本身**。
-不需要自动封面的话，轻量版完全够用。
+不需要自动封面的话，命令行轻量版（10 MB）完全够用。
 
 ## 快速开始
 
@@ -74,6 +78,8 @@ ffmpeg 只影响 `cover: auto` 自动抽帧，**不影响投稿本身**。
 | **设置** | 配代理、换 cookie 路径，并做一次环境自检（登录态 / ffmpeg / 代理） |
 
 窗口底部常驻状态栏，随时能看到**是否已登录**和 **ffmpeg 是否就绪**。
+GUI 版内置了 ffmpeg，所以状态栏应该显示「ffmpeg 就绪（exe 内嵌）」——
+说明 `cover: auto` 自动抽帧可直接用，不需要另外配置。
 
 界面上的操作都是后台线程跑的，窗口不会卡住；登录和投稿都能随时「取消」。
 

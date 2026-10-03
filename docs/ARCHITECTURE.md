@@ -156,6 +156,88 @@ GUI 用 **tkinter**（标准库）而不是 Qt/Web，理由是零新增依赖：
 
 所有颜色/字体/间距来自 `ui/theme.py`。改主题改一处即可。
 
+### `grid()` 跟着 `widget.master` 走，不跟着调用者走
+
+这条踩过一次真实 bug，值得单独写。
+
+Tk 的 `widget.grid()` 永远作用于 `widget.master`——**不是**调用它的那段代码
+所在的容器。所以下面这种写法看着对、实际会把所有控件排到同一格：
+
+```python
+form = ttk.Frame(card)
+entry = ttk.Entry(form)          # 父容器是 form
+FormRow(form, "标题", entry)     # FormRow.grid(row=0, column=1)
+#                                   ↑ 实际排到 form 的 (0, 1)，不是 FormRow 里
+```
+
+六个输入框会全部叠在第一行，互相压住。改 `.master` 属性也没用（Tcl 层的
+父子关系在创建时就定了）。
+
+`FormRow` 因此不接收成品控件，而是接收控件**类**，由内部容器 `body`
+实例化：
+
+```python
+row = FormRow(form, "标题", hint="留空则自动取文件名")
+row.grid(row=1, column=0, sticky="ew")
+row.add(ttk.Entry, textvariable=self._title_var)
+```
+
+**加新表单控件时一律用 `row.add(...)`**，别自己 new 完再塞进去。
+`tests/test_ui.py` 里有两条测试专门量控件的实际纵坐标来防回归——
+布局错位静态检查抓不到，必须真跑 Tk 量。
+
+### 窗口再小也不能让按钮点不到
+
+投稿表单内容高约 700px，最小窗口只有 600px。早期版本直接铺控件，
+结果「开始投稿」被挤出可视区——用户既看不到也点不到。
+现在内容包在 `ScrollArea` 里，超出时可滚动（滚轮也支持）。
+
+`tests/test_ui.py::test_submit_button_reachable_at_min_size` 锁住了这个行为。
+
+顺带一个反直觉的点：**滚动容器里不能用 `weight=1` 让日志区吃掉剩余空间**。
+父容器高度就等于内容高度，权重不会带来额外空间，反而会挤压上面的按钮。
+固定高度 + 内容超出时日志自己滚。
+
+### 「读不出来」和「本来就没有」要说不同的话
+
+`read_history` 早期把文件损坏和没有记录都返回空列表。界面上就只显示
+「暂无投稿历史」——文件明明坏了，用户却以为程序把记录弄丢了，
+然后开始找备份、翻 cookie、怀疑人生。
+
+现在拆成两个函数：
+
+- `read_history()` —— 保持宽容，返回空列表。`append_history` 复用它
+  来「读旧记录再整体写回」，一旦抛异常，损坏的历史文件会让**之后所有
+  投稿记录都写不进去**。为了能继续写，宁可丢弃旧数据。
+- `read_history_diagnose()` —— 返回 `(记录, 错误说明)`，给需要给用户
+  提示的场合用（GUI 历史页）。
+
+写这类「读用户数据」的函数时要分清两种失败：**没有**和**读不了**。
+前者是正常状态，后者是问题——两者混为一谈会让用户做无用功。
+
+### GUI 默认带 ffmpeg，命令行默认不带
+
+同一个 spec 产出两类 exe，ffmpeg 策略相反：
+
+| | GUI | 命令行 |
+|---|---|---|
+| 默认 | 内嵌（约 72 MB） | 不带（约 10 MB） |
+| 理由 | 用窗口界面的人不会自己去装 ffmpeg | 用命令行的人通常已经有了 |
+
+`bili_submit.spec` 里用 `_FFMPEG_EXPLICIT` 区分两种「想要 ffmpeg」：
+
+- 显式 `BUNDLE_FFMPEG=1` 却找不到 → **硬失败**。用户明确要求的，
+  产出缺 ffmpeg 的包不如当场报错。
+- GUI 的隐式默认却找不到 → **警告并降级**为不内嵌。
+  否则一台没准备 ffmpeg 的机器（CI 首次运行、新同事 clone 下来）
+  连 GUI 包都打不出来。
+
+⚠️ 降级后有个容易漏的点：判断「要不要排 `imageio_ffmpeg`」必须用
+`BUNDLE_FFMPEG` 的**最终值**，不能写成 `if/else`。降级路径把变量改回
+`False` 后走不到 `else`，imageio 就会留在包里——既没内嵌也没 imageio
+兜底，白白多打约 30 MB。这个 bug 是 `test_gui_without_ffmpeg_degrades_instead_of_failing`
+抓出来的。
+
 ## 添加新命令
 
 以「加一个 `sync` 子命令」为例：

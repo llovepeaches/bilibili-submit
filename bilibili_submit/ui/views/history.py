@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
 
-from ...scheduler import DEFAULT_HISTORY_FILE, read_history
+from ...scheduler import DEFAULT_HISTORY_FILE, read_history_diagnose
 from .. import theme
 from ..widgets import Card, LogConsole, Placeholder, SecondaryButton, SectionTitle
 
@@ -73,15 +73,20 @@ class HistoryView(ttk.Frame):
     def refresh(self) -> None:
         """重新读取历史文件并填充列表。"""
         self._tree.delete(*self._tree.get_children())
-        try:
-            entries = read_history(DEFAULT_HISTORY_FILE)
-        except Exception as exc:  # noqa: BLE001 - 历史文件损坏不该让界面崩
-            self._log.append(f"读取历史失败：{exc}")
-            entries = []
+        # 每次刷新重置日志：refresh 会在每次切到本页时调用，
+        # 不清空的话同一句「共 N 条」会重复叠很多行。
+        self._log.clear()
+        entries, problem = read_history_diagnose(DEFAULT_HISTORY_FILE)
+
+        if problem:
+            # 损坏和「没投过稿」必须区分：都显示空列表的话，
+            # 用户会以为程序把记录弄丢了，而不是文件本身坏了。
+            self._show_problem(problem)
+            return
 
         if not entries:
-            self._tree.grid_remove()
-            self._placeholder.grid()
+            self._set_placeholder("暂无投稿历史")
+            self._log.append("暂无投稿历史")
             return
 
         self._placeholder.grid_remove()
@@ -98,7 +103,25 @@ class HistoryView(ttk.Frame):
                     entry.get("name", ""),
                 ),
             )
-        self._log.append(f"共 {len(entries)} 条记录")
+        shown = min(len(entries), VISIBLE_LIMIT)
+        suffix = f"（只显示最近 {shown} 条）" if shown < len(entries) else ""
+        self._log.append(f"共 {len(entries)} 条记录{suffix}")
+
+    def _show_problem(self, problem: str) -> None:
+        """历史文件读不了时给出明确提示，而不是干巴巴一个空列表。"""
+        self._set_placeholder("历史文件读取失败，详见下方说明")
+        self._log.clear()
+        self._log.append(f"⚠ {problem}")
+
+    def _set_placeholder(self, text: str) -> None:
+        """显示空状态占位并设置文案。"""
+        self._tree.grid_remove()
+        self._placeholder.grid()
+        # 复用同一个 Label 实例改文案，不重建——
+        # 重建会丢掉内部状态，而且两种文案要能来回切。
+        for child in self._placeholder.winfo_children():
+            if isinstance(child, ttk.Label):
+                child.configure(text=text)
 
 
 def _format_time(stamp: "object") -> str:

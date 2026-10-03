@@ -32,7 +32,7 @@ del _stream_name, _stream
 BASE = Path(SPECPATH)
 
 APP_NAME = "bilibili-submit"
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 
 # 同一份 spec 要产出两个 exe（轻量版 + 内置 ffmpeg 版），名字靠环境变量区分。
 # 不设 EXE_NAME 时沿用 APP_NAME。
@@ -85,6 +85,10 @@ excludes: list[str] = [
 #   2. 把 tkinter / tk 从 excludes 里去掉 —— 上面默认排除是为了给 CLI 瘦身
 #   3. 显式 hiddenimport —— tkinter 的子模块（ttk、font、messagebox 等）
 #      是按需 import 的，静态分析扫不到，不写进去运行时报 ModuleNotFoundError
+#
+# GUI 还默认内嵌 ffmpeg（见下方 BUNDLE_FFMPEG），所以体积会比 CLI 轻量版大；
+# 名字仍由调用方通过 EXE_NAME 指定，不在这里自动加后缀——
+# 自动改名会让 CI 里 dist\bilibili-submit-gui.exe 的路径对不上。
 # ---------------------------------------------------------------------------
 GUI = os.environ.get("GUI") == "1"
 
@@ -100,22 +104,29 @@ if GUI:
         "tkinter.filedialog",
         "tkinter.commondialog",
     ]
-    print("[spec] GUI mode: console=False, tkinter bundled")
+    # GUI 版打包 tkinter 后体积涨了约 2MB，体积不再是主要矛盾，
+    # 换「双击就能用」更划算——用窗口界面的人不会自己去装 ffmpeg。
+    print("[spec] GUI mode: console=False, tkinter bundled, ffmpeg embedded by default")
 
 # ---------------------------------------------------------------------------
 # ffmpeg：默认**外置**，不塞进单文件归档。
 #
-# 两种模式：
+# 三种模式：
 #   * 默认（外置）——ffmpeg.exe 复制到 exe 同目录。启动快、体积小，
 #     但"程序"是两个文件，拷走时要一起拷。
 #   * BUNDLE_FFMPEG=1（内嵌）——ffmpeg 打进归档，运行时出现在
-#     sys._MEIPASS 下，单个 exe 开箱即用。代价：体积 +约 85MB，
+#     sys._MEIPASS 下，单个 exe 开箱即用。代价：体积 +约 60MB，
 #     且 onefile 每次启动都要把它解压到临时目录（启动变慢，
 #     临时目录里的 exe 也更容易被杀软误判）。
+#   * NO_FFMPEG=1 —— 强制不带（想自己出极小体积的包时用）
 #
 # 内嵌用 datas 而非 binaries：binaries 会走 bindepend 依赖扫描，
-# 对 85MB 的静态 ffmpeg 极其缓慢且扫不出有用的东西；
+# 对几十 MB 的静态 ffmpeg 极其缓慢且扫不出有用的东西；
 # Windows 下能否执行只看扩展名，不经 datas 的属性位，所以 datas 完全够用。
+#
+# GUI 版默认内嵌（见下方 GUI 分支）：用窗口界面的人多半不会自己去
+# 装 ffmpeg，而 GUI 的卖点就是「双击就能用」。命令行版保持默认外置，
+# 因为用命令行的人通常已经有 ffmpeg，或者知道该怎么装。
 # ---------------------------------------------------------------------------
 # ⚠️ 本文件里的 print/异常消息**只能用 ASCII**。
 # spec 是被 PyInstaller 自己的 Python 进程 exec 的，不走本项目的
@@ -123,7 +134,17 @@ if GUI:
 # Windows 上该进程 stdout 是 cp1252，中文会抛 UnicodeEncodeError，
 # 而且崩在打包阶段，很难一眼看出是编码问题。
 
-BUNDLE_FFMPEG = os.environ.get("BUNDLE_FFMPEG") == "1"
+NO_FFMPEG = os.environ.get("NO_FFMPEG") == "1"
+
+# GUI 默认内嵌 ffmpeg（用窗口界面的人不会自己去装），命令行版维持「不带」。
+# _FFMPEG_EXPLICIT 区分「用户明确要求」和「按默认行为」：
+#   * 明确要求（BUNDLE_FFMPEG=1）却找不到 ffmpeg -> 报错。
+#     静默产出一个不含 ffmpeg 的包，用户拿到手才发现 cover 不能用，
+#     不如当场失败。
+#   * 默认行为（GUI 隐式内嵌）却找不到 -> 只警告并降级为不内嵌。
+#     否则一台没准备 ffmpeg 的机器（CI、新同事）连 GUI 包都打不出来。
+_FFMPEG_EXPLICIT = os.environ.get("BUNDLE_FFMPEG") == "1"
+BUNDLE_FFMPEG = _FFMPEG_EXPLICIT or (GUI and not NO_FFMPEG)
 
 
 def _resolve_ffmpeg_exe() -> Path | None:
@@ -149,18 +170,32 @@ def _resolve_ffmpeg_exe() -> Path | None:
 if BUNDLE_FFMPEG:
     _ffmpeg = _resolve_ffmpeg_exe()
     if _ffmpeg is None:
-        raise SystemExit(
-            "[spec] BUNDLE_FFMPEG=1 but ffmpeg.exe was not found.\n"
-            "       Run `python tools/setup_ffmpeg.py --dest vendor` first,\n"
-            "       or set FFMPEG_EXE=<path> to point at one."
+        if _FFMPEG_EXPLICIT:
+            raise SystemExit(
+                "[spec] BUNDLE_FFMPEG=1 but ffmpeg.exe was not found.\n"
+                "       Run `python tools/setup_ffmpeg.py --dest vendor` first,\n"
+                "       or set FFMPEG_EXE=<path> to point at one.\n"
+                "       (or unset BUNDLE_FFMPEG to build without it)"
+            )
+        print(
+            "[spec] WARNING: GUI default wants embedded ffmpeg but none was found.\n"
+            "       Falling back to a GUI build WITHOUT ffmpeg (~13MB).\n"
+            "       cover:auto will be unavailable at runtime.\n"
+            "       To fix: run `python tools/setup_ffmpeg.py --dest vendor`."
         )
-    # 放到归档根目录，运行时即 sys._MEIPASS/ffmpeg.exe
-    datas.append((str(_ffmpeg), "."))
-    print(
-        f"[spec] embedding ffmpeg: {_ffmpeg.name} "
-        f"({_ffmpeg.stat().st_size / 1048576:.1f} MB)"
-    )
-else:
+        BUNDLE_FFMPEG = False
+    else:
+        # 放到归档根目录，运行时即 sys._MEIPASS/ffmpeg.exe
+        datas.append((str(_ffmpeg), "."))
+        print(
+            f"[spec] embedding ffmpeg: {_ffmpeg.name} "
+            f"({_ffmpeg.stat().st_size / 1048576:.1f} MB)"
+        )
+
+# 判断依据用 BUNDLE_FFMPEG 的**最终值**，而不是「有没有进过 if 分支」——
+# GUI 降级时会把 BUNDLE_FFMPEG 改回 False，那种情况下同样要排掉
+# imageio_ffmpeg：既没内嵌也没 imageio 兜底，留着它只会白白多打 30MB。
+if not BUNDLE_FFMPEG:
     excludes.append("imageio_ffmpeg")
 
 a = Analysis(

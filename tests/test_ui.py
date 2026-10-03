@@ -12,6 +12,7 @@ grid 配置错、回调签名不对、样式名写错，都只在 create_widget 
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -94,6 +95,64 @@ def test_gui_available_returns_reason():
     assert isinstance(reason, str)
     if not ok:
         assert reason, "不可用时必须给出原因"
+
+
+def test_read_history_distinguishes_missing_from_broken(tmp_path):
+    """「没有历史」和「历史文件坏了」必须能区分开。
+
+    早期 read_history 把两者都返回空列表，界面上就只显示
+    「暂无投稿历史」——文件明明坏了，用户却以为程序把记录弄丢了。
+    """
+    import json
+
+    from bilibili_submit.scheduler import read_history_diagnose
+
+    missing = tmp_path / "nope.json"
+    entries, problem = read_history_diagnose(str(missing))
+    assert entries == [] and problem == "", "文件不存在是正常状态，不该报错"
+
+    empty = tmp_path / "empty.json"
+    empty.write_text("", encoding="utf-8")
+    entries, problem = read_history_diagnose(str(empty))
+    assert entries == [] and problem == "", "空文件等同于没有历史"
+
+    broken = tmp_path / "broken.json"
+    broken.write_text("{ not json", encoding="utf-8")
+    entries, problem = read_history_diagnose(str(broken))
+    assert entries == []
+    assert "损坏" in problem, f"应说明文件损坏，实际: {problem!r}"
+    assert str(broken) in problem, "报错应带上文件路径，方便用户处理"
+
+    wrong_shape = tmp_path / "dict.json"
+    wrong_shape.write_text(json.dumps({"a": 1}), encoding="utf-8")
+    entries, problem = read_history_diagnose(str(wrong_shape))
+    assert entries == []
+    assert "格式异常" in problem, f"应说明结构不对，实际: {problem!r}"
+
+    # 列表里混进非字典项时过滤掉，别让渲染时炸
+    mixed = tmp_path / "mixed.json"
+    mixed.write_text(json.dumps([{"bvid": "BV1"}, 123, "x"]), encoding="utf-8")
+    entries, problem = read_history_diagnose(str(mixed))
+    assert problem == ""
+    assert len(entries) == 1 and entries[0]["bvid"] == "BV1"
+
+
+def test_read_history_stays_lenient_for_writers():
+    """read_history 本身仍不能抛异常。
+
+    append_history 复用它来「读旧记录再整体写回」，
+    一旦抛异常，损坏的历史文件会让之后所有投稿记录都写不进去。
+    """
+    from bilibili_submit.scheduler import append_history, read_history
+
+    broken = Path(os.environ.get("TMPDIR", "/tmp")) / "test-history-lenient.json"
+    broken.parent.mkdir(parents=True, exist_ok=True)
+    broken.write_text("{ broken", encoding="utf-8")
+    try:
+        assert read_history(str(broken)) == [], "损坏文件应返回空列表而非抛异常"
+    finally:
+        broken.unlink(missing_ok=True)
+    assert callable(append_history)
 
 
 def test_worker_cancel_is_cooperative():
@@ -400,5 +459,178 @@ def test_upload_view_inputs_do_not_overlap():
         tops = [w.winfo_rooty() for w in found]
         assert len(tops) >= 5, f"应至少有 5 个输入控件，实际 {len(tops)}"
         assert len(set(tops)) == len(tops), f"输入框纵坐标重复，发生了重叠: {tops}"
+    finally:
+        root.destroy()
+
+
+@needs_display
+@pytest.mark.parametrize(
+    ("content", "expect_problem", "expect_placeholder"),
+    [
+        (None, False, "暂无投稿历史"),          # 文件不存在
+        ("", False, "暂无投稿历史"),             # 空文件
+        ("{ broken", True, "读取失败"),          # 损坏的 JSON
+        ('{"a": 1}', True, "读取失败"),          # 顶层不是列表
+    ],
+)
+def test_history_view_reports_problems(tmp_path, monkeypatch, content, expect_problem,
+                                       expect_placeholder):
+    """历史页要在「没投过稿」和「文件坏了」之间给出不同提示。
+
+    两者都显示空列表的话，用户会以为程序把记录弄丢了。
+    """
+    import json
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit import scheduler
+    from bilibili_submit.ui.app import App
+
+    history_file = tmp_path / "history.json"
+    if content is not None:
+        history_file.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(scheduler, "DEFAULT_HISTORY_FILE", str(history_file))
+    # views.history 在 import 时就把路径绑进默认值了，这里要一起改
+    monkeypatch.setattr(
+        "bilibili_submit.ui.views.history.DEFAULT_HISTORY_FILE", str(history_file)
+    )
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        view = app._views["历史"]
+        view.refresh()
+        root.update_idletasks()
+
+        log = view._log._text.get("1.0", "end")
+        labels = [
+            child.cget("text")
+            for child in view._placeholder.winfo_children()
+            if isinstance(child, ttk.Label)
+        ]
+        assert labels, "占位文案应存在"
+        if expect_problem:
+            assert "⚠" in log, f"应显示警告，实际日志: {log.strip()!r}"
+            assert expect_placeholder in labels[0]
+            assert view._placeholder.winfo_ismapped(), "出错时应显示占位说明"
+            assert not view._tree.winfo_ismapped(), "出错时不该显示空列表"
+        else:
+            assert "⚠" not in log, f"正常状态不该报警告: {log.strip()!r}"
+            assert labels[0] == "暂无投稿历史"
+            assert view._placeholder.winfo_ismapped()
+        del json
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_history_view_shows_list_when_entries_exist(tmp_path, monkeypatch):
+    """有记录时显示列表、隐藏占位；损坏后恢复也要正确切换。"""
+    import json
+    import time
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit import scheduler
+    from bilibili_submit.ui.app import App
+
+    history_file = tmp_path / "history.json"
+    monkeypatch.setattr(scheduler, "DEFAULT_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(
+        "bilibili_submit.ui.views.history.DEFAULT_HISTORY_FILE", str(history_file)
+    )
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        view = app._views["历史"]
+
+        history_file.write_text(
+            json.dumps(
+                [{"name": f"任务{i}", "bvid": f"BV{i}", "time": time.time() - i * 60}
+                 for i in range(3)],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        view.refresh()
+        root.update_idletasks()
+        assert view._tree.winfo_ismapped(), "有记录时应显示列表"
+        assert not view._placeholder.winfo_ismapped(), "有记录时应隐藏占位"
+        assert len(view._tree.get_children()) == 3
+
+        # 切到损坏 → 占位应重新出现
+        history_file.write_text("{ broken", encoding="utf-8")
+        view.refresh()
+        root.update_idletasks()
+        assert view._placeholder.winfo_ismapped(), "损坏后应重新显示占位"
+        assert not view._tree.winfo_ismapped()
+
+        # 再恢复正常 → 占位必须让位给列表（曾经隐藏过就不会再 grid 回来）
+        history_file.write_text(
+            json.dumps([{"name": "x", "bvid": "BVx", "time": time.time()}]),
+            encoding="utf-8",
+        )
+        view.refresh()
+        root.update_idletasks()
+        assert view._tree.winfo_ismapped(), "恢复后列表应重新显示"
+        assert not view._placeholder.winfo_ismapped(), "恢复后占位应重新隐藏"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_history_log_does_not_accumulate_on_refresh(tmp_path, monkeypatch):
+    """反复切页会反复调 refresh，日志不该一行行叠起来。"""
+    import json
+    import time
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit import scheduler
+    from bilibili_submit.ui.app import App
+
+    history_file = tmp_path / "history.json"
+    history_file.write_text(
+        json.dumps([{"name": "a", "bvid": "BV1", "time": time.time()}]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(scheduler, "DEFAULT_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(
+        "bilibili_submit.ui.views.history.DEFAULT_HISTORY_FILE", str(history_file)
+    )
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        view = app._views["历史"]
+        for _ in range(4):
+            view.refresh()
+        root.update_idletasks()
+        lines = [
+            line for line in view._log._text.get("1.0", "end").splitlines() if line.strip()
+        ]
+        assert len(lines) == 1, f"刷新 4 次后日志应只有 1 行，实际 {len(lines)}: {lines}"
     finally:
         root.destroy()

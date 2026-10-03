@@ -31,6 +31,7 @@ __all__ = [
     "run_all",
     "append_history",
     "read_history",
+    "read_history_diagnose",
 ]
 
 
@@ -199,14 +200,56 @@ def append_history(outcome: TaskOutcome, path: str = DEFAULT_HISTORY_FILE) -> No
 
 
 def read_history(path: str = DEFAULT_HISTORY_FILE) -> list[dict[str, Any]]:
-    path = Path(path).expanduser()
-    if not path.is_file():
-        return []
+    """读历史记录；文件不存在或损坏时返回空列表。
+
+    注意：这里**刻意吞掉异常**。``append_history`` 也调用本函数
+    （先读旧记录再整体写回），一旦抛异常，损坏的历史文件会让
+    后续所有投稿记录都写不进去——为了能继续写，宁可丢弃旧数据。
+
+    需要区分「没有历史」和「历史文件坏了」的场景（比如 GUI 的历史页要给用户
+    明确提示，不能让用户以为程序没投过稿），用 :func:`read_history_diagnose`。
+    """
+    entries, _ = read_history_diagnose(path)
+    return entries
+
+
+def read_history_diagnose(
+    path: str = DEFAULT_HISTORY_FILE,
+) -> tuple[list[dict[str, Any]], str]:
+    """读历史记录并区分失败原因。
+
+    Returns:
+        ``(记录列表, 错误说明)``。出错时列表为空、说明非空；
+        正常时说明为空字符串。文件不存在**不算错误**（首次使用是正常的）。
+    """
+    file_path = Path(path).expanduser()
+    if not file_path.is_file():
+        return [], ""
+
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    return data if isinstance(data, list) else []
+        raw = file_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [], f"无法读取历史文件 {file_path}：{exc}"
+
+    if not raw.strip():
+        return [], ""
+
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        return [], (
+            f"历史文件 {file_path} 已损坏（不是合法 JSON）：{exc}。"
+            "可以手动删掉该文件，程序会自动重建。"
+        )
+
+    if not isinstance(data, list):
+        return [], (
+            f"历史文件 {file_path} 格式异常：顶层应为列表，实际是 "
+            f"{type(data).__name__}。可以手动删掉该文件，程序会自动重建。"
+        )
+
+    # 列表里混进非字典项时过滤掉，别让调用方在渲染时炸
+    return [item for item in data if isinstance(item, dict)], ""
 
 
 def tids_for_check(client: BiliClient) -> dict[int, str]:

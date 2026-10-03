@@ -42,10 +42,14 @@ jobs:
           EXE_NAME: bilibili-submit-standalone
         run: python -m PyInstaller bili_submit.spec --noconfirm
 
-      # GUI 版：windowed（无控制台黑框）+ 带上 tkinter
+      # GUI 版：windowed（无控制台黑框）+ 带上 tkinter + 内嵌 ffmpeg。
+      # BUNDLE_FFMPEG=1 显式给上：spec 里 GUI 虽已默认内嵌，
+      # 但显式写出来能让"这次构建带了 ffmpeg"在日志里一目了然，
+      # 将来若有人改默认值，这里也不会被悄悄带着走。
       - name: 打包图形界面版
         env:
           GUI: '1'
+          BUNDLE_FFMPEG: '1'
           EXE_NAME: bilibili-submit-gui
         run: python -m PyInstaller bili_submit.spec --noconfirm
 
@@ -78,11 +82,24 @@ jobs:
           & .\dist\bilibili-submit.exe check
           Write-Host "check 退出码 $LASTEXITCODE（未登录返回 1 属正常）"
 
-          # GUI 是 windowed 程序：没有 stdout，不能靠 --version 验证。
+          # GUI 是 windowed 程序：没有 stdout，不能靠 --version / check 验证。
           # 改为「启动后看它是否立刻退出」——缺 tkinter 时它会静默失败，
           # 这是唯一能自动发现该问题的手段。
           $gui = ".\dist\bilibili-submit-gui.exe"
           if (-not (Test-Path $gui)) { throw "GUI exe 未生成: $gui" }
+
+          # 内嵌 ffmpeg 的 GUI 版应该明显大于只带 tkinter 的体积。
+          # 实测参考：只带 tkinter 约 13MB，内嵌 ffmpeg 后约 72MB
+          # （standalone 69.4MB - 轻量版 10MB = ffmpeg 贡献约 59MB）。
+          # 不直接检查归档内容（onefile 是压缩包，探测 ffmpeg 很麻烦），
+          # 用体积做下限断言，简单且能挡住"忘了带 ffmpeg"这种回归。
+          # 40MB 是刻意保守的中间值：远高于 13MB（漏带），远低于 72MB（带了）。
+          $guiMB = [math]::Round((Get-Item $gui).Length / 1MB, 1)
+          Write-Host "GUI exe 体积: $guiMB MB（预期约 72MB，>= 40MB）"
+          if ($guiMB -lt 40) {
+            throw "GUI exe 只有 $guiMB MB，ffmpeg 很可能没内嵌进去（预期 >= 40MB）"
+          }
+
           $proc = Start-Process -FilePath $gui -PassThru
           Start-Sleep -Seconds 6
           if ($proc.HasExited) {
@@ -139,7 +156,7 @@ jobs:
 
           | 资产 | 大小 | 说明 |
           |---|---|---|
-          | `bilibili-submit-gui.exe` | ~12 MB | **图形界面版**，双击开窗口操作 |
+          | `bilibili-submit-gui.exe` | ~72 MB | **图形界面版**，双击开窗口操作，ffmpeg 已内置 |
           | `bilibili-submit-standalone.exe` | ~69 MB | 命令行单文件版，ffmpeg 已内置 |
           | `bilibili-submit.exe` | ~10 MB | 命令行轻量 exe，需自备 ffmpeg |
           | `bilibili-submit-full-windows.zip` | ~40 MB | 命令行 exe + 外置 ffmpeg.exe，启动最快 |
@@ -147,14 +164,17 @@ jobs:
 
           怎么选：
 
-          - **想要窗口界面** → `bilibili-submit-gui.exe`
+          - **想要窗口界面** → `bilibili-submit-gui.exe`（ffmpeg 已内置，开箱即用）
           - 想双击就用、不想管 ffmpeg → `standalone`
           - 在意启动速度和体积 → `full`，让 `ffmpeg.exe` 跟着 exe 走
+            （启动不用解压 76MB，代价是要带着 ffmpeg.exe 一起拷）
 
           图形界面版自带扫码登录、投稿表单、批量任务、历史与设置，
           和命令行共用同一套逻辑，两者可以混着用。
 
           ffmpeg 只影响 `cover: auto` 自动抽帧，其他功能不依赖它。
+          内置 ffmpeg 的版本（gui / standalone）启动时会把 ffmpeg
+          解压到临时目录，首次启动稍慢，之后有系统缓存会快一些。
 
           ## 使用
 
@@ -171,15 +191,16 @@ jobs:
           ## 注意事项
 
           - 首次运行可能被杀毒软件拦截：PyInstaller 的启动器常被误判，
-            请在 Windows Defender 里添加白名单。standalone 版启动时要把
-            内置的 ffmpeg 解压到临时目录，更容易触发误报。
+            请在 Windows Defender 里添加白名单。带 ffmpeg 的版本
+            （gui / standalone）启动时要把内置 ffmpeg 解压到临时目录，
+            更容易触发误报。
           - 建议用 Windows Terminal 打开以正确显示二维码；
             传统 cmd 显示乱码时，复制链接到手机打开同样可以登录。
           - 新号投稿频控较严，批量投稿请设置任务间隔。
           - 仅供管理自己的账号投稿使用。
           "@
           gh release create $tag `
-            "dist\bilibili-submit-gui.exe#图形界面版（约 12MB）" `
+            "dist\bilibili-submit-gui.exe#图形界面版（内置 ffmpeg，约 72MB）" `
             "dist\bilibili-submit-standalone.exe#单文件版（内置 ffmpeg，约 69MB）" `
             "dist\bilibili-submit.exe#轻量 exe（不含 ffmpeg，约 10MB）" `
             "dist\bilibili-submit-full-windows.zip#完整版（外置 ffmpeg，约 40MB）" `
