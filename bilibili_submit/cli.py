@@ -17,8 +17,6 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-import requests
-
 from . import __version__
 from .auth import (
     DEFAULT_COOKIE_FILE,
@@ -27,6 +25,7 @@ from .auth import (
     ensure_buvid,
     load_cookies,
     login_interactive,
+    new_session,
     save_cookies,
 )
 from .client import BiliClient
@@ -161,9 +160,8 @@ def cmd_login(args: argparse.Namespace) -> int:
     if proxy:
         print(f"使用代理：{proxy}")
 
-    session = requests.Session()
-    if proxy:
-        session.proxies.update({"http": proxy, "https": proxy})
+    # new_session 自带浏览器 UA + Referer，缺了会被风控挡在 412。
+    session = new_session(proxy)
 
     cookies = login_interactive(
         session=session, timeout=args.timeout, render=not args.no_qr

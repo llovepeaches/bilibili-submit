@@ -10,6 +10,45 @@
 
 暂无。
 
+## [0.1.6] - 2026-10-04
+
+### 修复
+
+- **图形界面版永远拿不到登录二维码**（本版本的核心修复）。
+  GUI 登录页自己`requests.Session()` 造会话，UA 是
+  `python-requests/x.y.z`，被 B 站识别为脚本客户端后直接返回
+  **HTTP 412的 HTML 风控页**，`.json()` 炸成
+  `JSONDecodeError: Expecting value: line 1 column 1`。
+  命令行版一直正常，所以此前没被发现——两条路径的会话来源不同。
+  - 实测：裸 Session → HTTP 412；伪装成 Chrome 的 UA → HTTP 200 `code=0`。
+    决定性因素是 UA，`Referer` 非必需但保留。
+  - `login` 子命令有同样问题，本次一并修复（此前它也拿不到二维码）。
+  - 端到端验证：修复后 GUI 能正常画出二维码（Canvas 1227 个图元），
+    状态显示「等待扫码…」；修复前 Canvas 只有占位图的 2 个图元。
+- 二维码获取失败时，错误原因只出现在卡片底部的日志区，
+  状态标签还写着「登录失败」。现在状态标签直接显示「获取二维码失败」，
+  并且异常的 `hint` 会一并展示（风控/网络类异常带排查建议）。
+- 登录页在工作线程里直接调 `after` 画二维码。虽然多数情况下能work，
+  但违反了 `workers.py` 定的「业务代码不操心线程」原则，
+  窗口销毁等边界下会抛 TclError。现在改为经进度通道回主线程。
+
+### 新增
+
+- `auth.new_session(proxy)`：公开的会话工厂，统一 UA / Referer / 代理设置。
+  UI 与 CLI 都不再自己造会话，从根上杜绝「某条路径忘了带 UA」。
+- `auth._json_or_raise()`：把非 JSON 响应翻译成可操作的异常。
+  412 → `NetworkError`（附「换代理或换网络」建议）；
+  200 但返回 HTML → `ApiChangedError`。不再让用户面对裸 `JSONDecodeError`。
+
+### 测试
+
+- 新增 `tests/test_auth.py`（20 项）：会话请求头、412/HTML 响应处理、
+  二维码申请与轮询、cookie 从跳转链接兜底解析。
+- `test_no_bare_session_left_in_login_paths` 直接扫源码，
+  防止登录路径回退到裸`requests.Session()`。
+- 新增 4 项GUI 测试：二维码经主线程通道绘制、哨兵不泄漏进日志、
+  登录流程走共享会话工厂、错误 hint 正确展示。
+
 ## [0.1.5] - 2026-10-04
 
 ### 新增

@@ -634,3 +634,143 @@ def test_history_log_does_not_accumulate_on_refresh(tmp_path, monkeypatch):
         assert len(lines) == 1, f"刷新 4 次后日志应只有 1 行，实际 {len(lines)}: {lines}"
     finally:
         root.destroy()
+
+
+def _build_login_view(root):
+    """建一个带主题的 App，返回登录页视图。"""
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui.app import App
+
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+    theme.apply(style)
+
+    app = App(root)
+    app.pack(fill="both", expand=True)
+    return app, app._views["登录"]
+
+
+@needs_display
+def test_login_view_draws_qr_via_main_thread_channel(monkeypatch):
+    """二维码必须经进度通道回主线程绘制，不能在工作线程里直接碰 Tk。
+
+    工作线程里调 ``after`` 在真 mainloop 下多数能work，
+    但违反了 workers.py 定的「业务代码不操心线程」原则，
+    且窗口销毁等边界下会抛 TclError。这里钉住这条通道。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.views import login as login_mod
+
+    root = tk.Tk()
+    try:
+        _app, view = _build_login_view(root)
+
+        drawn = {}
+        monkeypatch.setattr(
+            login_mod, "draw_qr", lambda canvas, url: drawn.__setitem__("url", url)
+        )
+
+        # 直接喂哨兵，验证 _on_progress 会转成 _show_qr
+        view._qr_url = "https://example.test/qr"
+        view._on_progress(view._PENDING_QR)
+        root.update_idletasks()
+
+        assert drawn.get("url") == "https://example.test/qr", (
+            "收到 _PENDING_QR 后应调用 draw_qr 画二维码"
+        )
+        # 链接也要显示出来，方便扫码不便时手动打开
+        assert "example.test" in view._link.cget("text")
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_login_progress_channel_does_not_leak_sentinel():
+    """哨兵不该被当成文字打进日志，否则用户会看到 <pending-qr>。"""
+    import tkinter as tk
+
+    root = tk.Tk()
+    try:
+        _app, view = _build_login_view(root)
+        view._qr_url = "https://example.test/qr"
+        view._log.clear()
+        view._on_progress(view._PENDING_QR)
+        text = view._log._text.get("1.0", "end")
+        assert "pending-qr" not in text, f"哨兵泄漏进了日志：{text!r}"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_login_view_uses_shared_session_factory(monkeypatch):
+    """登录流程必须用 auth.new_session()，裸 Session 会被风控 412。"""
+    import tkinter as tk
+
+    from bilibili_submit.auth import QrCode
+    from bilibili_submit.ui.views import login as login_mod
+
+    root = tk.Tk()
+    try:
+        _app, view = _build_login_view(root)
+
+        captured = {}
+
+        def fake_new_session(proxy=None):
+            captured["proxy"] = proxy
+            return object()
+
+        monkeypatch.setattr(login_mod, "new_session", fake_new_session)
+        monkeypatch.setattr(
+            login_mod,
+            "request_qrcode",
+            lambda session: QrCode(key="k", url="https://example.test/qr"),
+        )
+
+        # 轮询直接报错，让流程在拿到二维码后立刻结束
+        def boom(*_a, **_kw):
+            raise login_mod.BiliError("停止轮询")
+
+        monkeypatch.setattr(login_mod, "poll_qrcode", boom)
+
+        messages = []
+        with pytest.raises(login_mod.BiliError):
+            view._login_flow(messages.append, lambda: False)
+
+        assert "proxy" in captured, "登录流程应通过 new_session() 构造会话"
+        # 二维码就绪信号必须发出去，否则界面永远停在占位图
+        assert view._PENDING_QR in messages, (
+            "拿到二维码后应通过 report 发哨兵，触发主线程绘制"
+        )
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_login_error_shows_hint_in_log():
+    """风控等异常自带 hint，日志里要能看到排查方向而不是只有错误码。"""
+    import tkinter as tk
+
+    from bilibili_submit.exceptions import NetworkError
+
+    root = tk.Tk()
+    try:
+        _app, view = _build_login_view(root)
+        view._log.clear()
+        view._on_error(
+            NetworkError("获取二维码失败: HTTP 412", hint="被风控拦截，换代理试试")
+        )
+
+        text = view._log._text.get("1.0", "end")
+        assert "412" in text
+        assert "换代理" in text, f"hint 未显示：{text!r}"
+        assert "失败" in view._status.cget("text"), "状态标签也要提示失败"
+        # BiliError._compose 已把 hint 拼进 str(exc)，别再重复打一遍
+        assert text.count("换代理") == 1, f"hint 重复显示了：{text!r}"
+    finally:
+        root.destroy()

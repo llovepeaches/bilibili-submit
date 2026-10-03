@@ -15,11 +15,10 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-import requests
-
 from ...auth import (
     REQUIRED_COOKIES,
     ensure_buvid,
+    new_session,
     poll_qrcode,
     request_qrcode,
     save_cookies,
@@ -37,8 +36,25 @@ POLL_INTERVAL = 2.0
 DEFAULT_TIMEOUT = 180
 
 
+class _PendingQrCode:
+    """内部哨兵，借进度通道把「二维码已就绪」送回主线程。
+
+    :attr:`Worker.report` 只接受 ``str``，而二维码 URL 得等拿到了才知道，
+    没法预先拼进日志文案。这里用哨兵对象当信号，主线程收到后再从
+    :attr:`LoginView._qr_url` 取真正的 URL。
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - 仅调试用
+        return "<pending-qr>"
+
+
 class LoginView(ttk.Frame):
     """扫码登录页。"""
+
+    #: 见 :class:`_PendingQrCode`
+    _PENDING_QR = _PendingQrCode()
 
     def __init__(self, master: tk.Misc, app: "object") -> None:
         super().__init__(master, style="TFrame")
@@ -135,7 +151,9 @@ class LoginView(ttk.Frame):
         self._log.append("正在申请登录二维码…")
         self._worker.run(
             lambda report, is_cancelled: self._login_flow(report, is_cancelled),
-            on_progress=self._log.append,
+            # 二维码要立刻显示，不能等线程结束——用户得马上拿手机扫。
+            # 走 on_progress 通道回主线程，不在工作线程里直接调 after。
+            on_progress=self._on_progress,
             on_done=self._on_done,
             on_error=self._on_error,
         )
@@ -143,6 +161,18 @@ class LoginView(ttk.Frame):
     def _cancel(self) -> None:
         self._worker.cancel()
         self._log.append("已请求取消…")
+
+    def _on_progress(self, message: str) -> None:
+        """处理工作线程上报的进度。
+
+        二维码本身不是文字进度，用一个内部的哨兵对象搭桥：
+        ``_qr_url`` 借 :attr:`_PENDING_QR` 这个标记传回来，
+        这样就不用在 worker 线程里直接操作 Tk 控件。
+        """
+        if message is self._PENDING_QR:
+            self._show_qr(self._qr_url)
+            return
+        self._log.append(message)
 
     def _login_flow(self, report, is_cancelled) -> dict[str, str]:
         """完整登录流程（工作线程执行）。
@@ -152,15 +182,14 @@ class LoginView(ttk.Frame):
         if is_cancelled():
             raise Cancelled()
 
-        session = requests.Session()
-        proxy = self.app.ctx.proxy
-        if proxy:
-            session.proxies.update({"http": proxy, "https": proxy})
+        # 必须用 new_session()：它的 UA 伪装成桌面浏览器。
+        # 裸 requests.Session() 的 UA 是 python-requests/x.y.z，
+        # 会被 B 站风控返回 HTTP 412 的 HTML 页，表现为看不懂的 JSONDecodeError。
+        session = new_session(self.app.ctx.proxy)
 
         qr = request_qrcode(session)
         self._qr_url = qr.url
-        # 二维码要立刻显示，不能等线程结束——用户得马上拿手机扫
-        self.after(0, lambda: self._show_qr(qr.url))
+        report(self._PENDING_QR)
         report("二维码已生成，请用手机 B 站 App 扫码")
 
         deadline = time.time() + DEFAULT_TIMEOUT
@@ -180,7 +209,7 @@ class LoginView(ttk.Frame):
                     raise BiliError(f"登录返回缺少 cookie: {missing}，请重试")
                 report("登录成功，正在补全设备指纹…")
                 cookies = {c: status.cookies[c] for c in REQUIRED_COOKIES}
-                client = BiliClient(cookies=cookies, proxy=proxy)
+                client = BiliClient(cookies=cookies, proxy=self.app.ctx.proxy)
                 cookies.update(ensure_buvid(client))
                 return cookies
             if status.expired:
@@ -214,7 +243,11 @@ class LoginView(ttk.Frame):
         if isinstance(exc, Cancelled):
             self._status.configure(text="已取消", foreground=theme.TEXT_MUTED)
             return
-        self._status.configure(text="登录失败", foreground=theme.DANGER)
+        # 二维码没出来是最常见的故障，而日志区在卡片最下方，
+        # 用户未必会往下看。状态标签紧挨着二维码，必须在这里给出可读原因。
+        self._status.configure(text="获取二维码失败", foreground=theme.DANGER)
+        # BiliError 会把 message + hint 一起拼进 str(exc)，
+        # 所以 hint 已经在错误行里了，别再单独打一遍「建议」。
         self._log.append(f"错误：{exc}")
 
     def _set_busy(self, busy: bool) -> None:

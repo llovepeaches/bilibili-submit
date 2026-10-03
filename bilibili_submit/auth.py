@@ -23,7 +23,7 @@ from typing import Any, Mapping
 import requests
 
 from .client import USER_AGENT, BiliClient
-from .exceptions import BiliError, NotLoggedInError
+from .exceptions import ApiChangedError, BiliError, NetworkError, NotLoggedInError
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,10 @@ __all__ = [
     "request_qrcode",
     "save_cookies",
     "load_cookies",
+    "cookies_valid",
     "ensure_buvid",
+    "build_client_from_cookies",
+    "new_session",
     "DEFAULT_COOKIE_FILE",
 ]
 
@@ -103,11 +106,43 @@ class LoginStatus:
 # ---------- 二维码 ----------
 
 
+def _json_or_raise(resp: requests.Response, action: str) -> dict[str, Any]:
+    """解析 JSON 响应，把非 JSON 的响应翻译成可操作的异常。
+
+    B 站风控返回的是 **HTML 页面**而非 JSON（HTTP 412）。直接 ``.json()``
+    会抛 ``JSONDecodeError: Expecting value``，用户完全看不出是风控。
+    这里按状态码给出对应的排查建议。
+    """
+    if resp.status_code != 200:
+        hint = {
+            412: "被 B 站风控拦截。程序已带浏览器 UA，若仍失败请在「设置」页配置代理或换网络",
+            403: "请求被拒绝，通常是访问过于频繁，稍后重试",
+        }.get(resp.status_code, "请检查网络连通性与代理设置")
+        raise NetworkError(
+            f"{action}失败: HTTP {resp.status_code}",
+            code=resp.status_code,
+            hint=hint,
+        )
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise ApiChangedError(
+            f"{action}失败: 返回的不是 JSON（{exc}）",
+            hint="通常是风控拦截或接口变更；程序已带浏览器 UA，可尝试配置代理后重试",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ApiChangedError(
+            f"{action}失败: 返回的 JSON 结构异常（顶层是 "
+            f"{type(payload).__name__}，应为对象）",
+        )
+    return payload
+
+
 def request_qrcode(session: requests.Session | None = None) -> QrCode:
     """申请一个登录二维码。"""
-    sess = session or _new_session()
+    sess = session or new_session()
     resp = sess.get(QRCODE_GENERATE, timeout=15)
-    payload = resp.json()
+    payload = _json_or_raise(resp, "获取二维码")
     if payload.get("code") != 0:
         raise BiliError(
             f"获取二维码失败: {payload.get('message')}",
@@ -122,9 +157,9 @@ def poll_qrcode(
     qrcode_key: str, session: requests.Session | None = None
 ) -> LoginStatus:
     """轮询一次二维码状态。成功时从 Set-Cookie 与返回 url 中提取 cookie。"""
-    sess = session or _new_session()
+    sess = session or new_session()
     resp = sess.get(QRCODE_POLL, params={"qrcode_key": qrcode_key}, timeout=15)
-    payload = resp.json()
+    payload = _json_or_raise(resp, "轮询登录状态")
     if payload.get("code") != 0:
         raise BiliError(
             f"轮询登录状态失败: {payload.get('message')}",
@@ -174,7 +209,7 @@ def login_interactive(
         interval: 轮询间隔。
         render: 是否在终端打印二维码；False 时只打印 url。
     """
-    sess = session or _new_session()
+    sess = session or new_session()
     qr = request_qrcode(sess)
 
     if render and not _render_qrcode(qr.url):
@@ -304,7 +339,25 @@ def ensure_buvid(client: BiliClient) -> dict[str, str]:
     return out
 
 
-def _new_session() -> requests.Session:
+def new_session(proxy: str | None = None) -> requests.Session:
+    """建一个伪装成桌面浏览器的会话。
+
+    .. warning::
+       **不要**用裸 :class:`requests.Session` 请求 B 站接口。
+       裸 Session 的 UA 是 ``python-requests/x.y.z``，一眼就被认成脚本；
+       ``passport.bilibili.com`` 会直接返回 **HTTP 412** 的 HTML 风控页
+       （而不是 JSON），调用方的 ``.json()`` 会炸成一句难以理解的
+       ``JSONDecodeError: Expecting value: line 1 column 1``。
+
+       实测结论（2026-10）：UA 是决定性因素，Referer 非必需，
+       但两者都带上更稳妥，也和 :class:`~bilibili_submit.client.BiliClient` 一致。
+
+       历史踩坑：GUI 登录页自己 ``requests.Session()`` 造会话，
+       结果命令行能登录、图形界面永远拿不到二维码。
+
+    Args:
+        proxy:形如 ``http://127.0.0.1:7890``；None 表示直连。
+    """
     sess = requests.Session()
     sess.headers.update(
         {
@@ -312,6 +365,8 @@ def _new_session() -> requests.Session:
             "Referer": "https://passport.bilibili.com/login",
         }
     )
+    if proxy:
+        sess.proxies.update({"http": proxy, "https": proxy})
     return sess
 
 

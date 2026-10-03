@@ -212,6 +212,32 @@ row.add(ttk.Entry, textvariable=self._title_var)
 - `read_history_diagnose()` —— 返回 `(记录, 错误说明)`，给需要给用户
   提示的场合用（GUI 历史页）。
 
+### 会话只能从 `new_session()` 来
+
+早期 GUI 登录页在 `_login_flow` 里写了一句
+`session = requests.Session()`，理由是「只想设个代理」。
+问题在于 B 站会**识别 UA**：`requests` 的默认 UA 是
+`python-requests/x.y.z`，一眼就被认成脚本，`passport.bilibili.com`
+直接返回 **HTTP 412 的 HTML 风控页**，而不是 JSON。
+于是 `.json()` 抛出 `JSONDecodeError: Expecting value: line 1 column 1`，
+界面上只有一行日志写着「获取二维码失败」。
+
+命令行的 `login` 一直正常，所以这个bug 拖到GUI 发布才暴露——
+**两条路径各自造会话，配置漂移就是这么发生的。**
+
+现在的规则：
+
+- 唯一入口是 `auth.new_session(proxy)`，负责 UA、Referer、代理三件事。
+  它是公开 API（`__all__` 里），供 UI 与 CLI 共用。
+- 需要「传一个现成的 session」时，用它而不是裸 `Session()`——
+  `request_qrcode()` / `poll_qrcode()` 内部只补默认 session，不改调用方给的对象。
+- `test_no_bare_session_left_in_login_paths` 直接扫 `login.py` 与 `cli.py`
+  的源码（剔除注释行），一旦有人写回裸 `Session()` 就失败。
+
+配套的 `_json_or_raise()` 负责另一端：**别把非JSON 响应直接喂给 `.json()`**。
+412 → `NetworkError`（提示换代理），200 但返回 HTML → `ApiChangedError`。
+用户看到的是「被风控拦截，换代理试试」，而不是一句解析器报错。
+
 写这类「读用户数据」的函数时要分清两种失败：**没有**和**读不了**。
 前者是正常状态，后者是问题——两者混为一谈会让用户做无用功。
 
