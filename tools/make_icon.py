@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""生成打包用的应用图标 assets/bili-submit.ico。
+"""生成打包用的应用图标 assets/bilibili-submit.ico。
 
 只在开发/打包时运行，运行期不依赖 Pillow。
 
     python tools/make_icon.py
+
+文件名必须与 bili_submit.spec 里的 APP_NAME 保持一致——之前这里写的是
+bili-submit.ico，而 spec 找 bilibili-submit.ico，导致 Windows 上打包直接
+报 FileNotFoundError。改成从 spec 读，避免两处各写一个名字再次跑偏。
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PIL import Image, ImageDraw
+
+ROOT = Path(__file__).resolve().parent.parent
 
 # B 站主题粉
 PINK = (251, 114, 153, 255)
@@ -18,7 +25,18 @@ PINK_DARK = (231, 79, 124, 255)
 WHITE = (255, 255, 255, 255)
 
 SIZES = [16, 24, 32, 48, 64, 128, 256]
-OUT = Path(__file__).resolve().parent.parent / "assets" / "bili-submit.ico"
+
+
+def app_name() -> str:
+    """从 bili_submit.spec 读 APP_NAME，保证图标名与打包目标一致。"""
+    spec = (ROOT / "bili_submit.spec").read_text(encoding="utf-8")
+    m = re.search(r'^APP_NAME\s*=\s*"([^"]+)"', spec, re.MULTILINE)
+    if not m:
+        raise RuntimeError("未能从 bili_submit.spec 解析 APP_NAME")
+    return m.group(1)
+
+
+OUT = ROOT / "assets" / f"{app_name()}.ico"
 
 
 def rounded_mask(size: int, radius_ratio: float = 0.22) -> Image.Image:
