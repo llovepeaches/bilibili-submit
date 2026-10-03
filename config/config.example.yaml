@@ -6,6 +6,8 @@ account:
   # Cookie 保存位置，权限为 0600，请勿外传
   cookie_file: "~/.config/bilibili_submit/cookie.json"
   # 需要代理时填写，如 "http://127.0.0.1:7890"
+  # 登录和投稿都用这个；登录时也可临时覆盖：
+  #   python run.py login --proxy http://127.0.0.1:7890
   proxy: null
 
 upload:

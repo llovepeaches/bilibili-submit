@@ -8,6 +8,15 @@
 bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常"
 ```
 
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| **本文** | 快速上手、命令、配置说明、发布方式 |
+| [部署指南](docs/DEPLOY.md) | 源码部署：三平台安装、代理、ffmpeg、定时任务、后台运行 |
+| [常见问题](docs/FAQ.md) | 按症状排查：错误码、二维码、上传慢、杀软误报、配置报错 |
+| [架构说明](docs/ARCHITECTURE.md) | 分层与依赖方向、关键设计决策、如何加新命令 |
+
 ## 下载
 
 Releases 里的资产是**公开直链**，任何人点开即下，无需登录：
@@ -72,16 +81,30 @@ Cookie 保存在 `~/.config/bilibili_submit/cookie.json`（权限 0600），有�
 - **封面**：`cover: auto` 表示用 ffmpeg 抽视频首帧；给图片路径则直接上传；留 `null` 则不设封面。
 - **批量任务**：`include`/`exclude` 通配符过滤，`title_template` 支持 `{stem}`（文件名主体）、`{name}`（完整文件名）、`{n}`（序号）。`per_task_interval_minutes` 控制每条之间的间隔，**批量投稿必调**，否则大概率撞 601 频控。
 
-### 海外投稿
+### 海外投稿 / 代理
 
-服务器在境外时需要改线路，否则上传会失败或极慢：
+服务器在境外时，除了走代理还要改上传线路，否则即使有代理也可能上传失败或极慢：
 
 ```yaml
+# config/my.yaml
+account:
+  proxy: "http://127.0.0.1:7890"   # 登录和投稿都用这个
+
 upload:
-  line: auto            # auto 会自动择优，也可指定 bda2 / tx / estx / bldsa / akbd
-  profile: "ugcupos/bupfetch"   # 大陆用 ugcupos/bup，港澳台与海外用这个
-  proxy: "http://127.0.0.1:7890" # 需要代理时填
+  line: auto                               # auto 自动择优，也可指定 bda2 / tx / estx
+  profile: "ugcupos/bupfetch"              # 大陆用 ugcupos/bup，港澳台与海外用这个
 ```
+
+**注意 `proxy` 属于 `account` 段，不是 `upload` 段。** 登录时也要走代理，
+所以配置后登录用 `-c` 指定同一份文件：
+
+```bash
+bilibili-submit.exe login -c config\my.yaml
+# 或临时指定，不写配置
+bilibili-submit.exe login --proxy http://127.0.0.1:7890
+```
+
+优先级：`--proxy` > 配置的 `account.proxy` > 不走代理。
 
 `concurrency` 是并发分片数，默认 3、上限 4。调高不会更快，反而更容易触发限流。
 
@@ -149,7 +172,7 @@ git tag v0.1.0 && git push origin v0.1.0
 
 **Windows exe 与真实投稿**由用户在自己机器上验证：开发环境没有真实账号 cookie，投递这一步无法端到端跑通。已实测的部分包括 WBI 签名算法（对照官方示例密钥，结果一致且被服务端接受）、二维码登录全流程、线路探测、`add/v3` 接口可达性、分片边界算法、断点续传状态管理、ffmpeg 定位与封面抽帧端到端（真实生成测试视频并抽出 JPEG），以及打包链路（spec 语法、依赖分析、打包后 HTTPS 与 CA 证书链可用、图标注入、Windows 控制台编码适配）。
 
-单元测试 52 项（`python -m pytest`）。
+单元测试 68 项（`python -m pytest`）。
 
 **建议第一次拿一个几十 MB 的小视频试跑**，确认「登录 → 上传 → 拿到 BV 号」整条通了再批量用。
 

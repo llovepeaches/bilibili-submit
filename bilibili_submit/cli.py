@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
+import requests
+
 from . import __version__
 from .auth import (
     DEFAULT_COOKIE_FILE,
@@ -62,6 +64,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_login.add_argument("--cookie-file", default=DEFAULT_COOKIE_FILE)
     p_login.add_argument("--timeout", type=int, default=180, help="等待扫码秒数")
     p_login.add_argument("--no-qr", action="store_true", help="不打印二维码，只显示链接")
+    p_login.add_argument(
+        "-c",
+        "--config",
+        default=None,
+        help="配置文件（读取其中的 account.proxy）",
+    )
+    p_login.add_argument(
+        "--proxy", default=None, help="代理地址，如 http://127.0.0.1:7890"
+    )
 
     # upload
     p_up = sub.add_parser("upload", help="投稿单个视频文件")
@@ -138,10 +149,22 @@ def _client_from_config(
 
 
 def cmd_login(args: argparse.Namespace) -> int:
+    # 代理优先级：--proxy > 配置文件 account.proxy > 不走代理。
+    # 登录必须支持代理——境外网络、或者直连被风控时，不走代理根本拿不到 cookie。
+    proxy = args.proxy
+    if proxy is None and args.config:
+        proxy = load_config(args.config).account.proxy
+    if proxy:
+        print(f"使用代理：{proxy}")
+
+    session = requests.Session()
+    if proxy:
+        session.proxies.update({"http": proxy, "https": proxy})
+
     cookies = login_interactive(
-        timeout=args.timeout, render=not args.no_qr
+        session=session, timeout=args.timeout, render=not args.no_qr
     )
-    client = BiliClient(cookies=cookies, proxy=None)
+    client = BiliClient(cookies=cookies, proxy=proxy)
     cookies.update(ensure_buvid(client))
     path = save_cookies(cookies, args.cookie_file)
     print(f"\nCookie 已保存到 {path}（权限 0600，请勿外传）")
