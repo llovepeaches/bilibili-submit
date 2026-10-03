@@ -147,6 +147,37 @@ Cookie 保存在 `~/.config/bilibili_submit/cookie.json`（权限 0600），有�
 
 批量任务之间可用 `per_task_interval_minutes` 设置间隔，规避 601。
 
+## 一键发布与外链下载
+
+想让别人通过链接直接下载 exe，推一个 tag 即可——GitHub Actions 会在 Windows 上
+自动打包并发布 Release，产出**公开直链**（任何人点开即可下载，无需登录）：
+
+```
+https://github.com/你的账号/bilibili-submit/releases/download/v0.1.0/bilibili-submit-full-windows.zip
+```
+
+**首次准备**（只需一次）：
+
+1. 安装 [Git for Windows](https://git-scm.com/download/win)
+2. 安装 GitHub CLI：`winget install --id GitHub.cli`
+3. 登录一次：`gh auth login`（浏览器授权）
+
+**之后每次发版**：双击 `publish.bat`，输入版本号回车。
+
+脚本会自动完成：建公开仓库 → 提交推送 → 打 tag → 触发云端构建 → 打印下载链接。
+
+会发布两个包：
+
+| 文件 | 体积 | 说明 |
+|---|---|---|
+| `bilibili-submit-full-windows.zip` | ~87 MB | 自带 ffmpeg，**开箱即用，推荐** |
+| `bilibili-submit-mini-windows.zip` | ~11 MB | 不含 ffmpeg，需自备（仅影响 `cover: auto`） |
+
+也可以完全手动：建空仓库 → `git remote add origin ...` → `git push --tags`。
+
+> 用 Actions 的 artifact 也能下载，但需登录 GitHub 账号；
+> **Release 资产才是真正公开的直链**，适合直接发给别人。
+
 ## 已验证 / 待验证
 
 **已在本项目开发中实测通过**：WBI 签名算法（对照官方示例密钥，结果一致且被服务端接受）、二维码登录全流程、线路探测、投稿接口 `add/v3` 可达性、配置解析、分片边界算法、断点续传状态管理、**ffmpeg 定位与封面抽帧端到端**（真实生成测试视频并抽出 320×240 JPEG）。单元测试 48 项全绿（`python -m pytest tests/`）。
