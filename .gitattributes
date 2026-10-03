@@ -1,0 +1,13 @@
+# Windows 批处理必须用 CRLF，否则 cmd 解析 if/else 块与续行时可能出错
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 默认按文本处理，检出时统一换行
+* text=auto
+
+# 二进制文件不做换行转换
+*.ico binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.mp4 binary
