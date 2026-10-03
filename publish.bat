@@ -113,7 +113,7 @@ echo.
 echo     完整版（自带 ffmpeg，开箱即用）:
 echo     https://github.com/!ACCOUNT!/!REPO_NAME!/releases/download/!TAG!/bilibili-submit-full-windows.zip
 echo.
-echo     轻量版（约 11MB，不含 ffmpeg）:
+echo     轻量版（约 10MB，不含 ffmpeg）:
 echo     https://github.com/!ACCOUNT!/!REPO_NAME!/releases/download/!TAG!/bilibili-submit-mini-windows.zip
 echo ================================================================
 echo.

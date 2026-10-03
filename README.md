@@ -39,12 +39,14 @@ pip install -r requirements.txt
 
 ### 打包相关的几个说明
 
-- **体积约 11 MB**。spec 里已排除 tkinter/numpy/pandas/PIL 等用不到的大依赖。
-- **ffmpeg 采用外置方式**（`dist/ffmpeg.exe`），不塞进 exe 归档。ffmpeg 静态版约 76MB，
-  塞进单文件意味着每次启动都要解压到临时目录——启动明显变慢，且临时目录里的 exe
-  更容易被杀毒软件拦截。`build_windows.bat` 会自动把 ffmpeg 复制到 `dist/`。
+- **体积约 10 MB**。spec 里已排除 tkinter/numpy/pandas/PIL 等用不到的大依赖。
+- **ffmpeg 采用外置方式**（`dist/ffmpeg.exe`），不塞进 exe 归档。塞进单文件意味着
+  每次启动都要解压到临时目录——启动明显变慢，且临时目录里的 exe 更容易被杀毒软件
+  拦截。`build_windows.bat` 会自动把 ffmpeg 复制到 `dist/`。
+  - 随包分发的是 `imageio-ffmpeg` 附带的裁剪版（实测 ~30 MB，已含 libx264），
+    不是完整静态版（~76 MB）。真要完整版，自行下载后覆盖 `dist/ffmpeg.exe` 即可。
   - 不想要 ffmpeg？直接删掉 `dist/ffmpeg.exe` 即可，程序除 `cover: auto` 外照常工作。
-  - 想完全自包含的单文件 exe：设环境变量 `BUNDLE_FFMPEG=1` 再打包，体积会变成约 87MB。
+  - 想完全自包含的单文件 exe：设环境变量 `BUNDLE_FFMPEG=1` 再打包。
   - ffmpeg 定位顺序：**程序同目录 → imageio-ffmpeg → 系统 PATH**，
     用 `check` 命令可以随时看当前命中的是哪一个。
 - **控制台编码已处理**：Windows 控制台默认 GBK，遇到中文和二维码用的方块字符
@@ -174,7 +176,7 @@ Cookie 保存在 `~/.config/bilibili_submit/cookie.json`（权限 0600），有�
 产出**公开直链**（任何人点开即可下载，无需登录）：
 
 ```
-https://github.com/你的账号/bilibili-submit/releases/download/v0.1.0/bilibili-submit-full-windows.zip
+https://github.com/<你的账号>/bilibili-submit/releases/download/v0.1.0/bilibili-submit-full-windows.zip
 ```
 
 **首次准备**（只需一次）：
@@ -188,12 +190,15 @@ https://github.com/你的账号/bilibili-submit/releases/download/v0.1.0/bilibil
 脚本会自动完成：建公开仓库 → 提交推送 → 打 tag → 触发云端构建 → 打印下载链接。
 没装 GitHub CLI 或没登录时，它会逐项提示你，不会闷头失败。
 
-会发布两个包：
+会发布两个包（体积为 v0.1.0 实测值）：
 
 | 文件 | 体积 | 说明 |
 |---|---|---|
-| `bilibili-submit-full-windows.zip` | ~87 MB | 自带 ffmpeg，**开箱即用，推荐** |
-| `bilibili-submit-mini-windows.zip` | ~11 MB | 不含 ffmpeg，需自备（仅影响 `cover: auto`） |
+| `bilibili-submit-full-windows.zip` | ~40 MB | 自带 ffmpeg，**开箱即用，推荐** |
+| `bilibili-submit-mini-windows.zip` | ~10 MB | 不含 ffmpeg，需自备（仅影响 `cover: auto`） |
+
+> 完整版比预期小很多，因为随包分发的是 `imageio-ffmpeg` 附带的裁剪版（~30 MB），
+> 不是完整静态版（~76 MB）。裁剪版已含 libx264 与常用封装，够转码和抽帧用了。
 
 也可以完全手动：建空仓库 → `git remote add origin ...` → `git push --tags`。
 
