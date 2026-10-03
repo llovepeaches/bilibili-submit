@@ -35,11 +35,26 @@ jobs:
         run: python tools/setup_ffmpeg.py --dest dist
 
       - name: 冒烟测试
+        shell: pwsh
         run: |
-          .\dist\bilibili-submit.exe --version
-          .\dist\bilibili-submit.exe --help
-          .\dist\bilibili-submit.exe tid
-          .\dist\bilibili-submit.exe check
+          $exe = ".\dist\bilibili-submit.exe"
+
+          # 这两条在任何环境下都必须干净退出。--help 会渲染中文帮助，
+          # 曾经因 stdout 编码是 cp1252 而抛 UnicodeEncodeError。
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "--version 失败 ($LASTEXITCODE)" }
+
+          & $exe --help
+          if ($LASTEXITCODE -ne 0) { throw "--help 失败 ($LASTEXITCODE)" }
+
+          # tid 需要网络，偶发失败不阻断打包
+          & $exe tid
+          if ($LASTEXITCODE -ne 0) { Write-Host "警告: tid 返回 $LASTEXITCODE（网络问题，不阻断）" }
+
+          # check 在未登录时按设计返回 1（登录检查未过），这里只看能否启动。
+          # 之前用 `check` 探测 ffmpeg 状态，现已挪到 _print_ffmpeg_status。
+          & $exe check
+          Write-Host "check 退出码 $LASTEXITCODE（未登录返回 1 属正常）"
 
       - name: 组装两个分发包
         shell: pwsh

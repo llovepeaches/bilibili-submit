@@ -4,8 +4,11 @@ name: Build Windows exe
 on:
   push:
     branches: [main, master]
-    tags: ['v*']
+  pull_request:
+    branches: [main, master]
   workflow_dispatch:
+# 注意：不监听 tag。tag 推送由 release.yml 负责出正式 Release 资产，
+# 两个 workflow 同时响应会重复构建（每次 push 提交都会多跑一遍）。
 
 jobs:
   build:
