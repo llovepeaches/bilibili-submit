@@ -37,6 +37,7 @@ jobs:
       - name: 冒烟测试
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $exe = ".\dist\bilibili-submit.exe"
 
           # 这两条在任何环境下都必须干净退出。--help 会渲染中文帮助，
@@ -51,10 +52,13 @@ jobs:
           & $exe tid
           if ($LASTEXITCODE -ne 0) { Write-Host "警告: tid 返回 $LASTEXITCODE（网络问题，不阻断）" }
 
-          # check 在未登录时按设计返回 1（登录检查未过），这里只看能否启动。
-          # 之前用 `check` 探测 ffmpeg 状态，现已挪到 _print_ffmpeg_status。
+          # check 在未登录时按设计返回 1（登录检查未过），只看能否正常启动。
           & $exe check
           Write-Host "check 退出码 $LASTEXITCODE（未登录返回 1 属正常）"
+
+          # PowerShell 的 step 退出码取自最后一条原生命令的 $LASTEXITCODE，
+          # 不显式归零的话，check 的 1 会让整个 step 判为失败。
+          exit 0
 
       - name: 组装两个分发包
         shell: pwsh
