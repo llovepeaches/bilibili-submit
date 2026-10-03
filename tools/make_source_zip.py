@@ -2,10 +2,12 @@
 """把项目打包成可分发的源码 zip。
 
 与直接 `zip -r` 的区别：
-1. 排除 __pycache__、.pytest_cache 等垃圾目录
-2. **把 .bat 转成 CRLF 换行**——Windows 的 cmd 解析多行 if/else 块时，
+1. 全部文件收在 `bilibili-submit/` 顶层目录下——Windows 资源管理器解压
+   默认不会自动建目录，平铺会散落到当前目录（甚至可能解压进"下载"）
+2. 排除 __pycache__、.pytest_cache 等垃圾目录
+3. **把 .bat 转成 CRLF 换行**——Windows 的 cmd 解析多行 if/else 块时，
    LF 换行会导致解析异常。用户解压即用，不能依赖 git 事后转换
-3. 保留 .git 目录，用户解压后可直接 git push，无需重新初始化仓库
+4. 保留 .git 目录，用户解压后可直接 git push，无需重新初始化仓库
 """
 
 from __future__ import annotations
@@ -16,6 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "bilibili-submit-source.zip"
+# zip 内的顶层目录名。解压后得到一个干净的文件夹，而不是散落一地的文件
+TOP_DIR = "bilibili-submit"
 
 EXCLUDE_DIRS = {"__pycache__", ".pytest_cache", ".codebuddy", "build", "dist", ".venv"}
 EXCLUDE_NAMES = {"bilibili-submit-source.zip"}
@@ -38,7 +42,7 @@ def main() -> int:
     count = 0
     with zipfile.ZipFile(OUT, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for path in iter_files():
-            arcname = path.relative_to(ROOT)
+            arcname = Path(TOP_DIR) / path.relative_to(ROOT)
             if path.suffix.lower() in CRLF_SUFFIXES:
                 try:
                     text = path.read_text(encoding="utf-8")
@@ -54,6 +58,7 @@ def main() -> int:
 
     size_mb = OUT.stat().st_size / 1024 / 1024
     print(f"打包完成: {OUT.name}  ({count} 个文件, {size_mb:.2f} MB)")
+    print(f"  顶层目录: {TOP_DIR}/")
     print(f"  其中 {converted} 个 .bat 已转为 CRLF 换行")
     return 0
 
