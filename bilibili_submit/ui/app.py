@@ -35,6 +35,7 @@ from ..auth import (
 from ..client import BiliClient
 from ..ffmpeg import ffmpeg_status
 from . import theme
+from .widgets import NavItem
 from .views import (
     HistoryView,
     LoginView,
@@ -94,17 +95,30 @@ class App(ttk.Frame):
 
     # ---------- 布局 ----------
 
+    #: 导航项图标。
+    #:
+    #: **用单个汉字而不是符号**。试过 ``⚙``(U+2699)、``◷``(U+25F7) 这类
+    #: Misc/Geometric 符号，Microsoft YaHei 对它们的字形覆盖不确定，
+    #: Linux 上很容易渲染成方框；emoji 更不必说。汉字是 CJK 字体的
+    #: 本体，100% 能显示，在中文界面里语义也直观。
+    NAV_ICONS = {
+        "登录": "登",
+        "投稿": "投",
+        "批量任务": "批",
+        "历史": "历",
+        "设置": "设",
+    }
+
     def _build_nav(self) -> None:
         nav = ttk.Frame(self, style="Surface.TFrame", width=theme.NAV_WIDTH)
         nav.grid(row=0, column=0, sticky="nsew")
         nav.grid_propagate(False)
+        nav.columnconfigure(0, weight=1)
         nav.rowconfigure(99, weight=1)
 
-        ttk.Label(
-            nav, text="B 站投稿", style="Title.TLabel", padding=(theme.PAD_MD, theme.PAD_LG)
-        ).grid(row=0, column=0, sticky="w")
+        self._build_brand(nav)
 
-        self._nav_buttons: dict[str, ttk.Button] = {}
+        self._nav_buttons: dict[str, NavItem] = {}
         self._views_info: list[tuple[str, type]] = []
         entries = [
             ("登录", LoginView),
@@ -114,14 +128,14 @@ class App(ttk.Frame):
             ("设置", SettingsView),
         ]
         for index, (label, view_cls) in enumerate(entries, start=1):
-            button = ttk.Button(
+            item = NavItem(
                 nav,
                 text=label,
-                style="Nav.TButton",
+                icon=self.NAV_ICONS.get(label, "●"),
                 command=lambda key=label: self.show(key),
             )
-            button.grid(row=index, column=0, sticky="ew", padx=theme.PAD_SM, pady=2)
-            self._nav_buttons[label] = button
+            item.grid(row=index, column=0, sticky="ew", pady=1)
+            self._nav_buttons[label] = item
             self._views_info.append((label, view_cls))
 
         # 底部版本号
@@ -129,7 +143,35 @@ class App(ttk.Frame):
             nav,
             text=f"v{__version__}",
             style="Secondary.TLabel",
-        ).grid(row=100, column=0, sticky="sw", padx=theme.PAD_MD, pady=theme.PAD_MD)
+        ).grid(row=100, column=0, sticky="sw", padx=theme.PAD_LG, pady=theme.PAD_MD)
+
+    def _build_brand(self, nav: tk.Misc) -> None:
+        """品牌区：粉色方块 + 应用名。
+
+        导航顶部有个视觉锚点，整块侧栏才不像一串裸按钮。
+        """
+        brand = ttk.Frame(nav, style="Surface.TFrame")
+        brand.grid(row=0, column=0, sticky="ew", pady=(theme.PAD_LG, theme.PAD_MD))
+        brand.columnconfigure(1, weight=1)
+
+        mark = tk.Frame(brand, width=32, height=32, background=theme.PRIMARY)
+        mark.grid(row=0, column=0, padx=(theme.PAD_LG, theme.PAD_SM))
+        mark.grid_propagate(False)
+        tk.Label(
+            mark, text="B", font=theme.FONT_LARGE,
+            background=theme.PRIMARY, foreground=theme.TEXT_ON_PRIMARY,
+        ).pack(expand=True)
+
+        text_box = ttk.Frame(brand, style="Surface.TFrame")
+        text_box.grid(row=0, column=1, sticky="w")
+        tk.Label(
+            text_box, text="哔哩投稿", font=theme.FONT_MEDIUM,
+            background=theme.SURFACE, foreground=theme.TEXT,
+        ).pack(anchor="w")
+        tk.Label(
+            text_box, text="自动投稿工具", font=theme.FONT_SMALL,
+            background=theme.SURFACE, foreground=theme.TEXT_MUTED,
+        ).pack(anchor="w")
 
     def _build_content(self) -> None:
         holder = ttk.Frame(self, style="TFrame")
@@ -150,17 +192,41 @@ class App(ttk.Frame):
         bar.grid(row=1, column=0, columnspan=2, sticky="ew")
         bar.columnconfigure(0, weight=1)
 
+        # 顶部分隔线：状态栏和上方内容区要有明确分界
+        ttk.Separator(bar, orient="horizontal").grid(
+            row=0, column=0, columnspan=3, sticky="ew"
+        )
+
+        cells = ttk.Frame(bar, style="Surface.TFrame")
+        cells.grid(row=1, column=0, columnspan=3, sticky="ew")
+        cells.columnconfigure(1, weight=1)
+
         self._status_login = tk.Label(
-            bar, text="", font=theme.FONT_SMALL, background=theme.SURFACE,
+            cells, text="", font=theme.FONT_SMALL, background=theme.SURFACE,
             foreground=theme.TEXT_SECONDARY, anchor="w",
         )
         self._status_login.grid(row=0, column=0, sticky="w", padx=theme.PAD_MD, pady=theme.PAD_SM)
 
+        # 中间段留给任务进度，由批量任务页通过 set_task_progress 写入
+        self._status_task = tk.Label(
+            cells, text="", font=theme.FONT_SMALL, background=theme.SURFACE,
+            foreground=theme.TEXT_MUTED, anchor="center",
+        )
+        self._status_task.grid(row=0, column=1, sticky="ew")
+
         self._status_ffmpeg = tk.Label(
-            bar, text="", font=theme.FONT_SMALL, background=theme.SURFACE,
+            cells, text="", font=theme.FONT_SMALL, background=theme.SURFACE,
             foreground=theme.TEXT_SECONDARY, anchor="e",
         )
-        self._status_ffmpeg.grid(row=0, column=1, sticky="e", padx=theme.PAD_MD)
+        self._status_ffmpeg.grid(row=0, column=2, sticky="e", padx=theme.PAD_MD)
+
+    def set_task_progress(self, text: str) -> None:
+        """在状态栏中段显示任务进度，供批量任务页调用。
+
+        执行任务时用户可能切到别的页看历史，状态栏是唯一一直可见的
+        地方——把进度放这里，不用切回来也知道跑到第几个了。
+        """
+        self._status_task.configure(text=text)
 
     # ---------- 行为 ----------
 
@@ -170,8 +236,8 @@ class App(ttk.Frame):
         if view is None:
             return
         view.tkraise()
-        for label, button in self._nav_buttons.items():
-            button.state(["selected"] if label == key else ["!selected"])
+        for label, item in self._nav_buttons.items():
+            item.set_active(label == key)
 
         refresh: Callable[[], None] | None = getattr(view, "refresh", None)
         if refresh:
@@ -179,16 +245,17 @@ class App(ttk.Frame):
 
     def refresh_status(self) -> None:
         """刷新状态栏：登录态与 ffmpeg。"""
-        if self.ctx.logged_in:
-            self._status_login.configure(text="● 已登录", foreground=theme.SUCCESS)
-        else:
-            self._status_login.configure(text="○ 未登录", foreground=theme.TEXT_MUTED)
+        fg, _bg = theme.tone("ok") if self.ctx.logged_in else theme.tone("idle")
+        self._status_login.configure(
+            text="● 已登录" if self.ctx.logged_in else "○ 未登录", foreground=fg
+        )
 
         info = ffmpeg_status()
         if info is None:
+            warn_fg, _ = theme.tone("warn")
             self._status_ffmpeg.configure(
                 text="ffmpeg 未找到（不影响投稿，仅自动抽帧不可用）",
-                foreground=theme.WARNING,
+                foreground=warn_fg,
             )
         else:
             self._status_ffmpeg.configure(

@@ -21,25 +21,88 @@ if TYPE_CHECKING:  # 只为类型标注，运行期不需要 tkinter
 PRIMARY = "#FB7299"           # B 站粉：主按钮、选中态、进行中
 PRIMARY_DARK = "#E5658A"      # 主按钮按下/悬停
 PRIMARY_SOFT = "#FFF0F5"      # 选中行底色、主色系浅底
+PRIMARY_RING = "#FBB8CE"      # 输入框聚焦环（比主色浅，不至于抢眼）
 
-BG = "#F6F7F8"                # 窗口底色
+BG = "#F4F5F7"                # 窗口底色
 SURFACE = "#FFFFFF"           # 卡片、输入区
-SURFACE_ALT = "#FAFAFA"       # 表头、交替行
+SURFACE_ALT = "#F7F8FA"       # 表头、交替行
+HOVER = "#EFF1F4"             # 悬停底色
 
-TEXT = "#18191C"              # 主文字
+TEXT = "#1D2129"              # 主文字
 TEXT_SECONDARY = "#61666D"    # 说明文字、标签
 TEXT_MUTED = "#9499A0"        # 占位符、禁用态
 TEXT_ON_PRIMARY = "#FFFFFF"   # 主按钮上的文字
 
-BORDER = "#E3E5E7"            # 常规分隔线
-BORDER_STRONG = "#CCD0D4"     # 输入框边框
-
-SUCCESS = "#2BA471"           # 成功
-WARNING = "#FF7F24"           # 警告（ffmpeg 缺失等）
-DANGER = "#F85A54"            # 错误
+BORDER = "#E5E7EB"            # 常规分隔线
+BORDER_STRONG = "#D0D4DA"     # 输入框边框
 
 LOG_BG = "#1F2023"            # 日志区深色底
 LOG_TEXT = "#D6D8DA"
+
+#: 语义色：**成对**给出前景与浅底。
+#:
+#: 状态标签、列表行都用「浅底 + 深字」而不是「深底 + 白字」——
+#: 大面积深色块会让列表看起来像报错一片，浅底则既能一眼区分
+#: 又不打断阅读。语义名同时也是 Treeview 的 tag 名，见
+#: :func:`apply_tree_tags`。
+TONES: "dict[str, tuple[str, str]]" = {
+    "ok": ("#0E9F6E", "#E8F8F0"),       # 成功
+    "warn": ("#C4700A", "#FFF5E6"),     # 警告（ffmpeg 缺失等）
+    "error": ("#D93A34", "#FDECEC"),    # 失败
+    "busy": ("#E5658A", "#FFF0F5"),     # 进行中
+    "missing": ("#C4700A", "#FFF5E6"),  # 文件缺失
+    "info": ("#4E5969", "#F2F3F5"),     # 中性信息
+    "idle": ("#9499A0", "#FFFFFF"),     # 待处理：不给底色，保持安静
+}
+
+#: 旧代码里的单色映射，仍供 :class:`~.widgets.StatusPill` 等处取前景色
+_STATUS_COLORS = {
+    "ok": "#0E9F6E",
+    "success": "#0E9F6E",
+    "warn": "#C4700A",
+    "warning": "#C4700A",
+    "error": "#D93A34",
+    "danger": "#D93A34",
+    "busy": PRIMARY,
+    "info": TEXT_SECONDARY,
+    "idle": TEXT_MUTED,
+}
+
+# 旧名的兼容别名：新代码请用 :data:`TONES`（成对取色），
+# 这三个只保留给还没迁移的调用点，值取自 TONES 以免两处漂移。
+SUCCESS = TONES["ok"][0]
+WARNING = TONES["warn"][0]
+DANGER = TONES["error"][0]
+
+
+def tone(name: str) -> tuple[str, str]:
+    """取语义色的 ``(前景, 浅底)``，未知名字退到 ``idle``。"""
+    return TONES.get(name, TONES["idle"])
+
+
+def tone_fg(name: str) -> str:
+    """只取语义色的前景色。"""
+    return tone(name)[0]
+
+
+def apply_tree_tags(tree: "object") -> None:
+    """给 Treeview 配好状态行着色，是**唯一**的配色来源。
+
+    ttk 的 Treeview 行着色只能靠 tag，散在各视图里各配一份迟早会
+    不一致（而且忘了配就是黑字一片）。这里集中配一次。
+
+    用法——每行**只打一个**状态 tag::
+
+        tree.item(iid, values=..., tags=(tone,))
+
+    .. note::
+       刻意**不做斑马纹**。多个 tag 同时作用于一行时哪个 ``background``
+       生效取决于 Tk 内部实现，且 tag 背景与 ``selected`` 态的覆盖关系
+       也不确定。每行只用一个 tag 就从根上避开了这个问题，
+       而任务列表里「扫一眼看出成败」本来也比横向对齐更有价值。
+    """
+    for name, (fg, bg) in TONES.items():
+        tree.tag_configure(name, foreground=fg, background=bg)
 
 # ---------- 字体 ----------
 
@@ -76,8 +139,8 @@ PAD_XL = 24
 
 # ---------- 尺寸 ----------
 
-NAV_WIDTH = 172               # 侧边导航栏宽度
-NAV_ITEM_HEIGHT = 40
+NAV_WIDTH = 180               # 侧边导航栏宽度
+NAV_ITEM_HEIGHT = 42
 INPUT_HEIGHT = 30
 BUTTON_HEIGHT = 32
 QR_SIZE = 220                 # 登录二维码边长
@@ -143,16 +206,17 @@ def apply(style: "ttk.Style") -> None:
         bordercolor=[("active", PRIMARY)],
     )
 
-    # 输入框
+    # 输入框：聚焦时给一圈浅粉，比默认的细蓝框更容易注意到
     style.configure(
         "TEntry",
         fieldbackground=SURFACE,
         foreground=TEXT,
         bordercolor=BORDER_STRONG,
         lightcolor=BORDER_STRONG,
-        padding=(PAD_SM, PAD_XS + 2),
+        padding=(PAD_SM + 2, PAD_XS + 3),
     )
-    style.map("TEntry", bordercolor=[("focus", PRIMARY)])
+    style.map("TEntry", bordercolor=[("focus", PRIMARY)],
+              lightcolor=[("focus", PRIMARY_RING)])
 
     # 下拉框
     style.configure(
@@ -169,20 +233,21 @@ def apply(style: "ttk.Style") -> None:
         thickness=6,
     )
 
-    # 列表（Treeview）
+    # 列表（Treeview）：行高放宽到 32，表头去掉立体边框更像现代表格
     style.configure(
         "Treeview",
         background=SURFACE,
         fieldbackground=SURFACE,
         foreground=TEXT,
         borderwidth=0,
-        rowheight=28,
+        rowheight=32,
     )
     style.configure(
         "Treeview.Heading",
         background=SURFACE_ALT,
         foreground=TEXT_SECONDARY,
         font=FONT_SMALL,
+        borderwidth=0,
         relief="flat",
     )
     style.map("Treeview", background=[("selected", PRIMARY_SOFT)],

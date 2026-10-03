@@ -212,6 +212,37 @@ row.add(ttk.Entry, textvariable=self._title_var)
 - `read_history_diagnose()` —— 返回 `(记录, 错误说明)`，给需要给用户
   提示的场合用（GUI 历史页）。
 
+### 列表行每行只打一个 tag
+
+ttk 的 Treeview 着色只能靠 tag，于是很自然会想「斑马纹一个 tag、
+状态色一个 tag」叠加。但**多个 tag 同时作用于一行时哪个 `background`
+生效没有保证**，tag 背景与 `selected` 态的覆盖关系同样不确定。
+
+所以 `theme.apply_tree_tags` 配的每种状态都自带前景和浅底，
+而业务代码保证**每行只打一个 tag**：`idle / busy / ok / error / missing`。
+`test_row_never_carries_two_tags` 守着这条。
+
+放弃斑马纹不损失什么——任务列表里「扫一眼看出成败」本来也比横向对齐
+更有价值。
+
+### 工作线程上报结构化 `Event`
+
+`Worker` 的 `report` 原本只接受 `str`（一行日志）。但「第 3 个任务跑完了、
+状态是成功」这种信息需要同时更新列表行、进度条和状态栏，硬塞进字符串
+再解析太脆。
+
+`workers.Event` 是一个冻结 dataclass，承载
+`kind / index / total / status / error`。回调侧 `isinstance` 区分::
+
+    def _on_progress(self, message: str | Event) -> None:
+        if isinstance(message, Event):
+            ...   # 更新行状态 / 进度条 / 状态栏
+        else:
+            self._log.append(message)
+
+这样批量任务页的 `_do_run` 里没有任何一处碰 Tk——此前它是直接调
+`self.after(0, ...)` 的，全项目最后一处这类违规。
+
 ### 会话只能从 `new_session()` 来
 
 早期 GUI 登录页在 `_login_flow` 里写了一句

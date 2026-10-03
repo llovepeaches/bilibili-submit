@@ -27,6 +27,8 @@ __all__ = [
     "LogConsole",
     "Placeholder",
     "KeyValueList",
+    "NavItem",
+    "SummaryBar",
 ]
 
 
@@ -232,18 +234,9 @@ class SecondaryButton(ttk.Button):
         )
 
 
-# 状态色映射
-_STATUS_COLORS = {
-    "ok": theme.SUCCESS,
-    "success": theme.SUCCESS,
-    "warn": theme.WARNING,
-    "warning": theme.WARNING,
-    "error": theme.DANGER,
-    "danger": theme.DANGER,
-    "busy": theme.PRIMARY,
-    "info": theme.TEXT_SECONDARY,
-    "idle": theme.TEXT_MUTED,
-}
+def _tone_colors(tone: str) -> tuple[str, str]:
+    """取语义色的 ``(前景, 浅底)``。"""
+    return theme.TONES.get(tone, theme.TONES["idle"])
 
 
 class StatusPill(tk.Label):
@@ -254,21 +247,169 @@ class StatusPill(tk.Label):
     """
 
     def __init__(self, master: tk.Misc, text: str = "", tone: str = "idle") -> None:
+        fg, bg = _tone_colors(tone)
         super().__init__(
             master,
             text=text,
             font=theme.FONT_SMALL,
-            background=theme.SURFACE,
-            foreground=_STATUS_COLORS.get(tone, theme.TEXT_SECONDARY),
+            background=bg,
+            foreground=fg,
             padx=theme.PAD_SM,
             pady=2,
         )
 
     def set(self, text: str, tone: str = "idle") -> None:
-        """更新文字与配色。"""
-        self.configure(
-            text=text, foreground=_STATUS_COLORS.get(tone, theme.TEXT_SECONDARY)
+        """更新文字与配色。``tone`` 见 :data:`~.theme.TONES`。"""
+        fg, bg = _tone_colors(tone)
+        self.configure(text=text, foreground=fg, background=bg)
+
+
+class NavItem(tk.Frame):
+    """侧边导航项：左侧竖条 + 图标 + 文字。
+
+    选中态是一条粉色竖条。clam 主题没法给 Button 画「局部」边框，
+    所以用 frame 拼：竖条是独立的 3px 宽 frame，未选中时涂成
+    **和底色一样**的颜色而不是隐藏它——隐藏会让文字在选中/未选中
+    之间左右跳动，很难看。
+
+    .. note::
+       用 ``tk.Frame`` 而非 ``ttk.Frame``：整块导航项要随悬停/选中
+       改底色，而 ttk 组件只能通过 style 改色（``ttk.Frame`` 甚至
+       不接受 ``background`` 选项，会报 ``unknown option``）。
+       这里底色是动态变化的，tk.Frame 直接得多。
+
+    对外表现得像 ``ttk.Button``：有 ``state()``，可整体点击。
+    """
+
+    BAR_WIDTH = 3
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        text: str,
+        icon: str = "",
+        command: Callable[[], None] | None = None,
+    ) -> None:
+        # highlightthickness=0 去掉默认边框，否则拼出来的块有细黑线
+        super().__init__(
+            master, background=theme.SURFACE, cursor="hand2", highlightthickness=0
         )
+        self._command = command
+        self._active = False
+
+        self._bar = tk.Frame(
+            self, width=self.BAR_WIDTH, background=theme.SURFACE
+        )
+        self._bar.pack(side="left", fill="y")
+        # 竖条宽度不能被布局压缩掉
+        self._bar.pack_propagate(False)
+
+        body = tk.Frame(self, background=theme.SURFACE)
+        body.pack(side="left", fill="both", expand=True)
+
+        self._icon = tk.Label(
+            body, text=icon, font=theme.FONT_MEDIUM,
+            background=theme.SURFACE, foreground=theme.TEXT_SECONDARY,
+            width=2, anchor="center",
+        )
+        self._icon.pack(side="left", padx=(theme.PAD_MD, theme.PAD_XS))
+
+        self._text = tk.Label(
+            body, text=text, font=theme.FONT_MEDIUM,
+            background=theme.SURFACE, foreground=theme.TEXT,
+            anchor="w",
+        )
+        self._text.pack(side="left", fill="x", expand=True)
+
+        self._paintable = (self, body, self._icon, self._text)
+        for widget in self._paintable:
+            widget.bind("<Button-1>", self._on_click)
+            widget.bind("<Enter>", self._on_enter)
+            widget.bind("<Leave>", self._on_leave)
+
+    # ---------- 对外 ----------
+
+    def set_active(self, active: bool) -> None:
+        """切换选中态。"""
+        self._active = active
+        self._render()
+
+    def state(self, _spec: "object" = None) -> None:
+        """兼容 ``ttk.Button.state()`` 的调用签名。
+
+        :class:`~.app.App` 原来存的是 Button 并调 ``state(["selected"])``，
+        换成 NavItem 后不想改那套逻辑，所以留个空实现。
+        """
+        return None
+
+    # ---------- 内部 ----------
+
+    def _on_click(self, _event: "object" = None) -> None:
+        if self._command:
+            self._command()
+
+    def _on_enter(self, _event: "object" = None) -> None:
+        if not self._active:
+            self._paint(theme.HOVER)
+
+    def _on_leave(self, _event: "object" = None) -> None:
+        self._render()
+
+    def _paint(self, background: str) -> None:
+        for widget in self._paintable:
+            widget.configure(background=background)
+
+    def _render(self) -> None:
+        if self._active:
+            self._paint(theme.PRIMARY_SOFT)
+            self._bar.configure(background=theme.PRIMARY)
+            self._icon.configure(foreground=theme.PRIMARY_DARK)
+            self._text.configure(foreground=theme.PRIMARY_DARK)
+        else:
+            self._paint(theme.SURFACE)
+            # 未选中也要占位，否则选中时整行会横向跳动
+            self._bar.configure(background=theme.SURFACE)
+            self._icon.configure(foreground=theme.TEXT_SECONDARY)
+            self._text.configure(foreground=theme.TEXT)
+
+
+class SummaryBar(ttk.Frame):
+    """一行汇总信息：左边统计，右边快捷操作按钮。
+
+    批量任务页要同时展示「共 N / 已选 M / 成功 X / 失败 Y」和
+    「全选 / 只选失败项」这类按钮，堆成两行太占地方，
+    一行左右分开更紧凑。
+
+    用法::
+
+        bar = SummaryBar(parent)
+        bar.grid(row=0, column=0, sticky="ew")
+        bar.add_action("全选", on_select_all)
+        bar.set_stats("共 12 · 已选 8")
+    """
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master, style="Card.TFrame")
+        self.columnconfigure(0, weight=1)
+
+        self._stats = tk.Label(
+            self, text="", font=theme.FONT_SMALL, anchor="w",
+            background=theme.SURFACE, foreground=theme.TEXT_SECONDARY,
+        )
+        self._stats.grid(row=0, column=0, sticky="w")
+
+        self._actions = ttk.Frame(self, style="Card.TFrame")
+        self._actions.grid(row=0, column=1, sticky="e")
+
+    def set_stats(self, text: str) -> None:
+        self._stats.configure(text=text)
+
+    def add_action(self, text: str, command: Callable[[], None]) -> None:
+        """往右侧追加一个次按钮。"""
+        count = len(self._actions.winfo_children())
+        SecondaryButton(
+            self._actions, text, command
+        ).grid(row=0, column=count, padx=(theme.PAD_XS, 0))
 
 
 class ProgressBar(ttk.Frame):
@@ -412,7 +553,7 @@ class KeyValueList(ttk.Frame):
                 text=value,
                 font=theme.FONT_SMALL,
                 background=theme.SURFACE,
-                foreground=_STATUS_COLORS.get(tone, theme.TEXT),
+                foreground=_tone_colors(tone)[0],
                 anchor="w",
                 justify="left",
             )

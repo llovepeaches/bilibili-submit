@@ -15,11 +15,55 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
-from typing import Any, Callable, Generic, TypeVar
+from dataclasses import dataclass
+from typing import Any, Callable, Generic, TypeVar, Union
 
 T = TypeVar("T")
 
-__all__ = ["Worker", "Cancelled"]
+__all__ = ["Worker", "Cancelled", "Event"]
+
+
+@dataclass(frozen=True)
+class Event:
+    """工作线程上报的**结构化**状态，区别于纯文字进度。
+
+    ``report`` 原本只接受 ``str``（一行日志）。但像「第 3 个任务跑完了、
+    状态是成功」这种信息需要更新列表行和进度条，硬塞进字符串再解析太脆。
+
+    调用方通过 ``isinstance`` 区分两种上报::
+
+        def _on_progress(self, message: str | Event) -> None:
+            if isinstance(message, Event):
+                ...        # 更新行状态 / 进度条
+            else:
+                self._log.append(message)
+
+    Attributes:
+        kind: ``"start"`` 开始执行某项；``"done"`` 某项结束。
+        index: 当前项下标（从 0 开始）。
+        total: 总项数，用于算进度百分比。
+        status: ``"done"`` 时该项的结果文案（成功 / 失败原因）。
+        error: 失败原因全文。状态列放不下，双击时弹窗看它。
+    """
+
+    kind: str
+    index: int = 0
+    total: int = 0
+    status: str = ""
+    error: str = ""
+
+    @property
+    def done(self) -> bool:
+        return self.kind == "done"
+
+    @property
+    def succeeded(self) -> bool:
+        """该项是否成功。失败时 ``status`` 是错误文案。"""
+        return self.kind == "done" and not self.error
+
+
+#: ``report`` 接受的参数：一行日志，或一个结构化事件
+Report = Union[str, Event]
 
 
 class Cancelled(Exception):
@@ -57,8 +101,8 @@ class Worker(Generic[T]):
 
     def run(
         self,
-        task: Callable[[Callable[[str], None], Callable[[], bool]], T],
-        on_progress: Callable[[str], None] | None = None,
+        task: Callable[[Callable[[Report], None], Callable[[], bool]], T],
+        on_progress: Callable[[Report], None] | None = None,
         on_done: Callable[[T], None] | None = None,
         on_error: Callable[[BaseException], None] | None = None,
     ) -> None:
@@ -66,8 +110,10 @@ class Worker(Generic[T]):
 
         Args:
             task: 真正干活的 callable。接收两个参数：
-                ``report(message)`` 上报进度，``is_cancelled()`` 查询是否已取消。
-            on_progress: 进度回调（主线程执行）。
+                ``report(message)`` 上报进度或 :class:`Event`，
+                ``is_cancelled()`` 查询是否已取消。
+            on_progress: 进度回调（主线程执行）。参数是 ``str`` 或
+                :class:`Event`，回调方自己 ``isinstance`` 区分。
             on_done: 成功回调（主线程执行）。
             on_error: 失败回调（主线程执行），含 :class:`Cancelled`。
         """
@@ -76,10 +122,10 @@ class Worker(Generic[T]):
 
         self._cancel.clear()
 
-        def report(message: str) -> None:
+        def report(message: Report) -> None:
             # 工作线程 → 主线程：用 after 排队，不直接调 UI
             if on_progress:
-                self._root.after(0, lambda: on_progress(message))
+                self._root.after(0, lambda m=message: on_progress(m))
 
         def wrapped() -> None:
             try:
