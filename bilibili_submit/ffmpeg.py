@@ -1,0 +1,140 @@
+"""ffmpeg 定位。
+
+封面抽帧需要一个 ffmpeg 可执行文件。定位顺序（先命中先用）：
+
+1. **外置**——与 exe 同目录的 ``ffmpeg.exe``（或 ``ffmpeg/ffmpeg.exe``）。
+   这是打包场景的推荐方式：76MB 的 ffmpeg 不塞进单文件归档，
+   避免每次启动都解压到临时目录（慢且易被杀毒软件拦截）。
+   用户删掉它程序照常运行，只是不能自动生成封面。
+2. **imageio-ffmpeg** 自带的二进制（``pip install imageio-ffmpeg``）。
+3. **系统 PATH** 里的 ffmpeg。
+
+找不到时抛出带明确指引的异常，而不是静默跳过。
+"""
+
+from __future__ import annotations
+
+import logging
+import shutil
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+from .exceptions import BiliError
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["FfmpegInfo", "find_ffmpeg", "app_dir", "ffmpeg_status"]
+
+_EXE_NAMES = ("ffmpeg.exe", "ffmpeg", "ffmpeg-win.exe", "avconv.exe")
+
+
+def app_dir() -> Path:
+    """程序所在目录。
+
+    打包后是 exe 所在目录（外置 ffmpeg 就放这里），
+    源码运行时是项目根目录。
+    """
+    if getattr(sys, "frozen", False):  # PyInstaller / PyOxidizer
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+@dataclass
+class FfmpegInfo:
+    """一次定位结果。"""
+
+    path: str
+    source: str  # bundled / system / imageio
+
+    def exists(self) -> bool:
+        return bool(self.path) and Path(self.path).exists()
+
+    def describe(self) -> str:
+        labels = {
+            "bundled": "程序内置",
+            "imageio": "imageio-ffmpeg",
+            "system": "系统 PATH",
+        }
+        return f"{labels.get(self.source, self.source)}: {self.path}"
+
+
+def _candidates_in_app_dir() -> list[Path]:
+    base = app_dir()
+    out: list[Path] = []
+    for name in _EXE_NAMES:
+        out.append(base / name)
+        # 支持 ffmpeg/ffmpeg.exe 这样的子目录布局
+        out.append(base / "ffmpeg" / name)
+    return out
+
+
+def _from_imageio() -> str | None:
+    try:
+        import imageio_ffmpeg  # type: ignore[import-untyped]
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:  # noqa: BLE001 - 未安装属正常情况
+        logger.debug("imageio-ffmpeg 不可用: %s", exc)
+        return None
+
+
+def find_ffmpeg(required: bool = False) -> FfmpegInfo | None:
+    """定位可用的 ffmpeg。
+
+    Args:
+        required: 为 True 时找不到直接抛 BiliError（附带安装指引），
+            否则返回 None。
+    """
+    for candidate in _candidates_in_app_dir():
+        if candidate.is_file():
+            return FfmpegInfo(str(candidate), "bundled")
+
+    from_imageio = _from_imageio()
+    if from_imageio and Path(from_imageio).exists():
+        return FfmpegInfo(str(from_imageio), "imageio")
+
+    on_path = shutil.which("ffmpeg")
+    if on_path:
+        return FfmpegInfo(on_path, "system")
+
+    if required:
+        raise BiliError(
+            "未找到 ffmpeg，无法自动生成封面",
+            hint=(
+                "三选一：① 把 ffmpeg.exe 放到程序同目录；"
+                "② pip install imageio-ffmpeg；"
+                "③ 自行安装 ffmpeg 并加入 PATH。"
+                "或在配置里用 cover 指定现成的图片，跳过自动抽帧"
+            ),
+        )
+    return None
+
+
+def ffmpeg_status() -> FfmpegInfo | None:
+    """给 check 命令用：探测 ffmpeg 是否就绪，不抛异常。"""
+    try:
+        return find_ffmpeg(required=False)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def ffmpeg_version(info: FfmpegInfo | None = None) -> str:
+    """读取 ffmpeg 版本，用于诊断输出。"""
+    import subprocess
+
+    info = info or ffmpeg_status()
+    if info is None:
+        return "未找到"
+    try:
+        proc = subprocess.run(
+            [info.path, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        first = (proc.stdout or proc.stderr or "").splitlines()
+        return first[0] if first else "未知"
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("读取 ffmpeg 版本失败: %s", exc)
+        return "未知"

@@ -1,0 +1,14 @@
+# 硬依赖
+requests>=2.31
+PyYAML>=6.0
+tqdm>=4.66
+
+# 软依赖（缺失会自动降级，不影响核心功能）
+# qrcode: 终端打印二维码。缺失时只显示登录链接
+qrcode>=7.4
+# imageio-ffmpeg: 自带各平台 ffmpeg 二进制（Windows 版 wheel 约 30MB）。
+# 缺失时程序仍可用，但 cover: auto 需要另找 ffmpeg。
+imageio-ffmpeg>=0.4.9
+
+# 说明：封面抽帧调用 ffmpeg 命令行，不需要 Pillow，故未列入依赖。
+# 若你要自己扩展图片处理再自行安装：pip install Pillow

@@ -1,0 +1,47 @@
+name: Build Windows exe
+
+# 没有 Windows 机器时的替代方案：推代码上去，CI 自动打包并提供下载
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: 打包主程序
+        run: python -m PyInstaller bili_submit.spec --noconfirm --clean
+
+      - name: 准备 ffmpeg（外置到 dist/）
+        run: python tools/setup_ffmpeg.py --dest dist
+
+      - name: 冒烟测试
+        run: |
+          .\dist\bilibili-submit.exe --version
+          .\dist\bilibili-submit.exe --help
+          .\dist\bilibili-submit.exe tid
+          # check 会同时报告登录态与 ffmpeg 就绪情况
+          .\dist\bilibili-submit.exe check
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: bilibili-submit-windows
+          path: |
+            dist/bilibili-submit.exe
+            dist/ffmpeg.exe
+            dist/config/
+            dist/README.md
+          retention-days: 30
+          if-no-files-found: error

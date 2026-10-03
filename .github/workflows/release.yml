@@ -1,0 +1,114 @@
+name: Release
+
+# 推 tag 即自动：在 Windows 上打包 → 冒烟测试 → 创建 Release 并上传产物
+# 产物是**公开直链**，无需登录即可下载：
+#   https://github.com/<你的账号>/<仓库名>/releases/download/v0.1.0/xxx
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的版本号，例如 v0.1.0'
+        required: true
+
+permissions:
+  contents: write   # 创建 Release、上传资产所需
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: 打包主程序
+        run: python -m PyInstaller bili_submit.spec --noconfirm --clean
+
+      - name: 准备 ffmpeg
+        run: python tools/setup_ffmpeg.py --dest dist
+
+      - name: 冒烟测试
+        run: |
+          .\dist\bilibili-submit.exe --version
+          .\dist\bilibili-submit.exe --help
+          .\dist\bilibili-submit.exe tid
+          .\dist\bilibili-submit.exe check
+
+      - name: 组装两个分发包
+        shell: pwsh
+        run: |
+          # 轻量版：不含 ffmpeg，需用户自备（仅影响 cover: auto）
+          New-Item -ItemType Directory -Force -Path stage-mini | Out-Null
+          Copy-Item dist\bilibili-submit.exe stage-mini\
+          Copy-Item dist\config stage-mini\ -Recurse
+          Copy-Item README.md stage-mini\
+          Compress-Archive -Path stage-mini\* -DestinationPath `
+            dist\bilibili-submit-mini-windows.zip -Force
+
+          # 完整版：自带 ffmpeg，开箱即用
+          New-Item -ItemType Directory -Force -Path stage-full | Out-Null
+          Copy-Item dist\bilibili-submit.exe stage-full\
+          Copy-Item dist\ffmpeg.exe stage-full\
+          Copy-Item dist\config stage-full\ -Recurse
+          Copy-Item README.md stage-full\
+          Compress-Archive -Path stage-full\* -DestinationPath `
+            dist\bilibili-submit-full-windows.zip -Force
+
+          Get-ChildItem dist\*.zip | Format-Table Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: 创建 Release 并上传
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          $tag = $env:TAG
+          $notes = @"
+          ## 下载
+
+          | 包 | 大小 | 说明 |
+          |---|---|---|
+          | `bilibili-submit-full-windows.zip` | ~87 MB | 自带 ffmpeg，开箱即用 |
+          | `bilibili-submit-mini-windows.zip` | ~11 MB | 不含 ffmpeg，需自备 |
+
+          ## 使用
+
+          1. 解压
+          2. `bilibili-submit.exe login` 手机扫码登录（**扫完要在手机上点确认**）
+          3. `bilibili-submit.exe upload 视频.mp4 --title "标题" --tid 21 --tag "标签"`
+          4. `bilibili-submit.exe check` 自检
+
+          ## 注意事项
+
+          - 首次运行可能被杀毒软件拦截：PyInstaller 的启动器常被误判，
+            请在 Windows Defender 里添加白名单。
+          - 建议用 Windows Terminal 打开以正确显示二维码；
+            传统 cmd 显示乱码时，复制链接到手机打开同样可以登录。
+          - 新号投稿频控较严，批量投稿请设置任务间隔。
+          - 仅供管理自己的账号投稿使用。
+          "@
+          gh release create $tag `
+            "dist\bilibili-submit-mini-windows.zip#轻量版（不含 ffmpeg，约 11MB）" `
+            "dist\bilibili-submit-full-windows.zip#完整版（自带 ffmpeg，约 87MB）" `
+            --repo ${{ github.repository }} `
+            --title "bilibili-submit $tag" `
+            --notes $notes
+
+      - name: 打印下载链接
+        if: always()
+        shell: pwsh
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          $repo = "${{ github.repository }}"
+          Write-Host ""
+          Write-Host "公开发布完成，下载链接：" -ForegroundColor Green
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-full-windows.zip"
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-mini-windows.zip"

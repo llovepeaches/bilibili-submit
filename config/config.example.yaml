@@ -1,0 +1,72 @@
+# 哔哩哔哩自动投稿程序 —— 配置示例
+# 用法：python run.py submit -c config/my.yaml
+# 首次使用请先执行：python run.py login
+
+account:
+  # Cookie 保存位置，权限为 0600，请勿外传
+  cookie_file: "~/.config/bilibili_submit/cookie.json"
+  # 需要代理时填写，如 "http://127.0.0.1:7890"
+  proxy: null
+
+upload:
+  # 上传线路：auto 自动择优，也可指定 bda2 / tx / estx / bldsa / akbd
+  line: auto
+  # ugcupos/bup 适合大陆；港澳台与海外改 ugcupos/bupfetch
+  profile: "ugcupos/bup"
+  # 并发分片数，上限 4。调高不会更快，反而更容易触发限流
+  concurrency: 3
+  # 断点续传（仅在中断后 2 小时内有效）
+  resume: true
+  chunk_retries: 3
+  show_progress: true
+
+submit:
+  # 投稿后端：web（默认）/ web/v2（旧接口）/ app（需 access_key）
+  backend: web
+  # 触发 601 频控后的阶梯退避秒数
+  cooldown_seconds: [300, 600, 1200, 1800, 3600]
+  # 仅 backend=app 时需要；纯扫码登录拿不到 access_key，保持为空即可
+  app: {}
+
+# 所有任务继承这些默认值，任务内可单独覆盖
+defaults:
+  tid: 21                # 分区 ID，用 `python run.py tid` 查看常用分区
+  copyright: 1           # 1=自制 2=转载（转载时 source 必填）
+  source: ""
+  tag: "日常,分享"
+  desc: "自动投稿"
+  cover: null            # 图片路径 / auto（用 ffmpeg 抽首帧）/ null
+  no_reprint: 0          # 0=允许转载 1=禁止转载
+  dtime: null
+  dtime_offset_hours: null
+
+tasks:
+  # ---- 模式 A：单个文件 ----
+  - name: "单个视频投稿"
+    type: single
+    file: "/path/to/video.mp4"
+    title: "视频标题（最多 80 字）"
+    desc: "视频简介"
+    tag: "标签1,标签2"
+    cover: auto
+    # 定时发布：距今至少 4 小时，二选一
+    # dtime: 1791638400
+    dtime_offset_hours: 5
+
+  # ---- 模式 B：目录批量 ----
+  - name: "系列合集"
+    type: batch
+    dir: "/path/to/series"
+    include: ["*.mp4", "*.mkv"]
+    exclude: ["*tmp*", "*sample*"]
+    sort: name            # name | mtime
+    # 模板变量：{stem} 文件名主体、{name} 完整文件名、{n} 序号
+    title_template: "{stem} | 第{n}期"
+    desc_template: "本期内容：{stem}"
+    tid: 21
+    tag: "系列,合集"
+    cover: auto
+    # 每条之间等待的分钟数，用于规避 601 频控
+    per_task_interval_minutes: 30
+    stop_on_error: true
+    max_items: null
