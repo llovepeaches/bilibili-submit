@@ -14,6 +14,7 @@ from bilibili_submit.config import (  # noqa: E402
     expand_tasks,
     load_config,
     scan_video_files,
+    task_files,
 )
 from bilibili_submit.exceptions import ConfigError  # noqa: E402
 from bilibili_submit.metadata import (  # noqa: E402
@@ -305,3 +306,173 @@ def test_multip_task_is_not_expanded(tmp_path):
     assert len(tasks) == 1
     assert tasks[0].type == "multip"
     assert len(tasks[0].files) == 2
+
+
+# ---------- 按文件夹分 P ----------
+
+
+def _tree(root, layout):
+    """按 {目录名: [文件名]} 建一棵目录树，返回根路径。"""
+    for folder, names in layout.items():
+        target = root / folder
+        target.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (target / name).write_bytes(b"x")
+    return root
+
+
+def test_scan_video_files_stays_shallow_by_default(tmp_path):
+    """默认只扫第一层：指到大目录时不该一次冒出上千个文件。"""
+    _tree(tmp_path, {"": ["a.mp4"], "旅行": ["b.mp4"]})
+    names = [p.name for p in scan_video_files(tmp_path)]
+    assert names == ["a.mp4"]
+
+
+def test_scan_video_files_can_go_one_level_deeper(tmp_path):
+    _tree(tmp_path, {"": ["a.mp4"], "旅行": ["b.mp4"], "旅行/更深": ["c.mp4"]})
+    found = scan_video_files(tmp_path, max_depth=2)
+    rels = sorted(p.relative_to(tmp_path).as_posix() for p in found)
+    assert rels == ["a.mp4", "旅行/b.mp4"], "只钻一层，第三层不进"
+
+
+def test_scan_video_files_groups_same_folder_together(tmp_path):
+    """同目录的文件要聚在一起，不能和其他目录的同名文件交错。
+
+    分 P 组内顺序来自这个顺序，交错会让 P1/P2 看起来很乱。
+    """
+    _tree(tmp_path, {"b文件夹": ["01.mp4"], "a文件夹": ["01.mp4"]})
+    parents = [p.parent.name for p in scan_video_files(tmp_path, max_depth=2)]
+    assert parents == ["a文件夹", "b文件夹"]
+
+
+def test_multip_task_can_take_a_directory(tmp_path):
+    """type: multip + dir：目录下所有视频就是该稿件的分 P。"""
+    _tree(tmp_path, {"整套": ["01.mp4", "02.mp4", "03.mp4"]})
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "tasks:\n"
+        "  - name: 一整套\n"
+        "    type: multip\n"
+        f"    dir: \"{tmp_path / '整套'}\"\n",
+        encoding="utf-8",
+    )
+    tasks = expand_tasks(load_config(cfg))
+    assert len(tasks) == 1
+    assert tasks[0].type == "multip"
+    assert [p.name for p in task_files(tasks[0])] == ["01.mp4", "02.mp4", "03.mp4"]
+
+
+def test_multip_without_files_or_dir_is_rejected(tmp_path):
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("tasks:\n  - name: 空\n    type: multip\n", encoding="utf-8")
+    with pytest.raises(ConfigError) as exc:
+        load_config(cfg)
+    assert "files" in str(exc.value)
+
+
+def test_batch_group_by_folder_expands_each_folder(tmp_path):
+    """batch + group_by: folder：每个子文件夹出一个稿件。"""
+    _tree(tmp_path, {"": ["solo.mp4"], "旅行": ["a.mp4", "b.mp4"], "教程": ["x.mp4"]})
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "tasks:\n"
+        "  - name: 按文件夹\n"
+        "    type: batch\n"
+        f"    dir: \"{tmp_path}\"\n"
+        "    group_by: folder\n",
+        encoding="utf-8",
+    )
+    tasks = expand_tasks(load_config(cfg))
+    kinds = {t.title: t.type for t in tasks}
+    assert kinds == {
+        "solo": "single",
+        "教程": "single",   # 子文件夹只有一个文件 → 单 P 稿件，标题取文件夹名
+        "旅行": "multip",
+    }
+    trip = next(t for t in tasks if t.title == "旅行")
+    assert len(task_files(trip)) == 2
+
+
+def test_batch_group_by_folder_clears_dir(tmp_path):
+    """展开后 dir 要置空，否则下游 task_files 会拿它再扫一遍目录。"""
+    _tree(tmp_path, {"旅行": ["a.mp4", "b.mp4"]})
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "tasks:\n"
+        "  - name: 按文件夹\n"
+        "    type: batch\n"
+        f"    dir: \"{tmp_path}\"\n"
+        "    group_by: folder\n",
+        encoding="utf-8",
+    )
+    tasks = expand_tasks(load_config(cfg))
+    assert all(t.dir is None for t in tasks)
+
+
+def test_group_by_rejects_unknown_mode(tmp_path):
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "tasks:\n"
+        "  - name: 分组\n"
+        "    type: batch\n"
+        f"    dir: \"{tmp_path}\"\n"
+        "    group_by: 随便写的\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_config(cfg)
+    assert "group_by" in str(exc.value)
+
+
+def test_group_by_only_applies_to_batch(tmp_path):
+    """给 multip 配 group_by 没意义——它本身就只是一个稿件。"""
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "tasks:\n"
+        "  - name: 多P\n"
+        "    type: multip\n"
+        "    files: [\"/tmp/a.mp4\", \"/tmp/b.mp4\"]\n"
+        "    group_by: folder\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_config(cfg)
+    assert "batch" in str(exc.value)
+
+
+def test_batch_group_by_prefix_still_works(tmp_path):
+    """同一个 group_by 字段也支持前缀模式，两种分法共用一套展开逻辑。"""
+    _tree(tmp_path, {"": ["旅行_01.mp4", "旅行_02.mp4", "教程.mp4"]})
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "tasks:\n"
+        "  - name: 按前缀\n"
+        "    type: batch\n"
+        f"    dir: \"{tmp_path}\"\n"
+        "    group_by: prefix\n",
+        encoding="utf-8",
+    )
+    tasks = expand_tasks(load_config(cfg))
+    assert {t.title for t in tasks} == {"旅行", "教程"}
+
+
+def test_batch_tasks_each_keep_their_own_file(tmp_path):
+    """普通 batch 展开出来的任务各带一个文件。
+
+    展开后的任务仍留着 dir 字段（历史行为），而 multip 会用 dir 扫整个
+    目录——所以 :func:`task_files` 认 dir 时必须限定 type，否则这里会
+    变成「每个任务都是整个目录」。
+    """
+    _tree(tmp_path, {"": ["a.mp4", "b.mp4"]})
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "tasks:\n"
+        "  - name: 逐个投\n"
+        "    type: batch\n"
+        f"    dir: \"{tmp_path}\"\n"
+        "    include: [\"*.mp4\"]\n",
+        encoding="utf-8",
+    )
+    tasks = expand_tasks(load_config(cfg))
+    assert len(tasks) == 2
+    assert [[p.name for p in task_files(t)] for t in tasks] == [["a.mp4"], ["b.mp4"]]

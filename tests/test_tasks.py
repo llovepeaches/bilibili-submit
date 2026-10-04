@@ -27,6 +27,10 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bilibili_submit.ui.views.tasks import (  # noqa: E402
+    GROUP_FOLDER,
+    GROUP_OFF,
+    GROUP_OPTIONS,
+    GROUP_PREFIX,
     PICKED,
     UNPICKED,
     SharedSubmitValues,
@@ -1501,5 +1505,165 @@ def test_edit_parts_ignores_single_file_task(tmp_path, monkeypatch):
 
         monkeypatch.setattr(view, "_ask_part_titles", boom)
         view._edit_parts("0")  # 不抛即通过
+    finally:
+        root.destroy()
+
+
+# ---------- 按文件夹分 P ----------
+
+
+@needs_display
+def test_group_combo_offers_three_choices(tmp_path, monkeypatch):
+    """「分P合并」下拉框要给出三种：不合并 / 按文件名前缀 / 按文件夹。"""
+    import tkinter as tk
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        assert tuple(view._group_combo.cget("values")) == GROUP_OPTIONS
+        assert GROUP_FOLDER in GROUP_OPTIONS
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_folder_mode_merges_each_subfolder(tmp_path, monkeypatch):
+    """选「按文件夹分组」：每个子文件夹合成一个稿件。"""
+    import tkinter as tk
+
+    from bilibili_submit.config import task_files
+
+    video_root = tmp_path / "视频"
+    for name in ("a.mp4", "b.mp4", "c.mp4"):
+        _make_video(video_root / "旅行", name)
+    _make_video(video_root / "教程", "x.mp4")
+    _make_video(video_root, "solo.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._group_var.set(GROUP_FOLDER)
+        _load_folder(root, view, video_root, monkeypatch)
+
+        by_title = {t.title: (t.type, len(task_files(t))) for t in view._tasks}
+        assert by_title["旅行"] == ("multip", 3), "子文件夹三个视频合成一个三 P 稿件"
+        assert by_title["教程"] == ("single", 1), "单文件子文件夹仍是单 P，标题取文件夹名"
+        assert by_title["solo"] == ("single", 1), "根目录散落文件不合并"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_folder_mode_ignores_third_level(tmp_path, monkeypatch):
+    """只钻一层：第三层的视频不进列表，免得指到大目录冒出上千任务。"""
+    import tkinter as tk
+
+    video_root = tmp_path / "视频"
+    _make_video(video_root / "旅行", "a.mp4")
+    _make_video(video_root / "旅行" / "更深", "z.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._group_var.set(GROUP_FOLDER)
+        _load_folder(root, view, video_root, monkeypatch)
+
+        titles = {t.title for t in view._tasks}
+        assert titles == {"旅行"}, f"不应出现第三层的内容，实际 {titles}"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_group_mode_is_saved_as_preference(tmp_path, monkeypatch):
+    """切换分组方式要记进偏好，下次打开还是它。"""
+    import tkinter as tk
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._group_var.set(GROUP_FOLDER)
+        assert view._current_state().group_mode == "folder"
+
+        view._group_var.set(GROUP_PREFIX)
+        assert view._current_state().group_mode == "prefix"
+
+        view._group_var.set(GROUP_OFF)
+        assert view._current_state().group_mode == "none"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_unknown_group_label_falls_back_to_none(tmp_path, monkeypatch):
+    """下拉框被改成没见过的值时退回"不合并"，而不是让扫描失败。"""
+    import tkinter as tk
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._group_var.set("乱填的")
+        assert view._group_mode() == "none"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_folder_mode_end_to_end_submits_once_per_folder(tmp_path, monkeypatch):
+    """从扫描到投递跑完整链路：上传次数 = 视频数，投递次数 = 稿件数。
+
+    UI 测试只验证了"扫出哪些任务"，多 P 真正的语义是**上传 N 次、投递
+    一次**——这两者分开测过，合起来跑一遍才敢说链路是通的。
+    """
+    import tkinter as tk
+
+    from bilibili_submit import scheduler
+    from bilibili_submit.config import AppConfig, task_files
+    from bilibili_submit.submit import SubmitResult
+
+    video_root = tmp_path / "视频"
+    for name in ("a.mp4", "b.mp4", "c.mp4"):
+        _make_video(video_root / "旅行", name)
+    _make_video(video_root / "教程", "x.mp4")
+    _make_video(video_root, "solo.mp4")
+
+    uploaded: list[str] = []
+    submitted: list[list[str]] = []
+
+    def fake_upload(_client, video, **_kw):
+        uploaded.append(Path(video).name)
+
+        class _Result:
+            filename = f"upos-{Path(video).stem}"
+
+        return _Result()
+
+    def fake_submit(_client, meta, **_kw):
+        submitted.append([v["filename"] for v in meta.videos])
+        return SubmitResult(aid=100, bvid="BV1xx")
+
+    monkeypatch.setattr(scheduler, "upload_video", fake_upload)
+    monkeypatch.setattr(scheduler, "submit_archive", fake_submit)
+
+    class _FakeClient:
+        """只为满足 run_task 的签名——真正的网络调用都在上面被打桩了。"""
+
+    cfg = AppConfig()
+    cfg.defaults.tid = 21
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._group_var.set(GROUP_FOLDER)
+        _load_folder(root, view, video_root, monkeypatch)
+
+        for task in view._tasks:
+            scheduler.run_task(_FakeClient(), task, cfg)
+
+        assert len(uploaded) == 5, f"5 个视频应上传 5 次，实际 {uploaded}"
+        assert len(submitted) == 3, f"3 个稿件应投递 3 次，实际 {submitted}"
+        assert sorted(len(parts) for parts in submitted) == [1, 1, 3], (
+            f"分 P 数应为 1/1/3，实际 {submitted}"
+        )
     finally:
         root.destroy()

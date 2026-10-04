@@ -15,6 +15,7 @@ import yaml
 
 from .exceptions import ConfigError
 from .metadata import COMMON_TIDS, resolve_dtime
+from .multipart import GROUP_MODES, PartGroup, group_files
 
 __all__ = [
     "AccountConfig",
@@ -112,6 +113,7 @@ class TaskConfig:
     part_titles: list[str] = field(default_factory=list)
     # batch
     dir: str | None = None
+    group_by: str = "none"             # none | prefix | folder（仅 batch 生效）
     include: list[str] = field(default_factory=lambda: ["*.mp4"])
     exclude: list[str] = field(default_factory=list)
     sort: str = "name"                 # name | mtime
@@ -207,41 +209,77 @@ def _validate_tasks(cfg: AppConfig) -> None:
             )
         if task.type == "single" and not task.file:
             raise ConfigError(f"任务 {task.name!r} 是 single 类型但缺少 file")
-        if task.type == "multip" and not task.files:
-            raise ConfigError(f"任务 {task.name!r} 是 multip 类型但缺少 files")
+        if task.type == "multip" and not (task.files or task.dir):
+            raise ConfigError(
+                f"任务 {task.name!r} 是 multip 类型但缺少 files"
+                "（也可以给 dir，目录下所有视频即分 P）"
+            )
         if task.type == "batch" and not task.dir:
             raise ConfigError(f"任务 {task.name!r} 是 batch 类型但缺少 dir")
         if task.part_titles and not task.files:
             raise ConfigError(
                 f"任务 {task.name!r} 配了 part_titles 但没有 files"
-                "（分 P 标题只对多 P 任务有意义）"
+                "（分 P 标题只对显式列出 files 的多 P 任务有意义，"
+                "用 dir 的任务标题取文件名）"
+            )
+        if task.group_by not in ("none", *GROUP_MODES):
+            raise ConfigError(
+                f"任务 {task.name!r} 的 group_by 必须是 "
+                f"none / {' / '.join(GROUP_MODES)}，实际是 {task.group_by!r}"
+            )
+        if task.group_by != "none" and task.type != "batch":
+            raise ConfigError(
+                f"任务 {task.name!r} 配了 group_by 但 type 是 {task.type!r}"
+                "（分组只用于把 batch 目录展开成多个多 P 稿件）"
             )
 
 
-def scan_video_files(directory: str | Path) -> list[Path]:
-    """扫出目录第一层里的视频文件，按文件名排序。
+def scan_video_files(directory: str | Path, max_depth: int = 1) -> list[Path]:
+    """扫出目录里的视频文件，同目录内按文件名排序。
 
     客户端批量任务页用它代替 yaml 配置：选个文件夹就能出一批任务，
     不用先写 ``config.yaml``。
 
     .. important::
-       **只扫第一层，不递归。** 用户在文件对话框里很容易指到
+       **默认只扫第一层，不递归。** 用户在文件对话框里很容易指到
        「视频」这种大目录，递归下去可能一次生成上千个任务——
-       真正想要多层目录时会明确加开关，而不是默认替他决定。
+       真正想要多层目录时要显式把 ``max_depth`` 传大，而不是默认替他决定。
+       按文件夹分 P 时会传 2（多钻一层子目录），上限也就到此为止。
+
+    Args:
+        max_depth: 扫几层目录。``1`` 只扫该目录本身；``2`` 再加上
+            直接子文件夹。小于 1 的值会被抬回 1。
 
     扩展名大小写不敏感（``.MP4`` 也要认），排序用 ``casefold()``
     以免同一批文件在不同系统上顺序不同。
+
+    排序键带上父目录：单层扫描时所有文件父目录相同，结果与既往一致；
+    多层扫描时同一文件夹的文件会聚在一起，不会和其他文件夹的同名文件
+    交错——分 P 组内顺序就是从这个顺序来的，交错会让 P1/P2 看起来很乱。
     """
     directory = Path(directory).expanduser()
     if not directory.is_dir():
         raise ConfigError(f"视频目录不存在: {directory}")
 
-    files = [
-        path
-        for path in directory.iterdir()
-        if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES
-    ]
-    return sorted(files, key=lambda path: path.name.casefold())
+    depth = max(1, int(max_depth))
+    found: list[Path] = []
+    _collect_videos(directory, depth, 1, found)
+    return sorted(
+        found,
+        key=lambda path: (str(path.parent).casefold(), path.name.casefold()),
+    )
+
+
+def _collect_videos(
+    directory: Path, max_depth: int, depth: int, out: list[Path]
+) -> None:
+    """把 ``directory`` 下的视频收进 ``out``，目录最多再进 ``max_depth`` 层。"""
+    for path in sorted(directory.iterdir(), key=lambda p: p.name.casefold()):
+        if path.is_file():
+            if path.suffix.lower() in VIDEO_SUFFIXES:
+                out.append(path)
+        elif path.is_dir() and depth < max_depth:
+            _collect_videos(path, max_depth, depth + 1, out)
 
 
 def expand_tasks(cfg: AppConfig) -> list[TaskConfig]:
@@ -256,6 +294,23 @@ def expand_tasks(cfg: AppConfig) -> list[TaskConfig]:
         directory = Path(task.dir or ".").expanduser()
         if not directory.is_dir():
             raise ConfigError(f"任务 {task.name!r} 的目录不存在: {directory}")
+
+        if task.group_by in GROUP_MODES:
+            # 按前缀/文件夹分组：一个组出一个稿件（组内多个就是多 P）。
+            # 分组要知道哪些文件属于根目录，所以扫到子文件夹一层。
+            files = scan_video_files(directory, max_depth=2)
+            if not files:
+                raise ConfigError(
+                    f"任务 {task.name!r} 目录下没有匹配的文件: {directory}"
+                )
+            groups = group_files(files, task.group_by, directory)
+            if task.max_items:
+                groups = groups[: int(task.max_items)]
+            out.extend(
+                _group_to_tasks(task, cfg.defaults, group, index)
+                for index, group in enumerate(groups, start=1)
+            )
+            continue
 
         files = _scan_files(directory, task.include, task.exclude, task.sort)
         if task.max_items:
@@ -281,6 +336,43 @@ def expand_tasks(cfg: AppConfig) -> list[TaskConfig]:
                 )
             out.append(merged)
     return out
+
+
+def _group_to_tasks(
+    task: TaskConfig,
+    defaults: DefaultsConfig,
+    group: "PartGroup",
+    index: int,
+) -> TaskConfig:
+    """一个分 P 组 → 一个任务。
+
+    单文件组退化成普通单 P 投稿，但标题仍取组名（文件夹名）——
+    那是用户自己起的名字，通常比 ``output.mp4`` 这种文件名像样。
+
+    ``dir`` 展开完就置空：下游 :func:`task_files` 见到 dir 会再去扫一遍，
+    而这里已经给出确切的文件列表了，重复扫既浪费又可能扫出别的东西。
+    """
+    merged = task.merged(defaults)
+    merged.type = "single" if len(group.files) == 1 else "multip"
+    if merged.type == "multip":
+        merged.files = [str(path) for path in group.files]
+    else:
+        merged.file = str(group.files[0])
+    merged.dir = None
+    merged.group_by = "none"
+    merged.index = index
+    merged.name = f"{task.name}#{index}"
+    if merged.title_template:
+        merged.title = merged.title_template.format(
+            stem=group.name, name=group.name, n=index, index=index
+        )
+    elif merged.title is None:
+        merged.title = group.name
+    if merged.desc_template:
+        merged.desc = merged.desc_template.format(
+            stem=group.name, name=group.name, n=index, index=index
+        )
+    return merged
 
 
 def _scan_files(
@@ -313,11 +405,18 @@ def _scan_files(
 def task_files(task: TaskConfig) -> list[Path]:
     """任务要上传的视频文件。
 
-    多 P 任务返回 ``files``（顺序即 P1/P2/P3 的顺序），
-    其余返回单个 ``file``。两者都没配时返回空列表，由调用方报错。
+    多 P 任务：显式 ``files`` 优先（顺序即 P1/P2/P3 的顺序）；
+    没给时若配了 ``dir``，就扫该目录下的视频——「这一个文件夹就是一套
+    视频」是最省事的写法，不用把十几个文件名敲一遍。
+    其余返回单个 ``file``。都没有时返回空列表，由调用方报错。
     """
     if task.files:
         return [Path(item).expanduser() for item in task.files]
+    # 只有 multip 认 dir：batch 展开出来的 single 任务也带着 dir 字段
+    # （历史行为），在这里跟着扫会把「每文件一个任务」变成「每任务都是
+    # 整个目录」，所以这里必须限定 type。
+    if task.type == "multip" and task.dir and not task.files:
+        return scan_video_files(Path(task.dir).expanduser())
     if task.file:
         return [Path(task.file).expanduser()]
     return []

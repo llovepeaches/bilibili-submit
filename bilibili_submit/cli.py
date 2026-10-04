@@ -34,6 +34,7 @@ from .config import (
     TaskConfig,
     expand_tasks,
     load_config,
+    scan_video_files,
     task_dtime,
 )
 from .console import setup_console
@@ -84,7 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
         "file",
         nargs="+",
         metavar="FILE",
-        help="视频文件路径；给多个就合并成同一稿件的 P1/P2/P3",
+        help="视频文件路径或目录；给多个就合并成同一稿件的 P1/P2/P3，"
+        "给目录则把目录里的视频都收进来（只收第一层）",
     )
     p_up.add_argument("--title", default=None, help="标题（默认取文件名）")
     p_up.add_argument("--tid", type=int, default=None, help="分区 ID")
@@ -190,15 +192,45 @@ def cmd_login(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _expand_upload_args(items: list[str]) -> tuple[list[Path], list[str]]:
+    """把命令行给的路径展开成文件列表——目录展开成它里面的视频。
+
+    返回 ``(文件列表, 有问题的路径)``。
+
+    目录**只扫第一层**：命令行 ``upload`` 的语义是「这一个目录就是一套
+    视频」，钻进子目录会把不相关的东西也拉进同一个稿件。
+    想要「每个子文件夹一个稿件」请用客户端或配置文件——命令行一次只投
+    一个稿件，表达不了多稿件。
+    """
+    files: list[Path] = []
+    problems: list[str] = []
+    for item in items:
+        path = Path(item).expanduser()
+        if path.is_dir():
+            found = scan_video_files(path)
+            if not found:
+                problems.append(f"{path}（目录里没有视频）")
+                continue
+            files.extend(found)
+        elif path.is_file():
+            files.append(path)
+        else:
+            problems.append(str(path))
+    return files, problems
+
+
 def cmd_upload(args: argparse.Namespace) -> int:
     cfg = load_config(args.config) if args.config else AppConfig()
     if args.no_resume:
         cfg.upload.resume = False
 
-    files = [Path(item).expanduser() for item in args.file]
-    missing = [str(path) for path in files if not path.is_file()]
+    sources = [Path(item).expanduser() for item in args.file]
+    files, missing = _expand_upload_args(args.file)
     if missing:
-        print(f"错误: 视频文件不存在: {'、'.join(missing)}", file=sys.stderr)
+        print(f"错误: 找不到可投稿的视频: {'、'.join(missing)}", file=sys.stderr)
+        return EXIT_FAIL
+    if not files:
+        print("错误: 没有可上传的视频文件", file=sys.stderr)
         return EXIT_FAIL
 
     multip = len(files) > 1
@@ -213,6 +245,10 @@ def cmd_upload(args: argparse.Namespace) -> int:
 
     if args.title:
         title = args.title
+    elif len(sources) == 1 and sources[0].is_dir():
+        # 只给了一个目录：目录名就是用户给这套视频起的名字，
+        # 比拿里面第一个文件的文件名当标题像样得多
+        title = sources[0].name
     elif multip:
         # 多文件默认标题去掉尾部序号：旅行_01/02 → 「旅行」，
         # 而不是拿第一个文件的全名当整个稿件的标题

@@ -5,7 +5,12 @@ B 站的多 P 是一个 av/bv 号下面挂 P1、P2、P3……，播放器里可�
 ``filename`` 和 ``title``。所以多 P 的关键不在接口，而在**决定哪些文件
 算同一组**——本模块只解决这一件事，上传和投递交给 :mod:`.scheduler`。
 
-分组规则刻意做得**保守且可预测**：
+分组有两种依据，按 :data:`GROUP_MODES` 里指定的模式选一种：
+
+- ``prefix``——文件名前缀（``旅行_01.mp4`` / ``旅行_02.mp4`` 是一套）；
+- ``folder``——所在文件夹（``旅行/`` 底下的都是一套）。
+
+前缀模式的规则刻意做得**保守且可预测**：
 
 - 只认文件名**尾部**的序号，中间的编号不动
   （``第3集 正片.mp4`` 里的 3 不参与分组）。
@@ -13,6 +18,10 @@ B 站的多 P 是一个 av/bv 号下面挂 P1、P2、P3……，播放器里可�
   ``旅行_01_1080p.mp4`` 和 ``旅行_02_1080p.mp4`` 会被当成两个不同前缀。
 - 组名归一化时忽略大小写和分隔符差异，但**显示**用组内第一个文件的原文，
   免得用户看到被改过字的标题。
+
+文件夹模式更省心——目录结构是用户自己建的，比文件名可靠；但**根目录
+第一层的散落文件不合并**：它们没有"属于某个文件夹"的语义，硬按目录名
+合成一个稿件，会把几个互不相干的视频投成同一稿件的分 P。
 
 分组可能出错（自动规则总有反例），所以调用方要把结果**展示给用户并允许
 改回去**——本模块不做"猜错了就硬合并"的事。
@@ -24,7 +33,19 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["PartGroup", "group_by_prefix", "natural_key", "strip_part_marker"]
+__all__ = [
+    "GROUP_MODES",
+    "PartGroup",
+    "group_by_folder",
+    "group_by_prefix",
+    "group_files",
+    "natural_key",
+    "strip_part_marker",
+]
+
+#: 可用的分组依据。UI 下拉框与配置校验共用这一份，
+#: 免得两边各写一套字符串、改一处漏一处。
+GROUP_MODES = ("prefix", "folder")
 
 #: 文件名里常见的分隔符（含全角括号，中文用户粘贴的文件名里很常见）
 _SEP = r"[\s_\-\.()\[\]（）【】]*"
@@ -174,3 +195,62 @@ def group_by_prefix(files: list[Path]) -> list[PartGroup]:
 
     groups.sort(key=lambda g: natural_key(g.files[0].name))
     return groups
+
+
+def group_by_folder(files: list[Path], root: Path | None = None) -> list[PartGroup]:
+    """按所在文件夹分组：同一个子文件夹里的视频合成一个稿件。
+
+    组名取文件夹名——那是用户自己起的名字，通常比文件名有意义
+    （``教程/output.mp4`` 里的 ``教程`` 才是他想要的标题）。
+
+    Args:
+        root: 扫描的根目录。**该目录第一层的散落文件不合并**，各自
+            独立投稿。它们没有被放进任何子文件夹，说明用户没把它们
+            当成一套；硬按目录名合成一个稿件，就是把几个不相干的
+            视频投成同一稿件的分 P——误合并要删稿重投，代价远高于
+            多占一个 av 号。子文件夹则无论有几个文件都成组。
+
+    .. note::
+       组顺序按**文件夹名**排，不按组内文件名排。后者会让不同文件夹
+       里同名的文件（``旅行/01.mp4`` 与 ``教程/01.mp4``）互相干扰，
+       排出来的顺序跟目录结构对不上。
+    """
+    buckets: dict[Path, list[Path]] = {}
+    for path in files:
+        buckets.setdefault(path.parent.resolve(), []).append(path)
+
+    root_key = Path(root).resolve() if root is not None else None
+
+    groups: list[PartGroup] = []
+    for folder, paths in buckets.items():
+        ordered = sorted(paths, key=lambda path: natural_key(path.name))
+
+        if root_key is not None and folder == root_key:
+            # 根目录散落文件：没有"一套"的语义，各自独立
+            for path in ordered:
+                groups.append(PartGroup(name=path.stem, files=(path,)))
+            continue
+
+        # 子文件夹里即使只有一个文件也成组：文件夹名是用户起的标题
+        groups.append(
+            PartGroup(name=folder.name or "分P稿件", files=tuple(ordered))
+        )
+
+    groups.sort(key=lambda g: natural_key(g.name))
+    return groups
+
+
+def group_files(
+    files: list[Path], mode: str, root: Path | None = None
+) -> list[PartGroup]:
+    """按给定模式分组，是两种模式的统一入口。
+
+    ``mode`` 取 :data:`GROUP_MODES` 之一；不认识的模式返回"每个文件
+    自成一组"（等价于不合并），而不是抛异常——分组只是猜用户意图，
+    猜不出来退回最保守的结果，比让整次扫描失败好。
+    """
+    if mode == "folder":
+        return group_by_folder(files, root)
+    if mode == "prefix":
+        return group_by_prefix(files)
+    return [PartGroup(name=path.stem, files=(path,)) for path in files]

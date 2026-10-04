@@ -29,7 +29,7 @@ from typing import Any, Literal
 from ...config import AppConfig, TaskConfig, expand_tasks, load_config, scan_video_files
 from ...config import task_files, task_part_titles
 from ...exceptions import BiliError, ConfigError, NotLoggedInError
-from ...multipart import PartGroup, group_by_prefix
+from ...multipart import PartGroup, group_files
 from ...scheduler import RunOptions, TaskOutcome, run_task
 from ...submit import get_backend
 from .. import theme
@@ -69,7 +69,13 @@ UNPICKED = ""
 #: 分 P 合并方式。``分P`` 列是数字，单 P 稿件显示一条横线更分明
 GROUP_OFF = "不合并"
 GROUP_PREFIX = "按文件名前缀分组"
-GROUP_OPTIONS = (GROUP_OFF, GROUP_PREFIX)
+GROUP_FOLDER = "按文件夹分组"
+GROUP_OPTIONS = (GROUP_OFF, GROUP_PREFIX, GROUP_FOLDER)
+
+#: 下拉框显示值 → 内部模式名。UI 说人话，配置和 :mod:`.multipart` 说机器话，
+#: 两边都不委屈，映射只在这一处维护。
+GROUP_MODE_BY_LABEL = {GROUP_PREFIX: "prefix", GROUP_FOLDER: "folder"}
+GROUP_LABEL_BY_MODE = {mode: label for label, mode in GROUP_MODE_BY_LABEL.items()}
 
 #: 状态列最多显示多少字。超出的部分存起来，双击看全文
 STATUS_MAX = 18
@@ -247,8 +253,8 @@ class TasksView(ttk.Frame):
         row = FormRow(
             picker,
             "分P合并",
-            hint="按文件名前缀把同一套视频合成一个稿件的 P1/P2/P3；"
-            "双击列表行可改各分P标题",
+            hint="按文件名前缀或文件夹把同一套视频合成一个稿件的 P1/P2/P3"
+            "（只钻一层子目录）；双击列表行可改各分P标题",
         )
         row.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_XS, 0))
         self._group_combo = row.add(
@@ -384,7 +390,15 @@ class TasksView(ttk.Frame):
             "" if state.dtime_offset_hours is None else _fmt_offset(state.dtime_offset_hours)
         )
         self._tid_var.set(tid_option(state.tid))
-        self._group_var.set(GROUP_PREFIX if state.group_parts else GROUP_OFF)
+        self._group_var.set(GROUP_LABEL_BY_MODE.get(state.group_mode, GROUP_OFF))
+
+    def _group_mode(self) -> str:
+        """「分P合并」下拉框当前值对应的内部分组模式。
+
+        认不出来时返回 ``"none"``（不合并）而不是抛异常——下拉框可能被
+        手改成没见过的字符串，退回最保守的结果好过让整次扫描失败。
+        """
+        return GROUP_MODE_BY_LABEL.get(self._group_var.get(), "none")
 
     def _current_state(self) -> BatchUIState:
         """收集当前表单为偏好对象。
@@ -403,7 +417,7 @@ class TasksView(ttk.Frame):
             tag=self._tag_var.get().strip(),
             desc=self._desc_var.get().strip(),
             dtime_offset_hours=offset,
-            group_parts=self._group_var.get() == GROUP_PREFIX,
+            group_mode=self._group_mode(),
         )
 
     def _save_state(self) -> None:
@@ -453,11 +467,11 @@ class TasksView(ttk.Frame):
         self._apply_source_mode()
 
         # 分组方式在这里读好再传进去：工作线程不该回头读 Tk 变量
-        group = self._group_var.get() == GROUP_PREFIX
+        mode = self._group_mode()
         self._start_load(
             "正在扫描…",
             lambda _report, is_cancelled: _scan_to_tasks(
-                directory, is_cancelled, group=group
+                directory, is_cancelled, mode=mode
             ),
         )
 
@@ -1138,7 +1152,7 @@ class TasksView(ttk.Frame):
 
 
 def _scan_to_tasks(
-    directory: Path, is_cancelled: "Any", group: bool = False
+    directory: Path, is_cancelled: "Any", mode: str = "none"
 ) -> tuple[AppConfig, list[TaskConfig]]:
     """扫目录并生成任务（工作线程执行）。
 
@@ -1147,25 +1161,27 @@ def _scan_to_tasks(
     填进去。
 
     Args:
-        group: True 时按文件名前缀把同一套视频合成**一个**多 P 稿件，
-            否则一个视频一个稿件。
+        mode: 分 P 合并方式，取 ``none`` / ``prefix`` / ``folder``。
+            后两者把"看起来是一套"的视频合成**一个**多 P 稿件。
+            ``folder`` 会多扫一层子文件夹——不钻进去就看不到目录结构，
+            所有文件都算根目录散落文件，等于什么都没分。
     """
     if is_cancelled():
         raise Cancelled()
-    files = scan_video_files(directory)
+    files = scan_video_files(directory, max_depth=2 if mode == "folder" else 1)
     if is_cancelled():
         raise Cancelled()
     if not files:
         raise ConfigError(f"目录里没有找到视频文件：{directory}")
 
-    if not group:
+    if mode == "none":
         tasks = [
             TaskConfig(name=path.stem, type="single", file=str(path), title=path.stem)
             for path in files
         ]
         return AppConfig(), tasks
 
-    groups = group_by_prefix(files)
+    groups = group_files(files, mode, directory)
     if is_cancelled():
         raise Cancelled()
     return AppConfig(), [_group_to_task(item) for item in groups]

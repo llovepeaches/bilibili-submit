@@ -185,3 +185,64 @@ def test_no_tmp_left_behind(tmp_path):
     path = tmp_path / "ui-state.json"
     save_ui_state(BatchUIState(directory="D:/v"), path)
     assert not (tmp_path / "ui-state.json.tmp").exists()
+
+
+# ---------- 分 P 合并方式 ----------
+
+
+def _write(tmp_path, batch: dict) -> "Path":
+    path = tmp_path / "ui-state.json"
+    path.write_text(
+        json.dumps({"schema_version": SCHEMA_VERSION, "batch": batch}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_group_mode_defaults_to_none(tmp_path):
+    state, problem = load_ui_state(_write(tmp_path, {"directory": "/v"}))
+    assert problem == ""
+    assert state.group_mode == "none"
+
+
+def test_group_mode_round_trips(tmp_path):
+    path = _write(tmp_path, {"group_mode": "folder"})
+    state, _ = load_ui_state(path)
+    assert state.group_mode == "folder"
+
+    save_ui_state(state, path)
+    again, _ = load_ui_state(path)
+    assert again.group_mode == "folder"
+
+
+def test_legacy_group_parts_true_maps_to_prefix(tmp_path):
+    """旧版布尔 group_parts: true 应读成 prefix。
+
+    那时只有"按文件名前缀"一种分法。不认这个字段的话，老用户升级完会
+    发现自己的选择被悄悄改回"不合并"——偏好丢失比功能缺失更招骂。
+    """
+    state, _ = load_ui_state(_write(tmp_path, {"group_parts": True}))
+    assert state.group_mode == "prefix"
+
+
+def test_legacy_group_parts_false_stays_none(tmp_path):
+    state, _ = load_ui_state(_write(tmp_path, {"group_parts": False}))
+    assert state.group_mode == "none"
+
+
+def test_new_group_mode_wins_over_legacy_field(tmp_path):
+    """两个字段都在时以新的为准，避免旧字段把新选择盖掉。"""
+    state, _ = load_ui_state(
+        _write(tmp_path, {"group_mode": "folder", "group_parts": True})
+    )
+    assert state.group_mode == "folder"
+
+
+def test_unknown_group_mode_falls_back_to_none(tmp_path):
+    """认不出的合并方式退回"不合并"。
+
+    分组是猜意图，猜不出来按最保守的来——按一个错的方式把几个不相干的
+    视频投成同一稿件的分 P，要删稿重投。
+    """
+    state, _ = load_ui_state(_write(tmp_path, {"group_mode": "瞎写的"}))
+    assert state.group_mode == "none"

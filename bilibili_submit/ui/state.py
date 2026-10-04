@@ -15,6 +15,8 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from ..multipart import GROUP_MODES
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["BatchUIState", "ui_state_path", "load_ui_state", "save_ui_state"]
@@ -40,8 +42,10 @@ class BatchUIState:
     tag: str = ""
     desc: str = ""
     dtime_offset_hours: float | None = None
-    #: 是否按文件名前缀把目录里的视频合并成多分 P 稿件
-    group_parts: bool = False
+    #: 分 P 合并方式：``none`` / ``prefix`` / ``folder``
+    #: （取值见 :data:`~bilibili_submit.multipart.GROUP_MODES`）。
+    #: 早期版本这里是布尔 ``group_parts``，读取时做了兼容映射。
+    group_mode: str = "none"
 
 
 def ui_state_path() -> Path:
@@ -83,7 +87,7 @@ def load_ui_state(path: Path | None = None) -> tuple[BatchUIState, str]:
         tag=_as_str(batch.get("tag")),
         desc=_as_str(batch.get("desc")),
         dtime_offset_hours=_as_offset(batch.get("dtime_offset_hours")),
-        group_parts=_as_bool(batch.get("group_parts")),
+        group_mode=_as_group_mode(batch.get("group_mode"), batch.get("group_parts")),
     ), ""
 
 
@@ -133,6 +137,26 @@ def _as_bool(value: object) -> bool:
     if isinstance(value, str):
         return value.strip().casefold() not in ("", "false", "0", "no", "off")
     return bool(value)
+
+
+def _as_group_mode(value: object, legacy: object = None) -> str:
+    """分 P 合并方式。认不出来就当 ``none``（不合并）。
+
+    分组本质是猜用户意图，猜不出来应当退回最保守的结果——按一个猜错的
+    方式把几个不相干的视频投成同一稿件的分 P，要删稿重投。
+
+    Args:
+        legacy: 旧版写下的布尔 ``group_parts``。那时只有"按文件名前缀"
+            一种分法，``true`` 就等价于今天的 ``prefix``。不认这个字段的话，
+            老用户升级完会发现自己的选择被悄悄改回"不合并"——
+            这正是宁可不升 schema 版本也要做兼容映射的原因。
+    """
+    text = value.strip().casefold() if isinstance(value, str) else ""
+    if text in ("none", *GROUP_MODES):
+        return text
+    if _as_bool(legacy):
+        return "prefix"
+    return "none"
 
 
 def _as_offset(value: object) -> float | None:

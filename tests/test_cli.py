@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bilibili_submit import cli  # noqa: E402
+from bilibili_submit.cli import _expand_upload_args  # noqa: E402
 from bilibili_submit.exceptions import ConfigError  # noqa: E402
 
 
@@ -214,3 +215,80 @@ def test_default_multipart_title_drops_trailing_number():
 
     base, _ = strip_part_marker("旅行_01")
     assert base == "旅行"
+
+
+# ---------- upload 传目录 ----------
+
+
+def test_expand_upload_args_expands_directory(tmp_path):
+    """给目录就把里面的视频收进来，不用把十几个文件名敲一遍。"""
+    folder = tmp_path / "旅行"
+    folder.mkdir()
+    for name in ("01.mp4", "02.mp4"):
+        (folder / name).write_bytes(b"x")
+
+    files, problems = _expand_upload_args([str(folder)])
+    assert problems == []
+    assert [p.name for p in files] == ["01.mp4", "02.mp4"]
+
+
+def test_expand_upload_args_stays_in_one_directory_level(tmp_path):
+    """目录只扫第一层：命令行一次只投一个稿件，钻深了会拉进不相关的东西。"""
+    folder = tmp_path / "旅行"
+    (folder / "子目录").mkdir(parents=True)
+    (folder / "01.mp4").write_bytes(b"x")
+    (folder / "子目录" / "02.mp4").write_bytes(b"x")
+
+    files, _ = _expand_upload_args([str(folder)])
+    assert [p.name for p in files] == ["01.mp4"]
+
+
+def test_expand_upload_args_mixes_files_and_dirs(tmp_path):
+    folder = tmp_path / "旅行"
+    folder.mkdir()
+    (folder / "01.mp4").write_bytes(b"x")
+    (tmp_path / "intro.mp4").write_bytes(b"x")
+
+    files, _ = _expand_upload_args([str(tmp_path / "intro.mp4"), str(folder)])
+    assert [p.name for p in files] == ["intro.mp4", "01.mp4"]
+
+
+def test_expand_upload_args_reports_empty_directory(tmp_path):
+    """空目录要说清楚是"目录里没有视频"，而不是笼统的"文件不存在"。"""
+    empty = tmp_path / "空"
+    empty.mkdir()
+    _, problems = _expand_upload_args([str(empty)])
+    assert len(problems) == 1
+    assert "没有视频" in problems[0]
+
+
+def test_expand_upload_args_reports_missing_path(tmp_path):
+    _, problems = _expand_upload_args([str(tmp_path / "不存在.mp4")])
+    assert len(problems) == 1
+
+
+def test_upload_directory_uses_folder_name_as_title(tmp_path, monkeypatch):
+    """只给一个目录时标题取目录名。
+
+    那才是用户给这套视频起的名字；拿里面第一个文件的文件名当整个稿件的
+    标题会很怪（01.mp4 → "01"）。
+    """
+    folder = tmp_path / "旅行日记"
+    folder.mkdir()
+    for name in ("01.mp4", "02.mp4"):
+        (folder / name).write_bytes(b"x")
+
+    captured: dict = {}
+
+    class _Stop(Exception):
+        """用来在标题确定之后立刻中断，不必真的去登录投稿。"""
+
+    def spy(**kwargs):
+        captured.update(kwargs)
+        raise _Stop()
+
+    monkeypatch.setattr(cli, "ArchiveMeta", spy)
+    args = cli.build_parser().parse_args(["upload", str(folder)])
+    with pytest.raises(_Stop):
+        cli.cmd_upload(args)
+    assert captured["title"] == "旅行日记"
