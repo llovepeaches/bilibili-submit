@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -190,7 +191,7 @@ def test_no_tmp_left_behind(tmp_path):
 # ---------- 分 P 合并方式 ----------
 
 
-def _write(tmp_path, batch: dict) -> "Path":
+def _write(tmp_path, batch: dict) -> Path:
     path = tmp_path / "ui-state.json"
     path.write_text(
         json.dumps({"schema_version": SCHEMA_VERSION, "batch": batch}),

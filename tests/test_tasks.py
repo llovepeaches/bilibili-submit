@@ -1675,7 +1675,7 @@ def test_folder_mode_end_to_end_submits_once_per_folder(tmp_path, monkeypatch):
     import tkinter as tk
 
     from bilibili_submit import scheduler
-    from bilibili_submit.config import AppConfig, task_files
+    from bilibili_submit.config import AppConfig
     from bilibili_submit.submit import SubmitResult
 
     video_root = tmp_path / "视频"
