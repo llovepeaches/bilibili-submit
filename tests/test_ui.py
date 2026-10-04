@@ -38,9 +38,42 @@ def test_theme_font_family_is_platform_specific():
     """字体按平台选：写死 Windows 字体在 Linux 上会渲染成方框。"""
     assert theme.FAMILY
     if sys.platform == "win32":
-        assert "YaHei" in theme.FAMILY
+        assert "Segoe" in theme.FAMILY, "Fluent Design 的标准字体是 Segoe UI"
     elif sys.platform == "darwin":
         assert "PingFang" in theme.FAMILY
+
+
+def test_theme_fluent_metrics():
+    """Fluent Design 的关键度量：栅格、圆角、控件高度。
+
+    这些数字是设计规范的承诺，不是随便填的——改了要连同所有视图
+    一起重排，所以在这里钉死。
+    """
+    assert theme.GRID == 8
+    for name in ("PAD_XS", "PAD_SM", "PAD_MD", "PAD_LG", "PAD_XL", "PAD_2XL"):
+        assert getattr(theme, name) % (theme.GRID // 2) == 0, name
+    assert 4 <= theme.RADIUS_CONTROL <= 8, "Fluent 要求控件圆角 4~8px"
+    assert theme.CONTROL_HEIGHT == 32, "按钮/输入框标准高度 32px"
+    assert theme.PRIMARY_BUTTON_HEIGHT == 40, "主要操作按钮 40px"
+    assert theme.PRIMARY_BUTTON_HEIGHT > theme.CONTROL_HEIGHT
+
+
+def test_theme_has_both_light_and_dark_palettes():
+    """浅色/深色两套色板键一致，切换模式后常用色都要跟着变。"""
+    light, dark = theme.palette_for("light"), theme.palette_for("dark")
+    assert light.keys() == dark.keys()
+    for key in ("BG", "SURFACE", "PRIMARY", "TEXT", "COLLAPSE_BG", "FIELD_BG"):
+        assert key in light, f"色板缺 {key}"
+    assert light["BG"] != dark["BG"]
+
+    theme.set_mode("dark")
+    try:
+        assert theme.MODE == "dark"
+        assert theme.BG == dark["BG"]
+        assert theme.SURFACE == dark["SURFACE"]
+    finally:
+        theme.set_mode("light")  # 其它测试假定浅色
+    assert theme.BG == light["BG"]
 
 
 def test_theme_sizes_are_positive():
@@ -318,6 +351,81 @@ def test_theme_apply_does_not_raise():
         theme.apply(style)  # 不该抛
     finally:
         root.destroy()
+
+
+@needs_display
+def test_fluent_button_states_and_invoke():
+    """自绘按钮的五态与 ttk 兼容接口。
+
+    ``state()`` 的形状是照着 ``ttk.Widget.state()`` 抄的——现有代码和
+    测试全都写 ``"disabled" in button.state()``，接口对不上就是一场
+    全项目的连锁修改。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.widgets import PrimaryButton, SecondaryButton
+
+    root = tk.Tk()
+    try:
+        hits: list[str] = []
+        primary = PrimaryButton(root, "开始投稿", lambda: hits.append("p"))
+        secondary = SecondaryButton(root, "取消", lambda: hits.append("s"))
+        # 不 map 出来事件送不到（Tk 只给可见窗口派发事件）
+        primary.pack()
+        secondary.pack()
+        root.update()
+
+        # 主按钮 40、次按钮 32——设计规范钉死的两个高度
+        assert primary.winfo_reqheight() == theme.PRIMARY_BUTTON_HEIGHT + 4
+        assert secondary.winfo_reqheight() == theme.CONTROL_HEIGHT + 4
+
+        assert primary.state() == (), "初始没有附加状态"
+        primary.state(["disabled"])
+        assert "disabled" in primary.state()
+        primary.invoke()
+        assert hits == [], "禁用时不该触发回调"
+        primary.state(["!disabled"])
+        assert "disabled" not in primary.state()
+
+        secondary.invoke()
+        assert hits == ["s"]
+
+        # configure/cget 也要能当 ttk.Button 用
+        secondary.configure(text="返回", state="disabled")
+        assert secondary.cget("text") == "返回"
+        assert "disabled" in secondary.state()
+        secondary.configure(state="normal")
+
+        # 两字按钮不该被算成 44px 宽，最小宽度要兜住
+        assert secondary.winfo_reqwidth() >= 64
+
+        # 键盘可达：Return/空格要绑上（不直接 event_generate——
+        # 无窗口管理器的 Xvfb 不派发合成键盘事件，原生控件同样收不到）
+        assert primary.bind("<Return>") and primary.bind("<space>")
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_fluent_button_picks_up_dark_palette():
+    """按钮颜色在创建时取自当前模式；深色模式下实心底应是深色板的强调色。"""
+    import tkinter as tk
+
+    from bilibili_submit.ui.widgets import FluentButton
+
+    theme.set_mode("dark")
+    try:
+        root = tk.Tk()
+        try:
+            button = FluentButton(
+                root, "开始投稿", lambda: None,
+                variant=FluentButton.ACCENT, height=theme.PRIMARY_BUTTON_HEIGHT,
+            )
+            assert button.winfo_reqheight() == theme.PRIMARY_BUTTON_HEIGHT + 4
+        finally:
+            root.destroy()
+    finally:
+        theme.set_mode("light")
 
 
 @needs_display

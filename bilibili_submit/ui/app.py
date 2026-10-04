@@ -33,9 +33,10 @@ from ..auth import (
     load_cookies,
 )
 from ..client import BiliClient
-from . import theme
+from . import theme, win_effects
 from .environment import EnvironmentSnapshot, probe_environment
-from .widgets import NavItem
+from .state import load_app_state, resolve_theme_mode
+from .widgets import BrandMark, NavItem
 from .views import (
     HistoryView,
     LoginView,
@@ -142,7 +143,10 @@ class App(ttk.Frame):
                 icon=self.NAV_ICONS.get(label, "●"),
                 command=lambda key=label: self.show(key),
             )
-            item.grid(row=index, column=0, sticky="ew", pady=1)
+            item.grid(
+                row=index, column=0, sticky="ew",
+                pady=(0, theme.NAV_ITEM_GAP),
+            )
             self._nav_buttons[label] = item
             self._views_info.append((label, view_cls))
 
@@ -162,13 +166,9 @@ class App(ttk.Frame):
         brand.grid(row=0, column=0, sticky="ew", pady=(theme.PAD_LG, theme.PAD_MD))
         brand.columnconfigure(1, weight=1)
 
-        mark = tk.Frame(brand, width=32, height=32, background=theme.PRIMARY)
-        mark.grid(row=0, column=0, padx=(theme.PAD_LG, theme.PAD_SM))
-        mark.grid_propagate(False)
-        tk.Label(
-            mark, text="B", font=theme.FONT_LARGE,
-            background=theme.PRIMARY, foreground=theme.TEXT_ON_PRIMARY,
-        ).pack(expand=True)
+        BrandMark(brand, "B").grid(
+            row=0, column=0, padx=(theme.PAD_LG, theme.PAD_SM)
+        )
 
         text_box = ttk.Frame(brand, style="Nav.TFrame")
         text_box.grid(row=0, column=1, sticky="w")
@@ -390,7 +390,11 @@ def launch() -> int:
         style.theme_use("clam")  # clam 在各平台上观感一致，且允许自定义配色
     except tk.TclError:
         pass  # 没有该主题就用默认
-    theme.apply(style)
+
+    # 主题必须在建界面之前定下来：tk/ttk 把颜色写进控件，之后改色板
+    # 不会影响已建好的控件，所以切换主题要重启（设置页里也这么写的）
+    mode = resolve_theme_mode(load_app_state().theme_mode, win_effects.system_prefers_light())
+    theme.apply(style, mode)
     _configure_nav_style(style)
 
     _set_window_icon(root)
@@ -401,6 +405,9 @@ def launch() -> int:
     # 窗口居中
     root.update_idletasks()
     _center(root)
+
+    # 系统级效果要等窗口真正创建完（拿得到 HWND）才能设
+    win_effects.apply_window_effects(root, dark=mode == "dark")
 
     root.mainloop()
     return 0
@@ -417,7 +424,9 @@ def _center(root: tk.Tk) -> None:
 
 
 def _configure_nav_style(style: ttk.Style) -> None:
-    """导航按钮样式：选中时加粉色底和左侧竖条。"""
-    # Nav.TButton 已在 theme.apply 里统一配置；
-    # 这里只补一个缺省 state 的边框色，避免某些 ttk 主题画出默认黑边。
+    """导航按钮样式：只补一个缺省 state 的边框色。
+
+    其余（底色、前景、悬停、选中）都在 :func:`~.theme.apply` 里统一配了，
+    这里重复配一遍迟早会两边不一致。
+    """
     style.configure("Nav.TButton", bordercolor=theme.NAV_BG)

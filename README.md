@@ -463,9 +463,11 @@ bilibili_submit/
 └── ui/             图形界面（tkinter，不含业务逻辑）
     ├── app.py      主窗口：导航、状态栏
     ├── views/      登录 / 投稿 / 批量任务 / 历史 / 设置
-    ├── widgets.py  可复用组件
+    ├── widgets.py  可复用组件（含自绘圆角按钮 FluentButton）
     ├── workers.py  后台线程与线程间消息
-    ├── theme.py    颜色、字体、间距
+    ├── theme.py    颜色、字体、间距（Fluent Design 规范，浅/深两套色板）
+    ├── state.py    界面偏好（目录、参数、主题模式）
+    ├── win_effects.py  Windows 11 系统效果（深色标题栏、窗口圆角）
     └── qr.py       二维码绘制（不依赖 Pillow）
 
 main.py                PyInstaller 打包入口

@@ -19,7 +19,19 @@ from ..multipart import GROUP_MODES
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BatchUIState", "ui_state_path", "load_ui_state", "save_ui_state"]
+__all__ = [
+    "BatchUIState",
+    "AppUIState",
+    "APP_THEME_MODES",
+    "THEME_MODE_LABELS",
+    "parse_theme_mode",
+    "resolve_theme_mode",
+    "ui_state_path",
+    "load_ui_state",
+    "save_ui_state",
+    "load_app_state",
+    "save_app_state",
+]
 
 #: 状态文件的结构版本。字段含义变了才递增，读取时不认就报问题。
 SCHEMA_VERSION = 1
@@ -27,6 +39,45 @@ SCHEMA_VERSION = 1
 #: 分区回退值（日常）。文件里存了个不认识的分区号时用它，
 #: 总比让用户对着一个空下拉框猜发生了什么强。
 DEFAULT_TID = 21
+
+#: 主题模式。``system`` 跟随系统（读注册表），另两个是强制。
+APP_THEME_MODES = ("system", "light", "dark")
+
+#: 界面上的说法。存进文件的是英文键，显示的是中文。
+THEME_MODE_LABELS = {
+    "system": "跟随系统",
+    "light": "浅色",
+    "dark": "深色",
+}
+
+
+def parse_theme_mode(label: object) -> str:
+    """界面文案 → 模式键。认不出的（含旧文件/手改过的）一律跟随系统。"""
+    text = label.strip().casefold() if isinstance(label, str) else ""
+    if text in APP_THEME_MODES:
+        return text
+    for key, name in THEME_MODE_LABELS.items():
+        if name == (label or ""):
+            return key
+    return "system"
+
+
+def resolve_theme_mode(mode: str, system_light: bool = True) -> str:
+    """把 ``system`` 解析成具体模式，返回 ``"light"`` / ``"dark"``。
+
+    Args:
+        mode: :data:`APP_THEME_MODES` 之一。**认不出按浅色**——走到这里
+            说明偏好文件被改坏了，浅色顶多不协调，深色在没适配好的
+            控件上会直接看不清。
+        system_light: 系统当前是否浅色（非 Windows 恒为 True）。
+    """
+    if mode == "dark":
+        return "dark"
+    if mode == "light":
+        return "light"
+    if mode == "system":
+        return "light" if system_light else "dark"
+    return "light"
 
 
 @dataclass(frozen=True)
@@ -64,6 +115,19 @@ class BatchUIState:
     #: 组件本身不记偏好，这里由界面层存——每次打开都重新收起会让人以为
     #: 设置丢了。
     advanced_opened: bool = False
+
+
+@dataclass(frozen=True)
+class AppUIState:
+    """应用级偏好：与某个页面无关的、整个客户端的设置。
+
+    单独一节（而不是塞进 :class:`BatchUIState`）是因为它是「外观」那类
+    全局选择；跟着批量页的参数一起存，读批量页的时候就得顺手带出主题，
+    语义上很怪。
+    """
+
+    #: 主题模式，取值见 :data:`APP_THEME_MODES`。
+    theme_mode: str = "system"
 
 
 def ui_state_path() -> Path:
@@ -125,10 +189,56 @@ def save_ui_state(state: BatchUIState, path: Path | None = None) -> None:
     让「扫描文件夹」这种本来能成的操作整个失败掉。
     """
     target = path or ui_state_path()
-    payload = {
-        "schema_version": SCHEMA_VERSION,
-        "batch": asdict(state),
-    }
+    payload = _read_raw(target)
+    payload["schema_version"] = SCHEMA_VERSION
+    payload["batch"] = asdict(state)
+    _write_raw(target, payload)
+
+
+def load_app_state(path: Path | None = None) -> AppUIState:
+    """读应用级偏好。文件不存在/损坏时按默认值，不报错。
+
+    和 :func:`load_ui_state` 不同，这里**不返回问题描述**：主题选不上
+    顶多界面颜色不对，不值得为此在界面上弹一句「偏好文件损坏」。
+    """
+    raw = _read_raw(path or ui_state_path())
+    app = raw.get("app")
+    if not isinstance(app, dict):
+        return AppUIState()
+    return AppUIState(theme_mode=parse_theme_mode(app.get("theme_mode")))
+
+
+def save_app_state(state: AppUIState, path: Path | None = None) -> None:
+    """写应用级偏好。
+
+    只覆盖 ``app`` 一节——这一层和批量页偏好共用一个文件，
+    整文件重写会把用户刚选的目录和参数抹掉。
+    """
+    target = path or ui_state_path()
+    payload = _read_raw(target)
+    payload["schema_version"] = SCHEMA_VERSION
+    payload["app"] = asdict(state)
+    _write_raw(target, payload)
+
+
+def _read_raw(target: Path) -> dict[str, object]:
+    """读回整份 JSON。读不出来给空字典——**读失败不是错误**。
+
+    返回空字典而不是抛异常，是因为调用方都是「有就覆盖一节、没有就新建」：
+    对它们来说文件损坏和文件不存在是同一件事，都从默认值开始写。
+    """
+    if not target.is_file():
+        return {}
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.debug("读取界面偏好失败: %s", exc)
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _write_raw(target: Path, payload: "dict[str, object]") -> None:
+    """原子写入：先写临时文件再 ``os.replace``，不留半个文件。"""
     tmp = target.with_name(target.name + ".tmp")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)

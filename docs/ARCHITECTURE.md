@@ -43,11 +43,11 @@ config / scheduler / cli     编排：配置、任务执行、命令行
 | `cli.py` | 参数解析、输出格式化、退出码 | 业务逻辑 |
 | `console.py` | Windows 控制台 UTF-8 适配 | 任何业务 |
 | `ui/` | 图形界面（tkinter）。见下方「界面层」 | 业务逻辑 |
-| `ui/theme.py` | 颜色/字体/间距的唯一来源 | 具体控件 |
-| `ui/widgets.py` | 可复用组件（`Collapsible` 折叠区、`OptionSwitches` 投稿开关），不知道 B 站的存在 | 业务概念 |
+| `ui/theme.py` | 颜色/字体/间距的唯一来源（Fluent 规范，浅/深两套色板） | 具体控件 |
+| `ui/widgets.py` | 可复用组件（`Collapsible` 折叠区、`OptionSwitches` 投稿开关、自绘圆角的 `FluentButton`），不知道 B 站的存在 | 业务概念 |
 | `ui/qr.py` | 二维码矩阵 → Canvas 绘制 | 网络请求 |
 | `ui/workers.py` | 后台线程与取消 | UI 操作 |
-| `ui/state.py` | 批量任务页的偏好读写（目录、默认参数） | Tk 操作 |
+| `ui/state.py` | 界面偏好读写（批量页参数 + 主题模式） | Tk 操作 |
 | `ui/environment.py` | 登录态与 ffmpeg 的纯探测，**不碰 Tk** | UI 操作 |
 | `ui/views/` | 各页面：把数据画出来、把操作翻译成下层调用 | 业务逻辑 |
 | `ui/app.py` | 主窗口、导航、状态栏 | 业务判断 |
@@ -316,6 +316,24 @@ readonly 是 ttk 的**选项**，不是状态标志位。踩过这个坑：yaml 
 
 所有颜色/字体/间距来自 `ui/theme.py`。改主题改一处即可。
 
+### 主题遵循 Fluent Design，且只在启动时确定
+
+`ui/theme.py` 按 Windows 11 Fluent 规范给出度量（8px 栅格、6px 控件圆角、
+32/40px 控件高度）与浅色/深色两套色板；`set_mode()` 就地更新模块级常量，
+几百处 `theme.XXX` 引用不用跟着改。主题在**启动时**由「设置页选的模式 +
+系统深浅色」解析出来（`ui/state.py: resolve_theme_mode`），运行期不热切换
+——tk/ttk 把颜色写进控件，改色板不影响已建好的控件，要真切换得重建整棵
+控件树。设置页明确提示「重启生效」。
+
+两条 tk 的硬边界，用降级方案而不是假装实现：
+
+- **输入框/下拉框画不出圆角**（ttk 引擎绘制）→ 1px 细边框 + 聚焦色；
+  按钮用 Canvas 自绘（`ui/widgets.py: FluentButton`），圆角是真的；
+- **没有原生阴影** → 卡片用底色 + 1px 描边表达层级。
+
+Windows 专属的窗口效果收在 `ui/win_effects.py`：深色标题栏、窗口圆角、
+Mica 调用（控件不透明所以看不见，保留调用不假装实现），全部失败静默。
+
 ### `grid()` 跟着 `widget.master` 走，不跟着调用者走
 
 这条踩过一次真实 bug，值得单独写。
@@ -558,7 +576,7 @@ pylama --max-complexity 20 bilibili_submit tests tools
 - UI 测试在无显示环境时自动跳过。**本地验证请用 `xvfb-run`**，
   否则被跳过的几十项等于没跑::
 
-      xvfb-run -a python -m pytest          # 395 passed / 2 skipped
+      xvfb-run -a python -m pytest          # 403 passed / 2 skipped
       python -m pytest                     # 无显示时约 160 passed / 60+ skipped
 
 ### 异步 UI 测试必须跑真实事件循环

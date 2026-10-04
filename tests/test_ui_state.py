@@ -10,10 +10,14 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bilibili_submit.ui.state import (  # noqa: E402
+    AppUIState,
     BatchUIState,
     DEFAULT_TID,
     SCHEMA_VERSION,
+    load_app_state,
     load_ui_state,
+    resolve_theme_mode,
+    save_app_state,
     save_ui_state,
 )
 
@@ -327,3 +331,56 @@ def test_reprint_source_survives_roundtrip(tmp_path):
     assert problem == ""
     assert loaded.copyright == 2
     assert loaded.source == "https://example.com/origin"
+
+
+# ---------- 应用级偏好（主题模式） ----------
+
+
+def test_app_state_defaults_to_system(tmp_path):
+    path = tmp_path / "ui-state.json"
+    state = load_app_state(path)
+    assert state.theme_mode == "system", "默认跟随系统，用户不用自己挑一遍"
+    # 没有文件也允许保存
+    save_app_state(AppUIState(theme_mode="dark"), path)
+    assert load_app_state(path).theme_mode == "dark"
+
+
+def test_app_state_accepts_all_modes_and_falls_back(tmp_path):
+    path = tmp_path / "ui-state.json"
+    for mode in ("system", "light", "dark"):
+        save_app_state(AppUIState(theme_mode=mode), path)
+        assert load_app_state(path).theme_mode == mode
+    # 界面上选完存的是中文标签，读回来要能认出来
+    for label, expected in (("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")):
+        path.write_text(
+            json.dumps({"schema_version": SCHEMA_VERSION, "app": {"theme_mode": label}}),
+            encoding="utf-8",
+        )
+        assert load_app_state(path).theme_mode == expected, label
+    # 手改出来的脏值回落 system，而不是让主题解析炸掉
+    path.write_text(
+        json.dumps({"schema_version": SCHEMA_VERSION, "app": {"theme_mode": "夜间模式"}}),
+        encoding="utf-8",
+    )
+    assert load_app_state(path).theme_mode == "system"
+
+
+def test_app_state_save_keeps_batch_section(tmp_path):
+    """应用级偏好和批量页偏好共用一个文件，写主题不能把目录抹掉。"""
+    path = tmp_path / "ui-state.json"
+    save_ui_state(BatchUIState(directory="D:/视频/待投稿"), path)
+    save_app_state(AppUIState(theme_mode="dark"), path)
+
+    batch, problem = load_ui_state(path)
+    assert problem == ""
+    assert batch.directory == "D:/视频/待投稿"
+    assert load_app_state(path).theme_mode == "dark"
+
+
+def test_resolve_theme_mode_follows_system():
+    assert resolve_theme_mode("dark", True) == "dark"
+    assert resolve_theme_mode("light", False) == "light"
+    assert resolve_theme_mode("system", True) == "light"
+    assert resolve_theme_mode("system", False) == "dark"
+    # 认不出的模式按浅色：浅色在深色底上顶多刺眼，深色在浅色底上会看不清
+    assert resolve_theme_mode("nonsense", False) == "light"

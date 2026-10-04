@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import sys
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import ttk
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Sequence
 
 from . import theme
 
@@ -23,8 +24,10 @@ __all__ = [
     "OptionSwitches",
     "OPTION_LABELS",
     "FormRow",
+    "FluentButton",
     "PrimaryButton",
     "SecondaryButton",
+    "BrandMark",
     "StatusPill",
     "ProgressBar",
     "LogConsole",
@@ -175,14 +178,14 @@ class Collapsible(ttk.Frame):
 
         # tk.Frame 而非 ttk：ttk 的 cursor 在部分平台不生效，
         # 而“这一行能点”全靠手型光标传达
-        self._header = tk.Frame(self, bg=theme.PRIMARY_SOFT, cursor="hand2")
+        self._header = tk.Frame(self, bg=theme.COLLAPSE_BG, cursor="hand2")
         self._header.grid(row=0, column=0, sticky="ew")
         self._header.columnconfigure(1, weight=1)
 
         self._arrow = tk.Label(
             self._header,
             text="",
-            bg=theme.PRIMARY_SOFT,
+            bg=theme.COLLAPSE_BG,
             fg=theme.TEXT_SECONDARY,
             font=theme.FONT_SMALL,
             width=2,
@@ -193,7 +196,7 @@ class Collapsible(ttk.Frame):
         tk.Label(
             self._header,
             text=title,
-            bg=theme.PRIMARY_SOFT,
+            bg=theme.COLLAPSE_BG,
             fg=theme.PRIMARY_DARK,
             font=theme.FONT_MEDIUM,
         ).grid(row=0, column=1, sticky="w")
@@ -201,7 +204,7 @@ class Collapsible(ttk.Frame):
         self._hint = tk.Label(
             self._header,
             text="",
-            bg=theme.PRIMARY_SOFT,
+            bg=theme.COLLAPSE_BG,
             fg=theme.TEXT_MUTED,
             font=theme.FONT_SMALL,
         )
@@ -214,7 +217,7 @@ class Collapsible(ttk.Frame):
             tk.Label(
                 self._header,
                 text=subtitle,
-                bg=theme.PRIMARY_SOFT,
+                bg=theme.COLLAPSE_BG,
                 fg=theme.TEXT_MUTED,
                 font=theme.FONT_SMALL,
             ).grid(row=1, column=1, columnspan=2, sticky="w")
@@ -434,25 +437,350 @@ class FormRow(ttk.Frame):
         return created
 
 
-class PrimaryButton(ttk.Button):
-    """主操作按钮（品牌粉实心）。一个视图里最多放一个。"""
+def _round_rect_points(
+    x1: float, y1: float, x2: float, y2: float, radius: float
+) -> list[float]:
+    """圆角矩形的折线顶点。
+
+    Tk 的 Canvas 没有圆角矩形图元，常用做法是给 ``create_polygon`` 传
+    ``smooth=True``：把角上的点**重复一遍**，样条就会在那里拐出一个角
+    而不是切掉它——每个角给三个点（入角、角、出角）刚好得到 4~8px
+    视觉圆角，和 Fluent 的控件圆角一致。
+    """
+    r = max(0.0, min(radius, (x2 - x1) / 2, (y2 - y1) / 2))
+    return [
+        x1 + r, y1,
+        x2 - r, y1,
+        x2, y1,
+        x2, y1 + r,
+        x2, y2 - r,
+        x2, y2,
+        x2 - r, y2,
+        x1 + r, y2,
+        x1, y2,
+        x1, y2 - r,
+        x1, y1 + r,
+        x1, y1,
+    ]
+
+
+def _state_wants_disabled(name: "object") -> "bool | None":
+    """把 ``"disabled"`` / ``"!disabled"`` 翻译成布尔。
+
+    ttk 的状态写法是 ``["disabled"]`` 置位、``["!disabled"]`` 清位，
+    其它状态名（``"active"`` 之类）这里一律不认，返回 ``None`` 表示
+    「这条与本组件无关」——不认的状态就该安静跳过，而不是当成禁用。
+    """
+    if not isinstance(name, str):
+        return None
+    if name == "disabled" or name == "disable":
+        return True
+    if name.startswith("!") and name[1:] in ("disabled", "disable"):
+        return False
+    return None
+
+
+class FluentButton(tk.Canvas):
+    """Fluent 风格按钮：Canvas 自绘圆角矩形 + 文字。
+
+    为什么不直接用 ``ttk.Button``：clam 主题（这里统一用的跨平台上观感
+    一致的那个）画的是**直角**，而 Fluent 的按钮圆角是 4~8px。ttk 没有
+    「圆角」这个选项，边框宽度再怎么调也只能是方的。自绘才能把圆角、
+    32/40px 高度、五态配色都精确控住。
+
+    五态（对应 Fluent 的 Rest / Hover / Pressed / Disabled / Focus）：
+    默认、悬停、按下、禁用、聚焦（聚焦画主色环）。
+
+    对外保持 ``ttk.Button`` 的常用接口——``state()`` 传 ``["disabled"]`` /
+    ``["!disabled"]``、``configure(text=...)``、``cget("text")``、
+    ``invoke()``——所以调用方一行都不用改。
+
+    .. note::
+       画布比可见按钮上下左右各多 :data:`_RING` 像素，留给聚焦环；
+       ``winfo_reqheight()`` 因此是 ``height + 4``，可见按钮本身仍是
+       精确的 32 / 40px。
+    """
+
+    #: 强调型（实心主色），一个视图里最多一个
+    ACCENT = "accent"
+    #: 标准型（描边），其余按钮都用这个
+    STANDARD = "standard"
+
+    #: 聚焦环预留的边距（上下左右各这么多）
+    _RING = 2
+    #: 按钮最小宽度。中文两字按钮（"取消"）按文字算只有 44px，
+    #: 太窄会显得局促，Fluent 也有同样的最小宽度约束。
+    _MIN_WIDTH = 64
 
     def __init__(
-        self, master: tk.Misc, text: str, command: Callable[[], None]
+        self,
+        master: "tk.Misc",
+        text: str = "",
+        command: "Callable[[], None] | None" = None,
+        *,
+        variant: str = STANDARD,
+        height: int | None = None,
+        width: int | None = None,
+        background: str | None = None,
     ) -> None:
+        self._text = text
+        self._command = command
+        self._variant = variant if variant in (self.ACCENT, self.STANDARD) else self.STANDARD
+        self._height = int(height or theme.CONTROL_HEIGHT)
+        self._disabled = False
+        self._hovered = False
+        self._pressed = False
+        self._focused = False
+        self._explicit_width = width
+
+        self._measure = tkfont.Font(family=theme.FAMILY, size=theme.FONT_NORMAL[1])
+        wanted = self._preferred_width()
         super().__init__(
-            master, text=text, command=command, style="Primary.TButton"
+            master,
+            width=wanted + self._RING * 2,
+            height=self._height + self._RING * 2,
+            highlightthickness=0,
+            borderwidth=0,
+            background=background or theme.SURFACE,
+            takefocus=1,
+        )
+        self._paint()
+        self._bind_events()
+
+    # ---------- 对外（ttk.Button 兼容层） ----------
+
+    def state(self, spec: "Sequence[str] | str | None" = None) -> tuple[str, ...]:
+        """读写状态。``state(["disabled"])`` / ``state(["!disabled"])``。
+
+        无参调用返回当前状态元组（与 ``ttk.Widget.state()`` 同形状），
+        测试断言 ``"disabled" in button.state()`` 就靠它。
+        """
+        if spec is None:
+            return ("disabled",) if self._disabled else ()
+        names = (spec,) if isinstance(spec, str) else tuple(spec)
+        for name in names:
+            disable = _state_wants_disabled(name)
+            if disable is not None:
+                self._set_disabled(disable)
+        self._paint()
+        return self.state()
+
+    def invoke(self) -> None:
+        """触发回调。禁用时不触发——和 ``ttk.Button.invoke()`` 一致。"""
+        if self._disabled or self._command is None:
+            return
+        self._command()
+
+    def configure(self, cnf: "object" = None, **kw: "object") -> "object":
+        """支持 ``text`` / ``command`` / ``state`` / ``background`` 等。"""
+        merged: dict[str, object] = {}
+        if isinstance(cnf, dict):
+            merged.update(cnf)
+        elif cnf is not None:
+            raise TypeError("configure() 只接受关键字参数或字典")
+        merged.update(kw)
+
+        for key in ("text", "command", "variant"):
+            if key in merged:
+                setattr(self, f"_{key}", merged.pop(key))
+        if "state" in merged:
+            self._set_disabled(_state_wants_disabled(merged.pop("state")) is True)
+
+        result = super().configure(merged) if merged else super().configure()
+        self._paint()
+        return result
+
+    config = configure
+
+    def cget(self, key: str) -> "object":
+        if key == "text":
+            return self._text
+        if key == "state":
+            return "disabled" if self._disabled else "normal"
+        return super().cget(key)  # type: ignore[arg-type]
+
+    # ---------- 内部 ----------
+
+    def _preferred_width(self) -> int:
+        """按文字算宽度，再套最小宽度。"""
+        if self._explicit_width:
+            return int(self._explicit_width)
+        text_width = self._measure.measure(self._text or " ")
+        return max(self._MIN_WIDTH, text_width + theme.CONTROL_PAD_X * 2)
+
+    def _set_disabled(self, disabled: bool) -> None:
+        if disabled:
+            # 禁用时清掉悬停/按下：否则恢复后背景会卡在悬停色上
+            self._hovered = False
+            self._pressed = False
+        self._disabled = bool(disabled)
+
+    def _bind_events(self) -> None:
+        # 不要叫 ``_bind``：那是 ``tk.Misc.bind`` 内部调用的方法名，
+        # 覆盖它会让 ``bind()`` 直接炸（参数对不上）
+        self.bind("<Button-1>", self._on_press)
+        self.bind("<ButtonRelease-1>", self._on_release)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<FocusIn>", self._on_focus_in)
+        self.bind("<FocusOut>", self._on_focus_out)
+        self.bind("<Return>", self._on_key)
+        self.bind("<space>", self._on_key)
+
+    def _on_press(self, _event: "tk.Event") -> str:
+        if self._disabled:
+            return "break"
+        self._pressed = True
+        self._paint()
+        return "break"
+
+    def _on_release(self, _event: "tk.Event") -> str:
+        if self._disabled:
+            return "break"
+        was_pressed = self._pressed
+        self._pressed = False
+        self._paint()
+        # 只在「按下也发生在本按钮上」时才触发，避免拖出去松手误触
+        if was_pressed:
+            self.invoke()
+        return "break"
+
+    def _on_enter(self, _event: "tk.Event") -> None:
+        if self._disabled:
+            return
+        self._hovered = True
+        self._paint()
+
+    def _on_leave(self, _event: "tk.Event") -> None:
+        self._hovered = False
+        self._pressed = False
+        self._paint()
+
+    def _on_focus_in(self, _event: "tk.Event") -> None:
+        self._focused = True
+        self._paint()
+
+    def _on_focus_out(self, _event: "tk.Event") -> None:
+        self._focused = False
+        self._pressed = False
+        self._paint()
+
+    def _on_key(self, _event: "tk.Event") -> str:
+        self.invoke()
+        return "break"
+
+    def _fill_and_text(self) -> tuple[str, str]:
+        """当前状态对应的 ``(底色, 文字色)``。"""
+        if self._disabled:
+            return theme.DISABLED_BG, theme.DISABLED_FG
+        if self._variant == self.ACCENT:
+            if self._pressed:
+                return theme.PRIMARY_PRESSED, theme.TEXT_ON_PRIMARY
+            if self._hovered:
+                return theme.PRIMARY_HOVER, theme.TEXT_ON_PRIMARY
+            return theme.PRIMARY, theme.TEXT_ON_PRIMARY
+        # 标准型：底色极浅，靠边框表达「这是个按钮」
+        if self._pressed:
+            return theme.PRESSED, theme.TEXT
+        if self._hovered:
+            return theme.HOVER, theme.TEXT
+        return theme.SURFACE, theme.TEXT
+
+    def _paint(self) -> None:
+        width = int(float(self["width"]))
+        height = int(float(self["height"]))
+        self.delete("all")
+
+        ring = self._RING
+        fill, text_color = self._fill_and_text()
+
+        if self._focused and not self._disabled:
+            self.create_polygon(
+                _round_rect_points(0, 0, width - 1, height - 1, theme.RADIUS_CONTROL + ring),
+                smooth=True,
+                fill=theme.PRIMARY_RING,
+                outline=theme.PRIMARY_RING,
+            )
+
+        outline = theme.CARD_BORDER if self._disabled else (
+            theme.PRIMARY if self._variant == self.ACCENT
+            else (theme.BORDER_STRONG if self._hovered else theme.BORDER)
+        )
+        self.create_polygon(
+            _round_rect_points(
+                ring, ring, width - 1 - ring, height - 1 - ring, theme.RADIUS_CONTROL
+            ),
+            smooth=True,
+            fill=fill,
+            outline=outline,
+            width=1,
+        )
+        self.create_text(
+            width / 2,
+            height / 2,
+            text=self._text,
+            fill=text_color,
+            font=theme.FONT_NORMAL,
         )
 
 
-class SecondaryButton(ttk.Button):
-    """次操作按钮（描边）。"""
+class PrimaryButton(FluentButton):
+    """主操作按钮（主色实心，40px）。一个视图里最多放一个。"""
 
     def __init__(
         self, master: tk.Misc, text: str, command: Callable[[], None]
     ) -> None:
         super().__init__(
-            master, text=text, command=command, style="Secondary.TButton"
+            master,
+            text=text,
+            command=command,
+            variant=FluentButton.ACCENT,
+            height=theme.PRIMARY_BUTTON_HEIGHT,
+            width=96,
+        )
+
+
+class SecondaryButton(FluentButton):
+    """次操作按钮（描边，32px）。"""
+
+    def __init__(
+        self, master: tk.Misc, text: str, command: Callable[[], None]
+    ) -> None:
+        super().__init__(
+            master, text=text, command=command, variant=FluentButton.STANDARD
+        )
+
+
+class BrandMark(tk.Canvas):
+    """品牌徽标：圆角方块 + 一个字。
+
+    Fluent 的应用标识一律带圆角（沿用控件圆角体系），而 ``tk.Frame``
+    只能是直角——和旁边的圆角按钮摆在一起时很扎眼，所以这里也自绘。
+    """
+
+    SIZE = 32
+
+    def __init__(self, master: tk.Misc, text: str = "B") -> None:
+        super().__init__(
+            master,
+            width=self.SIZE,
+            height=self.SIZE,
+            highlightthickness=0,
+            borderwidth=0,
+            background=theme.NAV_BG,
+        )
+        self.create_polygon(
+            _round_rect_points(0, 0, self.SIZE - 1, self.SIZE - 1, theme.RADIUS_CARD),
+            smooth=True,
+            fill=theme.PRIMARY,
+            outline=theme.PRIMARY,
+        )
+        self.create_text(
+            self.SIZE / 2,
+            self.SIZE / 2,
+            text=text,
+            fill=theme.TEXT_ON_PRIMARY,
+            font=theme.FONT_MEDIUM,
         )
 
 
@@ -521,11 +849,17 @@ class NavItem(tk.Frame):
         self._command = command
         self._active = False
 
-        self._bar = tk.Frame(
-            self, width=self.BAR_WIDTH, background=theme.NAV_BG
+        # 选中指示条用 Canvas 画：Fluent 的指示条是**圆角**竖条，
+        # 而 tk.Frame 只能是直角方块
+        self._bar = tk.Canvas(
+            self,
+            width=theme.NAV_BAR_WIDTH,
+            height=theme.NAV_ITEM_HEIGHT,
+            background=theme.NAV_BG,
+            highlightthickness=0,
+            borderwidth=0,
         )
         self._bar.pack(side="left", fill="y")
-        # 竖条宽度不能被布局压缩掉
         self._bar.pack_propagate(False)
 
         body = tk.Frame(self, background=theme.NAV_BG)
@@ -550,6 +884,7 @@ class NavItem(tk.Frame):
             widget.bind("<Button-1>", self._on_click)
             widget.bind("<Enter>", self._on_enter)
             widget.bind("<Leave>", self._on_leave)
+        self._bar.bind("<Button-1>", self._on_click)
 
     # ---------- 对外 ----------
 
@@ -567,6 +902,8 @@ class NavItem(tk.Frame):
     def _on_enter(self, _event: "object" = None) -> None:
         if not self._active:
             self._paint(theme.NAV_HOVER)
+            # 指示条区域也要跟着换底，否则悬停时左边留一条原底色的缝
+            self._bar.configure(background=theme.NAV_HOVER)
 
     def _on_leave(self, _event: "object" = None) -> None:
         self._render()
@@ -575,18 +912,38 @@ class NavItem(tk.Frame):
         for widget in self._paintable:
             widget.configure(background=background)
 
+    def _render_bar(self) -> None:
+        """画选中指示条：选中时主色圆角竖条，否则不画但**占位**。
+
+        占位是必须的——把整条隐藏/显示会让文字左右跳动。
+        """
+        self._bar.delete("all")
+        self._bar.configure(background=(
+            theme.NAV_ACTIVE_BG if self._active else theme.NAV_BG
+        ))
+        if not self._active:
+            return
+        width = theme.NAV_BAR_WIDTH
+        top = (theme.NAV_ITEM_HEIGHT - theme.NAV_BAR_HEIGHT) / 2
+        self._bar.create_polygon(
+            _round_rect_points(
+                0, top, width - 1, top + theme.NAV_BAR_HEIGHT - 1, width / 2
+            ),
+            smooth=True,
+            fill=theme.PRIMARY,
+            outline=theme.PRIMARY,
+        )
+
     def _render(self) -> None:
         if self._active:
             self._paint(theme.NAV_ACTIVE_BG)
-            self._bar.configure(background=theme.NAV_ACTIVE_BG)
             self._icon.configure(foreground=theme.NAV_ACTIVE_FG)
             self._text.configure(foreground=theme.NAV_ACTIVE_FG)
         else:
             self._paint(theme.NAV_BG)
-            # 未选中也要占位，否则选中时整行会横向跳动
-            self._bar.configure(background=theme.NAV_BG)
             self._icon.configure(foreground=theme.TEXT_MUTED)
             self._text.configure(foreground=theme.NAV_FG)
+        self._render_bar()
 
 
 class SummaryBar(ttk.Frame):
@@ -679,10 +1036,11 @@ class ProgressBar(ttk.Frame):
 
 
 class LogConsole(tk.Frame):
-    """深色日志区。
+    """日志区。
 
-    上传进度、接口返回、报错都往这里追加。用等宽字体对齐，
-    深色底和主区形成对比，用户一眼能看出「这是输出不是输入」。
+    上传进度、接口返回、报错都往这里追加。用等宽字体对齐；
+    底色与主区刻意拉开（浅色主题下用略深的灰、深色主题下用更深的黑），
+    用户一眼能看出「这是输出不是输入」——**不抢眼**，所以不用语义色。
     """
 
     def __init__(self, master: tk.Misc, height: int = 10) -> None:

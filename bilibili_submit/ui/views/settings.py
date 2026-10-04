@@ -1,7 +1,12 @@
-"""设置视图：代理、cookie 路径、ffmpeg 自检。
+"""设置视图：代理、cookie 路径、主题、ffmpeg 自检。
 
 改动即时写入 :class:`AppContext`，各视图下次操作时自动生效，
 不需要「保存并重启」。
+
+.. important::
+   **主题是唯一的例外**：tk/ttk 把颜色写进控件，改色板不影响已建好的
+   控件，所以主题改完要重启客户端。这一点在界面提示里也写明了——
+   与其做个切一半的开关，不如把话说清楚。
 
 **环境自检不在主线程跑。** 它要读 cookie 文件、探 ffmpeg 路径、必要时
 启动子进程跑 ``ffmpeg -version``，放在主线程会把界面冻住——切到本页
@@ -17,6 +22,13 @@ from tkinter import filedialog, ttk
 
 from ..environment import EnvironmentSnapshot, probe_environment
 from .. import theme
+from ..state import (
+    AppUIState,
+    THEME_MODE_LABELS,
+    load_app_state,
+    parse_theme_mode,
+    save_app_state,
+)
 from ..workers import Worker
 from ..widgets import (
     Card,
@@ -27,6 +39,9 @@ from ..widgets import (
 )
 
 __all__ = ["SettingsView"]
+
+#: 下拉框选项顺序。跟随系统放第一个：它是默认值，也最不需要用户操心。
+THEME_OPTIONS = [THEME_MODE_LABELS[key] for key in ("system", "light", "dark")]
 
 
 class SettingsView(ttk.Frame):
@@ -51,7 +66,7 @@ class SettingsView(ttk.Frame):
 
     def _build(self) -> None:
         SectionTitle(
-            self, "设置", "改动立即生效，无需重启。"
+            self, "设置", "改动立即生效；主题一项需重启客户端。"
         ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
 
         card = Card(self)
@@ -84,12 +99,37 @@ class SettingsView(ttk.Frame):
             row=2, column=0, sticky="ew", pady=theme.PAD_MD
         )
 
-        # 环境自检
-        ttk.Label(card, text="环境自检", style="Heading.TLabel").grid(
+        # 外观：主题模式
+        ttk.Label(card, text="外观", style="Heading.TLabel").grid(
             row=3, column=0, sticky="w", pady=(0, theme.PAD_SM)
         )
+        self._theme_var = tk.StringVar(value=THEME_OPTIONS[0])
+        row = FormRow(
+            card,
+            "主题",
+            hint="跟随系统即读 Windows 的浅色/深色设置。tk 控件的颜色在建界面时"
+            "就写死了，改这里要**重启客户端**才生效。",
+        )
+        row.grid(row=4, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        row.add(
+            ttk.Combobox,
+            textvariable=self._theme_var,
+            values=THEME_OPTIONS,
+            state="readonly",
+            width=12,
+        )
+        self._theme_var.trace_add("write", self._on_theme_change)
+
+        ttk.Separator(card, orient="horizontal").grid(
+            row=5, column=0, sticky="ew", pady=theme.PAD_MD
+        )
+
+        # 环境自检
+        ttk.Label(card, text="环境自检", style="Heading.TLabel").grid(
+            row=6, column=0, sticky="w", pady=(0, theme.PAD_SM)
+        )
         self._env = KeyValueList(card, label_width=12)
-        self._env.grid(row=4, column=0, sticky="w")
+        self._env.grid(row=7, column=0, sticky="w")
 
     # ---------- 行为 ----------
 
@@ -105,10 +145,20 @@ class SettingsView(ttk.Frame):
             self._proxy_var.set(ctx.proxy or "")
         if not self._cookie_var.get():
             self._cookie_var.set(ctx.cookie_file)
+        self._theme_var.set(THEME_MODE_LABELS[load_app_state().theme_mode])
 
     def _on_proxy_change(self, *_: "object") -> None:
         value = self._proxy_var.get().strip()
         self.app.ctx.proxy = value or None
+
+    def _on_theme_change(self, *_: "object") -> None:
+        """存下主题选择。
+
+        只写文件，**不重画界面**：tk/ttk 的颜色在创建控件时就写进去了，
+        改色板对已经建好的控件无效。要即时生效得把整棵控件树重建，
+        代价太大也不稳——提示里写清楚「重启生效」比做个切一半的开关诚实。
+        """
+        save_app_state(AppUIState(theme_mode=parse_theme_mode(self._theme_var.get())))
 
     def _pick_cookie(self) -> None:
         path = filedialog.asksaveasfilename(
