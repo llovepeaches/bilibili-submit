@@ -36,8 +36,10 @@ from .. import theme
 from ..state import BatchUIState, DEFAULT_TID, load_ui_state, save_ui_state
 from ..widgets import (
     Card,
+    Collapsible,
     FormRow,
     LogConsole,
+    OptionSwitches,
     Placeholder,
     PrimaryButton,
     ProgressBar,
@@ -66,15 +68,29 @@ _HEADINGS = {
     "tid": "分区",
     "status": "状态",
 }
-_WIDTHS = {
-    "pick": 34,
-    "name": 120,
-    "title": 180,
-    "file": 200,
-    "parts": 42,
-    "tid": 56,
-    "status": 130,
+#: 列宽权重。窗口宽度变化时按这个比例分配——固定列宽在宽屏上右侧
+#: 留一大片空白，在窄屏上文件名被截得认不出是哪个，两个毛病一起治。
+_COLUMN_WEIGHTS = {
+    "pick": 0,
+    "name": 3,
+    "title": 5,
+    "file": 6,
+    "parts": 1,
+    "tid": 2,
+    "status": 3,
 }
+#: 每列的下限。权重再小也不能窄到看不清内容。
+_COLUMN_MIN_WIDTHS = {
+    "pick": 34,
+    "name": 70,
+    "title": 90,
+    "file": 110,
+    "parts": 42,
+    "tid": 48,
+    "status": 90,
+}
+#: 短内容居中更整齐，长文本左对齐更好扫读
+_CENTERED_COLUMNS = ("pick", "parts", "tid", "status")
 
 PICKED = "✓"
 UNPICKED = ""
@@ -112,6 +128,40 @@ def _truncate(text: str, limit: int = STATUS_MAX) -> str:
     return text[: limit - 1] + "…"
 
 
+def render_title_template(template: str, name: str, number: int) -> str:
+    """把投稿标题模板里的占位符换成实际值。
+
+    支持 ``{name}``（文件名/文件夹名）与 ``{n}``（勾选顺序，从 1 开始）。
+
+    模板里一个占位符都没写时，每一行会得到**同一个**标题——那通常是
+    用户有意填的固定标题（比如给一套视频统一加前缀），所以不去猜、
+    也不报错。
+    """
+    return template.replace("{name}", name).replace("{n}", str(number))
+
+
+def _column_widths(total: int) -> dict[str, int]:
+    """按权重把总宽度分给各列，返回每列宽度。
+
+    抽成纯函数是因为「分得对不对」跟窗口无关，绑死在 Tk 上就只能靠
+    建窗口 + 拖尺寸来测，那种测试既慢又脆。
+    """
+    fixed = sum(_COLUMN_MIN_WIDTHS[c] for c in COLUMNS if not _COLUMN_WEIGHTS[c])
+    weights = sum(_COLUMN_WEIGHTS.values())
+    usable = max(total - fixed, 0)
+    return {
+        column: (
+            _COLUMN_MIN_WIDTHS[column]
+            if not _COLUMN_WEIGHTS[column]
+            else max(
+                _COLUMN_MIN_WIDTHS[column],
+                int(usable * _COLUMN_WEIGHTS[column] / weights),
+            )
+        )
+        for column in COLUMNS
+    }
+
+
 @dataclass(frozen=True)
 class SharedSubmitValues:
     """顶部统一填的投稿参数，这一批任务共用。
@@ -125,6 +175,13 @@ class SharedSubmitValues:
     tag: str = ""
     desc: str = ""
     dtime_offset_hours: float | None = None
+    # 互动设置与音质增强。命名跟界面文案走（close_reply 而不是
+    # up_close_reply），只有 :meth:`apply` 那一步翻译成配置字段名。
+    close_reply: bool = False
+    close_danmu: bool = False
+    selection_reply: bool = False
+    dolby: bool = False
+    hires: bool = False
 
     def apply(self, task: TaskConfig) -> TaskConfig:
         return replace(
@@ -136,6 +193,12 @@ class SharedSubmitValues:
             # 顶部是「距今几小时」，逐任务的绝对时间要一并清掉，
             # 否则两套定时来源打架，resolve_dtime 拿到的是旧值
             dtime=None,
+            up_close_reply=self.close_reply,
+            up_close_danmu=self.close_danmu,
+            up_selection_reply=self.selection_reply,
+            # 界面上是勾选框（bool），配置里是 0/1（int）
+            dolby=int(self.dolby),
+            hires=int(self.hires),
         )
 
 
@@ -192,16 +255,18 @@ class TasksView(ttk.Frame):
         card = Card(self)
         card.grid(row=1, column=0, sticky="nsew")
         card.columnconfigure(0, weight=1)
-        card.rowconfigure(5, weight=1)
+        card.rowconfigure(6, weight=1)
 
-        # ① 顶部统一投稿参数。四个控件都要留引用：yaml 模式下要置灰
-        self._shared_section = ttk.Frame(card, style="Card.TFrame")
+        # ① 顶部统一投稿参数。默认展开：分区/标签每次都要看一眼。
+        self._shared_section = Collapsible(
+            card, "投稿设置", "这一批任务共用", opened=True
+        )
         self._shared_section.grid(row=0, column=0, sticky="ew")
-        self._shared_section.columnconfigure(0, weight=1)
+        shared = self._shared_section.body
 
         self._tid_var = tk.StringVar(value=tid_option(DEFAULT_TID))
         row = FormRow(
-            self._shared_section,
+            shared,
             "分区",
             hint="这一批视频统一发到哪个分区",
         )
@@ -214,28 +279,71 @@ class TasksView(ttk.Frame):
         )
 
         self._tag_var = tk.StringVar()
-        row = FormRow(self._shared_section, "标签", hint="逗号分隔，这一批共用")
+        row = FormRow(shared, "标签", hint="逗号分隔，这一批共用")
         row.grid(row=1, column=0, sticky="ew", pady=(0, theme.PAD_SM))
         self._tag_entry = row.add(ttk.Entry, textvariable=self._tag_var)
 
         self._desc_var = tk.StringVar()
-        row = FormRow(self._shared_section, "简介", hint="可留空")
+        row = FormRow(shared, "简介", hint="可留空")
         row.grid(row=2, column=0, sticky="ew", pady=(0, theme.PAD_SM))
         self._desc_entry = row.add(ttk.Entry, textvariable=self._desc_var)
 
         self._dtime_var = tk.StringVar()
         row = FormRow(
-            self._shared_section,
+            shared,
             "延时发布",
             hint="距今多少小时后统一发布，需大于 4；留空为立即发布",
         )
         row.grid(row=3, column=0, sticky="ew", pady=(0, theme.PAD_SM))
         self._dtime_entry = row.add(ttk.Entry, textvariable=self._dtime_var)
 
-        # ② 目录来源
+        # ② 更多设置。默认收起：这些都是「想起来才动一次」的开关，
+        #    铺开会占掉列表三行的高度。收起时标题栏右侧会列出已开启的项，
+        #    否则用户会以为自己设的东西丢了。
+        self._more_section = Collapsible(
+            card,
+            "更多设置",
+            "投稿标题模板、互动设置、音质增强",
+            opened=False,
+            on_toggle=lambda _opened: self._save_state(),
+        )
+        self._more_section.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_XS, 0))
+        more = self._more_section.body
+
+        self._title_template_var = tk.StringVar()
+        row = FormRow(
+            more,
+            "投稿标题",
+            hint="{name} 文件名或文件夹名，{n} 序号；留空不改标题。"
+            "填好后点「套用到选中行」",
+        )
+        row.grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        self._title_template_entry = row.add(
+            ttk.Entry, textvariable=self._title_template_var
+        )
+        self._apply_title_button = row.add(
+            SecondaryButton,
+            text="套用到选中行",
+            command=self._apply_title_template,
+            column=1,
+            sticky="w",
+            padx=(theme.PAD_SM, 0),
+        )
+
+        # 互动设置与音质增强。五个开关在投稿页也用同一份组件，
+        # 免得哪天改了批量页忘了投稿页，变成「这一页勾了没反应」。
+        #
+        # 属性名**不能叫 ``_options``**：Tk 的 ``Misc`` 内部就有这个
+        # 方法（``grid()`` 会调 ``self._options(cnf, kw)`` 拼参数），
+        # 被实例属性盖掉之后所有 grid 调用都会炸成
+        # “'OptionSwitches' object is not callable”。
+        self._option_switches = OptionSwitches(more, on_change=self._on_more_changed)
+        self._option_switches.grid(row=1, column=0, sticky="ew")
+
+        # ③ 目录来源
         self._dir_var = tk.StringVar()
         picker = ttk.Frame(card, style="Card.TFrame")
-        picker.grid(row=1, column=0, sticky="ew")
+        picker.grid(row=2, column=0, sticky="ew")
         picker.columnconfigure(0, weight=1)
 
         row = FormRow(
@@ -281,7 +389,7 @@ class TasksView(ttk.Frame):
 
         # ③ yaml 入口放次要位置。多数用户不该看见它，也不该需要它。
         advanced = ttk.Frame(card, style="Card.TFrame")
-        advanced.grid(row=2, column=0, sticky="e", pady=(theme.PAD_XS, theme.PAD_SM))
+        advanced.grid(row=3, column=0, sticky="e", pady=(theme.PAD_XS, theme.PAD_SM))
         ttk.Label(
             advanced,
             text="熟悉配置文件？可从 yaml 加载，逐任务参数与投稿后端以配置为准。",
@@ -294,19 +402,19 @@ class TasksView(ttk.Frame):
 
         self._source_pill = StatusPill(card, "尚未选择文件夹", "idle")
         self._source_pill.grid(
-            row=3, column=0, sticky="w", pady=(0, theme.PAD_SM)
+            row=4, column=0, sticky="w", pady=(0, theme.PAD_SM)
         )
 
         # ④ 以下与原版一致：汇总条 + 列表 + 操作 + 进度 + 日志
         self._summary = SummaryBar(card)
-        self._summary.grid(row=4, column=0, sticky="ew", pady=(0, theme.PAD_XS))
+        self._summary.grid(row=5, column=0, sticky="ew", pady=(0, theme.PAD_XS))
         self._summary.add_action("全选", self._select_all)
         self._summary.add_action("全不选", self._select_none)
         self._summary.add_action("只选失败项", self._select_failed)
 
         list_holder = ttk.Frame(card, style="Card.TFrame")
         list_holder.grid(
-            row=5, column=0, sticky="nsew", pady=(theme.PAD_XS, theme.PAD_SM)
+            row=6, column=0, sticky="nsew", pady=(theme.PAD_XS, theme.PAD_SM)
         )
         list_holder.columnconfigure(0, weight=1)
         list_holder.rowconfigure(0, weight=1)
@@ -318,12 +426,14 @@ class TasksView(ttk.Frame):
             self._tree.heading(column, text=_HEADINGS[column])
             self._tree.column(
                 column,
-                width=_WIDTHS[column],
-                stretch=(column == "file"),
-                anchor="center" if column == "pick" else "w",
+                width=_COLUMN_MIN_WIDTHS[column],
+                stretch=True,
+                anchor="center" if column in _CENTERED_COLUMNS else "w",
             )
         # 行着色的唯一来源
         theme.apply_tree_tags(self._tree)
+        # 宽度跟着窗口走，而不是锁死在固定值上
+        self._tree.bind("<Configure>", self._resize_columns)
         self._tree.grid(row=0, column=0, sticky="nsew")
 
         scroll = ttk.Scrollbar(list_holder, orient="vertical", command=self._tree.yview)
@@ -339,10 +449,10 @@ class TasksView(ttk.Frame):
         self._placeholder = Placeholder(
             card, "尚未选择视频文件夹", "选择文件夹…", self._pick_dir
         )
-        self._placeholder.grid(row=5, column=0, sticky="nsew")
+        self._placeholder.grid(row=6, column=0, sticky="nsew")
 
         actions = ttk.Frame(card, style="Card.TFrame")
-        actions.grid(row=6, column=0, sticky="ew")
+        actions.grid(row=7, column=0, sticky="ew")
 
         self._run_button = PrimaryButton(actions, "开始投稿", self._run)
         self._run_button.pack(side="left", padx=(0, theme.PAD_SM))
@@ -357,11 +467,11 @@ class TasksView(ttk.Frame):
         self._cancel_button.state(["disabled"])
 
         self._progress = ProgressBar(card)
-        self._progress.grid(row=7, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+        self._progress.grid(row=8, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
 
         self._log = LogConsole(card, height=7)
-        self._log.grid(row=8, column=0, sticky="nsew", pady=(theme.PAD_SM, 0))
-        card.rowconfigure(8, weight=1)
+        self._log.grid(row=9, column=0, sticky="nsew", pady=(theme.PAD_SM, 0))
+        card.rowconfigure(9, weight=1)
 
         self._apply_source_mode()
 
@@ -404,6 +514,18 @@ class TasksView(ttk.Frame):
         )
         self._tid_var.set(tid_option(state.tid))
         self._group_var.set(GROUP_LABEL_BY_MODE.get(state.group_mode, GROUP_OFF))
+        self._title_template_var.set(state.title_template)
+        self._option_switches.set_flags(
+            close_reply=state.close_reply,
+            close_danmu=state.close_danmu,
+            selection_reply=state.selection_reply,
+            dolby=state.dolby,
+            hires=state.hires,
+        )
+        self._update_more_hint()
+        # 展开状态放在最后设：它会触发一次偏好保存，此时上面那些变量
+        # 必须都已经填好，否则存下去的是半份设置
+        self._more_section.set_opened(state.advanced_opened)
 
     def _group_mode(self) -> str:
         """「分P合并」下拉框当前值对应的内部分组模式。
@@ -431,6 +553,9 @@ class TasksView(ttk.Frame):
             desc=self._desc_var.get().strip(),
             dtime_offset_hours=offset,
             group_mode=self._group_mode(),
+            title_template=self._title_template_var.get().strip(),
+            advanced_opened=self._more_section.opened,
+            **self._more_flags(),
         )
 
     def _save_state(self) -> None:
@@ -625,8 +750,59 @@ class TasksView(ttk.Frame):
         self._tag_entry.state(entry_state)
         self._desc_entry.state(entry_state)
         self._dtime_entry.state(entry_state)
+        # 更多设置里的开关同样属于「统一参数」，yaml 模式下不生效
+        self._option_switches.set_disabled(yaml_mode)
         if yaml_mode:
             self._source_pill.set("参数由 YAML 提供", "idle")
+        # 「套用到选中行」不跟着置灰：它改的是列表里那几行任务本身的
+        # 标题，无论任务来自文件夹还是 yaml 都成立，跟「统一参数」不是
+        # 一回事——那种才只在文件夹模式有意义。
+
+    def _more_flags(self) -> dict[str, bool]:
+        """更多设置里五个开关的当前值。"""
+        return self._option_switches.flags
+
+    def _on_more_changed(self) -> None:
+        """开关变动：更新收起时的提示，并记进偏好。"""
+        self._update_more_hint()
+        self._save_state()
+
+    def _update_more_hint(self) -> None:
+        """收起时标题栏右侧列出已开启的项。
+
+        不列出来的话，面板收起后里面开着什么完全看不见，用户会以为
+        自己设的东西丢了——而它们其实正在生效。
+        """
+        self._more_section.set_hint(self._option_switches.summary())
+
+    def _apply_title_template(self) -> None:
+        """把「投稿标题」模板套到勾选的行上。
+
+        只动勾选的行：列表里可能有一半已经手动改过标题，全量套一遍
+        等于把那些手工活全冲掉。
+        """
+        template = self._title_template_var.get().strip()
+        if not template:
+            self._log.append("投稿标题是空的——填个模板再套用，比如「{name} 第{n}集」")
+            return
+        indexes = self._selected_indexes()
+        if not indexes:
+            self._log.append("没勾任何任务：先在左边勾上要改标题的行")
+            return
+
+        for number, index in enumerate(indexes, start=1):
+            task = self._tasks[index]
+            # 已改过标题的任务用改后的名字当 {name}，
+            # 否则拿任务名（文件夹/文件名）
+            title = render_title_template(template, task.title or task.name, number)
+            title = title.strip()
+            if not title:
+                continue
+            self._tasks[index] = replace(task, title=title)
+            self._tree.set(str(index), "title", title)
+
+        self._log.append(f"已套用投稿标题到 {len(indexes)} 行：{template}")
+        self._save_state()
 
     def _reset_state(self) -> None:
         """清空上一轮的选择与结果。"""
@@ -692,6 +868,18 @@ class TasksView(ttk.Frame):
         self._update_summary()
 
     # ---------- 勾选 ----------
+
+    def _resize_columns(self, _event: "tk.Event | None" = None) -> None:
+        """按权重把可用宽度分给各列。
+
+        只在宽度真的变了时动手：``<Configure>`` 在布局的每一步都会触发，
+        无脑重算会让 Treeview 反复重排，拖窗口时能看出明显抖动。
+        """
+        total = self._tree.winfo_width()
+        if total < 100:  # 还没布局出来，别拿 1px 去算比例
+            return
+        for column, width in _column_widths(total).items():
+            self._tree.column(column, width=width)
 
     def _on_tree_click(self, event: tk.Event) -> None:
         """点首列切换勾选；点表头首列则全选/全不选。"""
@@ -808,6 +996,7 @@ class TasksView(ttk.Frame):
             tag=self._tag_var.get().strip(),
             desc=self._desc_var.get().strip(),
             dtime_offset_hours=offset,
+            **self._more_flags(),
         )
 
     def _snapshot_run(

@@ -247,3 +247,46 @@ def test_unknown_group_mode_falls_back_to_none(tmp_path):
     """
     state, _ = load_ui_state(_write(tmp_path, {"group_mode": "瞎写的"}))
     assert state.group_mode == "none"
+
+
+def test_older_state_file_without_the_new_options(tmp_path):
+    """旧版偏好文件里没有这些字段，读出来应当是「全关」而不是报错。
+
+    不升 schema 版本就是为了这个：老用户升级后目录、分区、分组方式
+    全都还在，只有新开关取默认值。
+    """
+    path = tmp_path / "ui-state.json"
+    path.write_text(
+        json.dumps(
+            {"schema_version": SCHEMA_VERSION, "batch": {"directory": "D:/v"}}
+        ),
+        encoding="utf-8",
+    )
+    state, problem = load_ui_state(path)
+    assert problem == ""
+    assert state.directory == "D:/v"
+    assert state.dolby is False
+    assert state.hires is False
+    assert state.close_reply is False
+    assert state.close_danmu is False
+    assert state.selection_reply is False
+    assert state.title_template == ""
+    assert state.advanced_opened is False
+
+
+def test_switches_read_strings_as_off_when_they_say_off(tmp_path):
+    """手改过的偏好文件里写 "false" / "0" 要真的关掉。"""
+    path = tmp_path / "ui-state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "batch": {"dolby": "false", "hires": "0", "close_reply": "no"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    state, _ = load_ui_state(path)
+    assert state.dolby is False
+    assert state.hires is False
+    assert state.close_reply is False

@@ -1904,3 +1904,243 @@ def test_edited_title_reaches_the_submitted_archive(tmp_path, monkeypatch):
         assert "旅行" not in submitted, f"旧标题还在：{submitted}"
     finally:
         root.destroy()
+
+
+# ---------- 投稿标题模板 ----------
+
+
+def test_render_title_template_substitutes_both_placeholders():
+    from bilibili_submit.ui.views.tasks import render_title_template
+
+    assert render_title_template("{name} 第{n}集", "旅行", 2) == "旅行 第2集"
+    assert render_title_template("第{n}集 {name}", "旅行", 1) == "第1集 旅行"
+
+
+def test_render_title_template_without_placeholders_is_one_fixed_title():
+    """没写占位符就是固定标题，所有行同名——这是用户有意填的，不去猜。
+
+    批量套用是覆盖操作，最怕的是「帮用户改了不该改的」。所以这里保持
+    字面行为：用户填什么就是什么。
+    """
+    from bilibili_submit.ui.views.tasks import render_title_template
+
+    assert render_title_template("合集", "旅行", 3) == "合集"
+
+
+def test_shared_values_carry_the_new_options():
+    """顶部勾的开关要真的进到任务里。
+
+    漏掉这一层的表现是「界面勾了、投出去没生效」，而且全程不报错。
+    """
+    from bilibili_submit.config import TaskConfig
+
+    task = SharedSubmitValues(
+        tid=21, close_danmu=True, selection_reply=True, dolby=True
+    ).apply(TaskConfig(name="t"))
+    assert task.up_close_danmu is True
+    assert task.up_selection_reply is True
+    assert task.dolby == 1
+    # 没勾的要写 0 而不是 None，否则会被配置里的默认值顶上来
+    assert task.hires == 0
+    assert task.up_close_reply is False
+
+
+def test_shared_values_write_zeros_instead_of_none():
+    """关着的开关也写成 0/False——留 None 等于「没配」，会被 defaults 覆盖。"""
+    from bilibili_submit.config import DefaultsConfig, TaskConfig
+
+    task = TaskConfig(name="t").merged(DefaultsConfig(dolby=1, hires=1))
+    filled = SharedSubmitValues(tid=21).apply(task)
+    assert filled.dolby == 0
+    assert filled.hires == 0
+
+
+@needs_display
+def test_more_section_starts_collapsed(tmp_path, monkeypatch):
+    """默认收起：这些是想起来才动一次的开关，铺开要吃掉列表三行。"""
+    import tkinter as tk
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        assert not view._more_section.opened
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_more_hint_lists_what_is_on(tmp_path, monkeypatch):
+    """收起时右侧列出开着的项。
+
+    不列的话，收起后面板里开着杜比、关着评论，界面上什么都看不见——
+    用户会以为设置丢了，而它们其实正在生效。
+    """
+    import tkinter as tk
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        assert view._more_section.hint == ""
+        view._option_switches.set_flags(dolby=True)
+        view._option_switches.set_flags(hires=True)
+        view._on_more_changed()
+        hint = view._more_section.hint
+        assert "杜比" in hint
+        assert "Hi-Res" in hint
+        assert "关评论" not in hint
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_more_options_reach_the_task(tmp_path, monkeypatch):
+    """从勾选框到任务对象走一遍：界面上的选择必须落到投稿参数。"""
+    import tkinter as tk
+
+    from bilibili_submit.config import TaskConfig
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._option_switches.set_flags(dolby=True)
+        view._option_switches.set_flags(selection_reply=True)
+        view._option_switches.set_flags(close_reply=True)
+        task = view._collect_shared().apply(TaskConfig(name="t"))
+        assert task.dolby == 1
+        assert task.up_selection_reply is True
+        assert task.up_close_reply is True
+        assert task.hires == 0
+        assert task.up_close_danmu is False
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_title_template_applies_only_to_selected_rows(tmp_path, monkeypatch):
+    """只改勾选的行——列表里可能有一半已经手动改过标题。"""
+    import tkinter as tk
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        folder = tmp_path / "视频"
+        _make_video(folder, "a.mp4")
+        _make_video(folder, "b.mp4")
+        _make_video(folder, "c.mp4")
+        _load_folder(root, view, folder, monkeypatch)
+
+        before = view._tasks[2].title
+        view._set_pick("2", False)
+
+        view._title_template_var.set("{name} 第{n}集")
+        view._apply_title_template()
+
+        assert view._tasks[0].title == "a 第1集"
+        assert view._tasks[1].title == "b 第2集"
+        # 没勾的那行一个字都不能动
+        assert view._tasks[2].title == before
+        # 列表上显示的标题列也要跟着变，否则用户以为没生效
+        assert view._tree.set("0", "title") == "a 第1集"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_title_template_refuses_when_nothing_selected(tmp_path, monkeypatch):
+    """没勾任何行时给句人话，而不是默默什么都不做。"""
+    import tkinter as tk
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        folder = tmp_path / "视频"
+        _make_video(folder, "a.mp4")
+        _load_folder(root, view, folder, monkeypatch)
+
+        view._set_pick("0", False)
+        view._title_template_var.set("{name} 第{n}集")
+        view._log.clear()
+        view._apply_title_template()
+
+        assert view._tasks[0].title in (None, "a")
+        assert "没勾任何任务" in view._log._text.get("1.0", "end")
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_new_options_survive_a_restart(tmp_path, monkeypatch):
+    """关掉再打开，更多设置里的选择还在。"""
+    import tkinter as tk
+
+    from bilibili_submit.ui.state import load_ui_state
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._option_switches.set_flags(dolby=True)
+        view._option_switches.set_flags(close_reply=True)
+        view._title_template_var.set("{name} 第{n}集")
+        view._more_section.set_opened(True)
+        view._save_state()
+        run_until(root, lambda: (tmp_path / "ui-state.json").is_file())
+
+        state, problem = load_ui_state(tmp_path / "ui-state.json")
+        assert problem == ""
+        assert state.dolby is True
+        assert state.hires is False
+        assert state.close_reply is True
+        assert state.title_template == "{name} 第{n}集"
+        assert state.advanced_opened is True
+    finally:
+        root.destroy()
+
+
+# ---------- 列表列宽 ----------
+
+
+def test_column_widths_split_the_space_by_weight():
+    """宽屏时各列按比例分，不让右侧空一大片。"""
+    from bilibili_submit.ui.views.tasks import (
+        COLUMNS,
+        _column_widths,
+    )
+
+    widths = _column_widths(1000)
+    assert set(widths) == set(COLUMNS)
+    # 权重大的列必须比权重小的宽
+    assert widths["file"] > widths["title"] > widths["name"] > widths["parts"]
+    assert sum(widths.values()) <= 1000 + len(COLUMNS)
+
+
+def test_column_widths_never_go_below_the_minimum():
+    """窄窗口下也不该窄到看不清内容——宁可横向滚动。"""
+    from bilibili_submit.ui.views.tasks import (
+        _COLUMN_MIN_WIDTHS,
+        _column_widths,
+    )
+
+    for total in (0, 50, 200, 400):
+        widths = _column_widths(total)
+        for column, width in widths.items():
+            assert width >= _COLUMN_MIN_WIDTHS[column], f"{column} 在 {total}px 下太窄"
+
+
+def test_column_widths_grow_with_the_window():
+    """窗口变宽，列也跟着变宽——固定列宽做不到这一点。"""
+    from bilibili_submit.ui.views.tasks import _column_widths
+
+    narrow = _column_widths(600)
+    wide = _column_widths(1400)
+    assert wide["file"] > narrow["file"]
+    assert wide["title"] > narrow["title"]
+
+
+def test_pick_column_keeps_a_fixed_width():
+    """勾选列不参与分配：它是个方框，宽一点毫无用处。"""
+    from bilibili_submit.ui.views.tasks import _COLUMN_MIN_WIDTHS, _COLUMN_WEIGHTS
+    from bilibili_submit.ui.views.tasks import _column_widths
+
+    assert _COLUMN_WEIGHTS["pick"] == 0
+    assert _column_widths(600)["pick"] == _COLUMN_MIN_WIDTHS["pick"]
+    assert _column_widths(2000)["pick"] == _COLUMN_MIN_WIDTHS["pick"]

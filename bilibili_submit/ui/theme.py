@@ -126,6 +126,8 @@ NAV_ITEM_HEIGHT = 42
 INPUT_HEIGHT = 30
 BUTTON_HEIGHT = 32
 QR_SIZE = 220                 # 登录二维码边长
+#: 列表行高。中文 + 行内状态文字，低于 32 会挤；高于 36 则一屏看不到几行。
+ROW_HEIGHT = 34
 
 MIN_WIDTH = 880
 MIN_HEIGHT = 600
@@ -200,6 +202,21 @@ def apply(style: "ttk.Style") -> None:
     style.map("TEntry", bordercolor=[("focus", PRIMARY)],
               lightcolor=[("focus", PRIMARY_RING)])
 
+    # 勾选框：卡片上是白底，不设会露出一圈灰底。选中态的方块颜色由
+    # 主题引擎画，clam 下跟着 foreground 走，所以前景用主色更统一。
+    style.configure(
+        "TCheckbutton",
+        background=SURFACE,
+        foreground=TEXT,
+        font=FONT_NORMAL,
+        padding=(PAD_XS, PAD_XS),
+    )
+    style.map(
+        "TCheckbutton",
+        background=[("active", SURFACE)],
+        foreground=[("active", PRIMARY_DARK), ("selected", PRIMARY)],
+    )
+
     # 下拉框
     style.configure(
         "TCombobox",
@@ -222,7 +239,7 @@ def apply(style: "ttk.Style") -> None:
         fieldbackground=SURFACE,
         foreground=TEXT,
         borderwidth=0,
-        rowheight=32,
+        rowheight=ROW_HEIGHT,
     )
     style.configure(
         "Treeview.Heading",
@@ -231,6 +248,7 @@ def apply(style: "ttk.Style") -> None:
         font=FONT_SMALL,
         borderwidth=0,
         relief="flat",
+        padding=(PAD_SM, PAD_XS + 2),
     )
     style.map("Treeview", background=[("selected", PRIMARY_SOFT)],
               foreground=[("selected", TEXT)])

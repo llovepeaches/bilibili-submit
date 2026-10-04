@@ -46,6 +46,20 @@ class BatchUIState:
     #: （取值见 :data:`~bilibili_submit.multipart.GROUP_MODES`）。
     #: 早期版本这里是布尔 ``group_parts``，读取时做了兼容映射。
     group_mode: str = "none"
+    #: 投稿标题模板，占位符 ``{name}``（文件名/文件夹名）与 ``{n}``（序号）。
+    #: 留空表示不动标题——批量套用是覆盖操作，默认空才不会误伤。
+    title_template: str = ""
+    #: 互动设置
+    close_reply: bool = False       # 关闭评论区
+    close_danmu: bool = False       # 关闭弹幕
+    selection_reply: bool = False   # 开启精选评论
+    #: 音质增强。开了没效果多半是源文件本身不支持，不是程序坏了。
+    dolby: bool = False
+    hires: bool = False
+    #: 「更多设置」折叠区上次是展开还是收起。
+    #: 组件本身不记偏好，这里由界面层存——每次打开都重新收起会让人以为
+    #: 设置丢了。
+    advanced_opened: bool = False
 
 
 def ui_state_path() -> Path:
@@ -88,6 +102,13 @@ def load_ui_state(path: Path | None = None) -> tuple[BatchUIState, str]:
         desc=_as_str(batch.get("desc")),
         dtime_offset_hours=_as_offset(batch.get("dtime_offset_hours")),
         group_mode=_as_group_mode(batch.get("group_mode"), batch.get("group_parts")),
+        title_template=_as_str(batch.get("title_template")),
+        close_reply=_as_bool(batch.get("close_reply")),
+        close_danmu=_as_bool(batch.get("close_danmu")),
+        selection_reply=_as_bool(batch.get("selection_reply")),
+        dolby=_as_bool(batch.get("dolby")),
+        hires=_as_bool(batch.get("hires")),
+        advanced_opened=_as_bool(batch.get("advanced_opened")),
     ), ""
 
 

@@ -19,6 +19,9 @@ __all__ = [
     "Card",
     "ScrollArea",
     "SectionTitle",
+    "Collapsible",
+    "OptionSwitches",
+    "OPTION_LABELS",
     "FormRow",
     "PrimaryButton",
     "SecondaryButton",
@@ -140,6 +143,225 @@ class SectionTitle(ttk.Frame):
                 wraplength=560,
                 justify="left",
             ).pack(anchor="w", pady=(theme.PAD_XS, 0))
+
+
+class Collapsible(ttk.Frame):
+    """可折叠分组：点标题栏展开或收起里面的表单。
+
+    页面上方「每次都要填的」和「偶尔动一次的」挤在一起时，任务列表
+    就被压得只剩三行。折叠把选择权还给用户。
+
+    收起时右侧可以显示一段提示（见 :meth:`set_hint`）——**这条是必需
+    的**：里面开着杜比、关着评论，收起后界面上什么都没有，用户会以为
+    设置丢了。
+
+    .. note::
+       展开状态**不记偏好**，只在本次会话内保持；要跨会话记住的由
+       调用方自己存（界面偏好那一层的事，组件不该知道）。
+    """
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        title: str,
+        subtitle: str = "",
+        opened: bool = False,
+        on_toggle: Callable[[bool], None] | None = None,
+    ) -> None:
+        super().__init__(master, style="Card.TFrame")
+        self._opened = bool(opened)
+        self._on_toggle = on_toggle
+        self.columnconfigure(0, weight=1)
+
+        # tk.Frame 而非 ttk：ttk 的 cursor 在部分平台不生效，
+        # 而“这一行能点”全靠手型光标传达
+        self._header = tk.Frame(self, bg=theme.SURFACE, cursor="hand2")
+        self._header.grid(row=0, column=0, sticky="ew")
+        self._header.columnconfigure(1, weight=1)
+
+        self._arrow = tk.Label(
+            self._header,
+            text="",
+            bg=theme.SURFACE,
+            fg=theme.TEXT_SECONDARY,
+            font=theme.FONT_SMALL,
+            width=2,
+            anchor="w",
+        )
+        self._arrow.grid(row=0, column=0)
+
+        tk.Label(
+            self._header,
+            text=title,
+            bg=theme.SURFACE,
+            fg=theme.TEXT,
+            font=theme.FONT_MEDIUM,
+        ).grid(row=0, column=1, sticky="w")
+
+        self._hint = tk.Label(
+            self._header,
+            text="",
+            bg=theme.SURFACE,
+            fg=theme.TEXT_MUTED,
+            font=theme.FONT_SMALL,
+        )
+        self._hint.grid(row=0, column=2, sticky="e", padx=(theme.PAD_SM, 0))
+
+        self._body = ttk.Frame(self, style="Card.TFrame")
+        self._body.columnconfigure(0, weight=1)
+
+        if subtitle:
+            tk.Label(
+                self._header,
+                text=subtitle,
+                bg=theme.SURFACE,
+                fg=theme.TEXT_MUTED,
+                font=theme.FONT_SMALL,
+            ).grid(row=1, column=1, columnspan=2, sticky="w")
+
+        # Tk 的事件不冒泡，标题栏里每个子控件都得单独绑一次，
+        # 否则点在文字上没反应——只有点到 padding 才展开，很难用
+        for widget in (self._header, self._arrow, self._hint, *self._header.winfo_children()):
+            widget.bind("<Button-1>", self._on_click)
+
+        self._render()
+
+    @property
+    def body(self) -> ttk.Frame:
+        """内容容器。表单行往这里 ``grid``。"""
+        return self._body
+
+    @property
+    def opened(self) -> bool:
+        return self._opened
+
+    def set_opened(self, opened: bool) -> None:
+        """展开或收起。重复设同一个值不触发回调（避免自触发循环）。"""
+        opened = bool(opened)
+        if opened == self._opened:
+            return
+        self._opened = opened
+        self._render()
+        if self._on_toggle:
+            self._on_toggle(opened)
+
+    @property
+    def hint(self) -> str:
+        """当前提示文字。收起时显示在标题栏右侧，测试也靠它断言。"""
+        return str(self._hint.cget("text"))
+
+    def set_hint(self, text: str) -> None:
+        """设置收起时显示在右侧的提示文字。"""
+        self._hint.configure(text=text)
+
+    def _on_click(self, _event: "tk.Event") -> str:
+        self.set_opened(not self._opened)
+        return "break"
+
+    def _render(self) -> None:
+        self._arrow.configure(text="▾" if self._opened else "▸")
+        if self._opened:
+            self._body.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_XS, 0))
+        else:
+            self._body.grid_remove()
+
+
+#: 投稿选项的标签文字。投稿页与批量页共用同一份，
+#: 两处各写一遍的话，改名时漏一处就是「两个页面说法不一样」。
+OPTION_LABELS = {
+    "close_danmu": "关闭弹幕",
+    "close_reply": "关闭评论区",
+    "selection_reply": "精选评论",
+    "dolby": "杜比音效",
+    "hires": "Hi-Res 无损",
+}
+
+#: 折叠收起时用的简称。全称放不进标题栏那一行。
+OPTION_SHORT = {
+    "close_danmu": "关弹幕",
+    "close_reply": "关评论",
+    "selection_reply": "精选评论",
+    "dolby": "杜比",
+    "hires": "Hi-Res",
+}
+
+
+class OptionSwitches(ttk.Frame):
+    """互动设置与音质增强的五个开关，投稿页与批量页共用。
+
+    两页各写一遍的话，漏掉某一个的表现是「这一页勾了没反应、那一页
+    正常」——不报错、不告警，只能等用户撞见。所以连标签文字、
+    置灰逻辑、已开启摘要都收在这里。
+    """
+
+    def __init__(
+        self, master: tk.Misc, on_change: Callable[[], None] | None = None
+    ) -> None:
+        super().__init__(master, style="Card.TFrame")
+        self.columnconfigure(0, weight=1)
+        self._on_change = on_change
+        self._vars: dict[str, tk.BooleanVar] = {}
+        self._boxes: list[ttk.Checkbutton] = []
+
+        row = FormRow(
+            self,
+            "互动设置",
+            hint="关闭后就不再有新的弹幕/评论，已发布的稿件不受影响",
+        )
+        row.grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        for column, key in enumerate(("close_danmu", "close_reply", "selection_reply")):
+            self._add(row, key, column)
+
+        row = FormRow(
+            self,
+            "音质增强",
+            hint="源文件本身得是杜比/无损音轨，否则开了也不会有效果",
+        )
+        row.grid(row=1, column=0, sticky="ew")
+        for column, key in enumerate(("dolby", "hires")):
+            self._add(row, key, column)
+
+    def _add(self, row: "FormRow", key: str, column: int) -> None:
+        var = tk.BooleanVar()
+        self._vars[key] = var
+        self._boxes.append(
+            row.add(
+                ttk.Checkbutton,
+                text=OPTION_LABELS[key],
+                variable=var,
+                command=self._changed,
+                column=column,
+            )
+        )
+
+    def _changed(self) -> None:
+        if self._on_change:
+            self._on_change()
+
+    @property
+    def flags(self) -> dict[str, bool]:
+        """五个开关的当前值，键名与配置字段一致。"""
+        return {key: var.get() for key, var in self._vars.items()}
+
+    def set_flags(self, flags: "dict[str, bool] | None" = None, **kwargs: bool) -> None:
+        """回填开关。认不出的键直接忽略——旧偏好里没有的项保持默认。"""
+        merged = dict(flags or {})
+        merged.update(kwargs)
+        for key, value in merged.items():
+            if key in self._vars:
+                self._vars[key].set(bool(value))
+
+    def summary(self) -> str:
+        """已开启项的简称串，给折叠区收起时显示用。"""
+        return "、".join(
+            OPTION_SHORT[key] for key, value in self.flags.items() if value
+        )
+
+    def set_disabled(self, disabled: bool) -> None:
+        """整组置灰。yaml 模式下统一参数不生效，但保留让用户看见自己设了什么。"""
+        state = ["disabled"] if disabled else ["!disabled"]
+        for box in self._boxes:
+            box.state(state)
 
 
 class FormRow(ttk.Frame):

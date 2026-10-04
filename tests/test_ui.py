@@ -960,3 +960,162 @@ def test_login_status_refresh_failure_does_not_raise(monkeypatch):
         assert "状态栏刷新失败" in view._log._text.get("1.0", "end")
     finally:
         root.destroy()
+
+
+@needs_display
+def test_collapsible_hides_its_body_when_closed():
+    """收起时内容真的不占位——否则「把高度还给列表」就是句空话。"""
+    import tkinter as tk
+
+    from bilibili_submit.ui.widgets import Collapsible
+
+    root = tk.Tk()
+    try:
+        box = Collapsible(root, "更多设置", "互动与音质")
+        box.pack(fill="x")
+        row = tk.Frame(box.body)
+        row.pack()
+
+        assert not box.opened
+        root.update()
+        assert str(row.winfo_ismapped()) != "1"
+
+        box.set_opened(True)
+        assert box.opened
+        root.update()
+        assert str(row.winfo_ismapped()) == "1"
+
+        # 关键一步：展开过再收起，内容必须重新藏起来。
+        # 只测「初始收起」抓不住 grid_remove 漏写——那种情况下 body
+        # 压根没被 grid 过，看着也是不占位。
+        box.set_opened(False)
+        root.update()
+        assert str(row.winfo_ismapped()) != "1"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_collapsible_click_toggles_and_fires_callback():
+    """点标题栏要能展开；重复设同一个值不重复触发回调。"""
+    import tkinter as tk
+
+    from bilibili_submit.ui.widgets import Collapsible
+
+    root = tk.Tk()
+    try:
+        seen: list[bool] = []
+        box = Collapsible(root, "更多设置", on_toggle=seen.append)
+        box.pack(fill="x")
+
+        box._on_click(None)
+        assert box.opened
+        box._on_click(None)
+        assert not box.opened
+        assert seen == [True, False]
+
+        # 已经是收起状态再设一次，不该有多余回调（否则会触发无谓的存盘）
+        box.set_opened(False)
+        assert seen == [True, False]
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_collapsible_hint_survives_when_collapsed():
+    """提示文字是收起后唯一还能看见的状态，必须读得到。"""
+    import tkinter as tk
+
+    from bilibili_submit.ui.widgets import Collapsible
+
+    root = tk.Tk()
+    try:
+        box = Collapsible(root, "更多设置")
+        box.pack()
+        assert box.hint == ""
+        box.set_hint("杜比、Hi-Res")
+        assert box.hint == "杜比、Hi-Res"
+    finally:
+        root.destroy()
+
+
+# ---------- 风格纪律 ----------
+
+
+def test_ui_modules_do_not_hardcode_colors():
+    """界面层不许出现颜色字面量，颜色只能来自 theme。
+
+    只扫颜色不扫间距：``pady=4`` 这种小数字很难和「恰好等于 PAD_XS」
+    的合法写法区分开，误报会让人直接把这条测试删掉。而颜色是真出过
+    问题的——投稿页写过硬编码间距、两页的灰深浅不一样，改主色时要
+    翻遍所有文件才知道漏了哪。
+    """
+    import re
+    from pathlib import Path
+
+    ui_dir = Path(__file__).resolve().parent.parent / "bilibili_submit" / "ui"
+    pattern = re.compile(r"#[0-9A-Fa-f]{6}\b")
+    offenders = []
+    for path in sorted(ui_dir.rglob("*.py")):
+        if path.name == "theme.py":
+            continue  # 主题自己就是颜色的来源
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if pattern.search(line):
+                offenders.append(f"{path.name}:{lineno}")
+    assert not offenders, f"界面层出现硬编码颜色，应改用 theme: {offenders}"
+
+
+def test_two_pages_use_the_same_option_labels():
+    """投稿页与批量页用同一组开关标签。
+
+    两个页面各自写一遍标签文字的话，改一个忘一个就是「这个页叫杜比、
+    那个页叫杜比音效」，用户会以为是两个不同的功能。
+    """
+    from bilibili_submit.ui.views import tasks, upload
+
+    assert tasks.OptionSwitches is upload.OptionSwitches
+
+
+@needs_display
+def test_upload_page_has_the_same_option_switches():
+    """投稿页的更多设置与批量页是同一组开关，不是另写一份。"""
+    import tkinter as tk
+
+    from bilibili_submit.ui.views.upload import UploadView
+
+    root = tk.Tk()
+    try:
+        app = type("App", (), {"ctx": None})()
+        view = UploadView(root, app)
+        flags = view._option_switches.flags
+        assert set(flags) == {
+            "close_danmu", "close_reply", "selection_reply", "dolby", "hires",
+        }
+        # 默认全关：投稿不该替用户改变互动设置
+        assert not any(flags.values())
+        assert not view._more.opened
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_upload_page_collects_the_new_options(tmp_path):
+    """投稿页勾的开关要进到 TaskConfig，否则投出去没效果。"""
+    import tkinter as tk
+
+    from bilibili_submit.ui.views.upload import UploadView
+
+    root = tk.Tk()
+    try:
+        video = tmp_path / "a.mp4"
+        video.write_bytes(b"x")
+        app = type("App", (), {"ctx": None})()
+        view = UploadView(root, app)
+        view._file_var.set(str(video))
+        view._option_switches.set_flags(dolby=True, close_danmu=True)
+        task = view._collect()
+        assert task.dolby == 1
+        assert task.up_close_danmu is True
+        assert task.hires == 0
+    finally:
+        root.destroy()

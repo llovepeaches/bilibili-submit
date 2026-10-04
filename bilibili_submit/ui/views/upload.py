@@ -18,7 +18,9 @@ from ...scheduler import RunOptions, run_task
 from ...submit import get_backend
 from .. import theme
 from ..widgets import (
+    Collapsible,
     FormRow,
+    OptionSwitches,
     LogConsole,
     PrimaryButton,
     ProgressBar,
@@ -80,7 +82,7 @@ class UploadView(ttk.Frame):
         # 视频文件：输入框 + 「选择文件…」按钮
         self._file_var = tk.StringVar()
         row = FormRow(form, "视频文件", hint="支持 mp4 / flv / mov / mkv 等常见格式")
-        row.grid(row=0, column=0, sticky="ew", pady=4)
+        row.grid(row=0, column=0, sticky="ew", pady=theme.PAD_XS)
         row.add(ttk.Entry, textvariable=self._file_var, padx=(0, theme.PAD_SM))
         row.add(
             SecondaryButton,
@@ -93,13 +95,13 @@ class UploadView(ttk.Frame):
         # 标题
         self._title_var = tk.StringVar()
         row = FormRow(form, "标题", hint="留空则自动取文件名")
-        row.grid(row=1, column=0, sticky="ew", pady=4)
+        row.grid(row=1, column=0, sticky="ew", pady=theme.PAD_XS)
         row.add(ttk.Entry, textvariable=self._title_var)
 
         # 分区
         self._tid_var = tk.StringVar()
         row = FormRow(form, "分区", hint="B 站投稿分区，决定稿件出现在哪里")
-        row.grid(row=2, column=0, sticky="ew", pady=4)
+        row.grid(row=2, column=0, sticky="ew", pady=theme.PAD_XS)
         row.add(
             ttk.Combobox,
             textvariable=self._tid_var,
@@ -111,13 +113,13 @@ class UploadView(ttk.Frame):
         # 标签
         self._tag_var = tk.StringVar()
         row = FormRow(form, "标签", hint=f"逗号分隔，最多 {MAX_TAGS} 个")
-        row.grid(row=3, column=0, sticky="ew", pady=4)
+        row.grid(row=3, column=0, sticky="ew", pady=theme.PAD_XS)
         row.add(ttk.Entry, textvariable=self._tag_var)
 
         # 简介
         self._desc_var = tk.StringVar()
         row = FormRow(form, "简介", hint="可留空")
-        row.grid(row=4, column=0, sticky="ew", pady=4)
+        row.grid(row=4, column=0, sticky="ew", pady=theme.PAD_XS)
         row.add(ttk.Entry, textvariable=self._desc_var)
 
         # 定时发布
@@ -127,8 +129,20 @@ class UploadView(ttk.Frame):
             "延时发布",
             hint="距今多少小时后发布，需大于 4；留空为立即发布",
         )
-        row.grid(row=5, column=0, sticky="ew", pady=4)
+        row.grid(row=5, column=0, sticky="ew", pady=theme.PAD_XS)
         row.add(ttk.Entry, textvariable=self._dtime_var)
+
+        # 更多设置：与批量任务页共用同一组开关，术语和默认值都一致，
+        # 免得用户在一个页里设过、換个页又要重新找一遍。
+        self._more = Collapsible(
+            form, "更多设置", "互动设置、音质增强", opened=False,
+            on_toggle=lambda _opened: self._update_more_hint(),
+        )
+        self._more.grid(row=6, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+        self._option_switches = OptionSwitches(
+            self._more.body, on_change=self._update_more_hint
+        )
+        self._option_switches.grid(row=0, column=0, sticky="ew")
 
         # 操作区
         actions = ttk.Frame(card, style="Card.TFrame")
@@ -137,12 +151,14 @@ class UploadView(ttk.Frame):
         self._submit_button = PrimaryButton(actions, "开始投稿", self._submit)
         self._submit_button.pack(side="left", padx=(0, theme.PAD_SM))
 
-        self._cancel_button = SecondaryButton(actions, "取消", self._cancel)
-        self._cancel_button.pack(side="left")
-        self._cancel_button.state(["disabled"])
-
         self._preview_button = SecondaryButton(actions, "预览（不实际投稿）", self._dry_run)
-        self._preview_button.pack(side="left", padx=(theme.PAD_SM, 0))
+        self._preview_button.pack(side="left")
+
+        # 「取消」放最后：跟批量任务页一致， destructive 类操作不该
+        # 夹在常用按钮中间被误点
+        self._cancel_button = SecondaryButton(actions, "取消", self._cancel)
+        self._cancel_button.pack(side="left", padx=(theme.PAD_SM, 0))
+        self._cancel_button.state(["disabled"])
 
         self._progress = ProgressBar(card)
         self._progress.grid(row=2, column=0, sticky="ew")
@@ -157,6 +173,10 @@ class UploadView(ttk.Frame):
 
     def refresh(self) -> None:
         """切到本页时不需要额外加载，留空实现保持接口一致。"""
+
+    def _update_more_hint(self) -> None:
+        """收起时右侧列出已开启的项——不然设了什么全看不见。"""
+        self._more.set_hint(self._option_switches.summary())
 
     def _pick_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -183,6 +203,7 @@ class UploadView(ttk.Frame):
             raise BiliError(f"视频文件不存在: {file}")
 
         tid = parse_tid(self._tid_var.get(), default=21)
+        flags = self._option_switches.flags
 
         offset_text = self._dtime_var.get().strip()
         offset = None
@@ -201,6 +222,13 @@ class UploadView(ttk.Frame):
             tag=self._tag_var.get().strip() or None,
             desc=self._desc_var.get().strip() or None,
             dtime_offset_hours=offset,
+            # flags 用的是界面上的名字（close_reply），配置字段是
+            # 接口名（up_close_reply）——这一处翻译别漏
+            up_close_reply=flags["close_reply"],
+            up_close_danmu=flags["close_danmu"],
+            up_selection_reply=flags["selection_reply"],
+            dolby=int(flags["dolby"]),
+            hires=int(flags["hires"]),
         )
 
     def _run(self, dry_run: bool) -> None:
