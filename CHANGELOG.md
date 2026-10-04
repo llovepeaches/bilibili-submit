@@ -8,6 +8,10 @@
 
 ## [未发布]
 
+## [0.2.4] - 2026-10-05
+
+分 P 的分组方式多了一种（按文件夹），投出去的标题也能改了。
+
 ### 新增
 
 - **列表新增「标题」列，双击行可改稿件标题**：之前列表只有「任务」列，
@@ -479,7 +483,8 @@
 - 配置里 `proxy` 段位写错（`upload.proxy` 而非 `account.proxy`）会静默失效，
   现改为直接报错。
 
-[未发布]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.3...HEAD
+[未发布]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.0...v0.2.1
