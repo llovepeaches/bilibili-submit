@@ -175,14 +175,14 @@ class Collapsible(ttk.Frame):
 
         # tk.Frame 而非 ttk：ttk 的 cursor 在部分平台不生效，
         # 而“这一行能点”全靠手型光标传达
-        self._header = tk.Frame(self, bg=theme.SURFACE, cursor="hand2")
+        self._header = tk.Frame(self, bg=theme.PRIMARY_SOFT, cursor="hand2")
         self._header.grid(row=0, column=0, sticky="ew")
         self._header.columnconfigure(1, weight=1)
 
         self._arrow = tk.Label(
             self._header,
             text="",
-            bg=theme.SURFACE,
+            bg=theme.PRIMARY_SOFT,
             fg=theme.TEXT_SECONDARY,
             font=theme.FONT_SMALL,
             width=2,
@@ -193,15 +193,15 @@ class Collapsible(ttk.Frame):
         tk.Label(
             self._header,
             text=title,
-            bg=theme.SURFACE,
-            fg=theme.TEXT,
+            bg=theme.PRIMARY_SOFT,
+            fg=theme.PRIMARY_DARK,
             font=theme.FONT_MEDIUM,
         ).grid(row=0, column=1, sticky="w")
 
         self._hint = tk.Label(
             self._header,
             text="",
-            bg=theme.SURFACE,
+            bg=theme.PRIMARY_SOFT,
             fg=theme.TEXT_MUTED,
             font=theme.FONT_SMALL,
         )
@@ -214,7 +214,7 @@ class Collapsible(ttk.Frame):
             tk.Label(
                 self._header,
                 text=subtitle,
-                bg=theme.SURFACE,
+                bg=theme.PRIMARY_SOFT,
                 fg=theme.TEXT_MUTED,
                 font=theme.FONT_SMALL,
             ).grid(row=1, column=1, columnspan=2, sticky="w")
@@ -261,7 +261,7 @@ class Collapsible(ttk.Frame):
     def _render(self) -> None:
         self._arrow.configure(text="▾" if self._opened else "▸")
         if self._opened:
-            self._body.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_XS, 0))
+            self._body.grid(row=1, column=0, sticky="ew")
         else:
             self._body.grid_remove()
 
@@ -516,31 +516,31 @@ class NavItem(tk.Frame):
     ) -> None:
         # highlightthickness=0 去掉默认边框，否则拼出来的块有细黑线
         super().__init__(
-            master, background=theme.SURFACE, cursor="hand2", highlightthickness=0
+            master, background=theme.NAV_BG, cursor="hand2", highlightthickness=0
         )
         self._command = command
         self._active = False
 
         self._bar = tk.Frame(
-            self, width=self.BAR_WIDTH, background=theme.SURFACE
+            self, width=self.BAR_WIDTH, background=theme.NAV_BG
         )
         self._bar.pack(side="left", fill="y")
         # 竖条宽度不能被布局压缩掉
         self._bar.pack_propagate(False)
 
-        body = tk.Frame(self, background=theme.SURFACE)
+        body = tk.Frame(self, background=theme.NAV_BG)
         body.pack(side="left", fill="both", expand=True)
 
         self._icon = tk.Label(
             body, text=icon, font=theme.FONT_MEDIUM,
-            background=theme.SURFACE, foreground=theme.TEXT_SECONDARY,
+            background=theme.NAV_BG, foreground=theme.TEXT_MUTED,
             width=2, anchor="center",
         )
         self._icon.pack(side="left", padx=(theme.PAD_MD, theme.PAD_XS))
 
         self._text = tk.Label(
             body, text=text, font=theme.FONT_MEDIUM,
-            background=theme.SURFACE, foreground=theme.TEXT,
+            background=theme.NAV_BG, foreground=theme.NAV_FG,
             anchor="w",
         )
         self._text.pack(side="left", fill="x", expand=True)
@@ -566,7 +566,7 @@ class NavItem(tk.Frame):
 
     def _on_enter(self, _event: "object" = None) -> None:
         if not self._active:
-            self._paint(theme.HOVER)
+            self._paint(theme.NAV_HOVER)
 
     def _on_leave(self, _event: "object" = None) -> None:
         self._render()
@@ -577,16 +577,16 @@ class NavItem(tk.Frame):
 
     def _render(self) -> None:
         if self._active:
-            self._paint(theme.PRIMARY_SOFT)
-            self._bar.configure(background=theme.PRIMARY)
-            self._icon.configure(foreground=theme.PRIMARY_DARK)
-            self._text.configure(foreground=theme.PRIMARY_DARK)
+            self._paint(theme.NAV_ACTIVE_BG)
+            self._bar.configure(background=theme.NAV_ACTIVE_BG)
+            self._icon.configure(foreground=theme.NAV_ACTIVE_FG)
+            self._text.configure(foreground=theme.NAV_ACTIVE_FG)
         else:
-            self._paint(theme.SURFACE)
+            self._paint(theme.NAV_BG)
             # 未选中也要占位，否则选中时整行会横向跳动
-            self._bar.configure(background=theme.SURFACE)
-            self._icon.configure(foreground=theme.TEXT_SECONDARY)
-            self._text.configure(foreground=theme.TEXT)
+            self._bar.configure(background=theme.NAV_BG)
+            self._icon.configure(foreground=theme.TEXT_MUTED)
+            self._text.configure(foreground=theme.NAV_FG)
 
 
 class SummaryBar(ttk.Frame):

@@ -3,9 +3,9 @@
 组件里**不允许**出现颜色或尺寸字面量——改一个主色不该翻遍所有文件。
 需要新颜色就在这里加，并给出用途注释。
 
-配色思路：B 站品牌粉作主色点缀，其余走中性灰。
-粉色只用在「可点击/当前选中/进行中」这类需要引导注意的地方，
-大面积铺粉会显得廉价且容易视觉疲劳。
+配色思路：靛蓝作主色，侧边导航用深色 slate，内容区走白底浅灰。
+整体偏向现代、克制的工具感，减少视觉疲劳；彩色只留在需要引导
+注意的地方（主按钮、当前选中、状态标签）。
 """
 
 from __future__ import annotations
@@ -18,26 +18,33 @@ if TYPE_CHECKING:  # 只为类型标注，运行期不需要 tkinter
 
 # ---------- 颜色 ----------
 
-PRIMARY = "#FB7299"           # B 站粉：主按钮、选中态、进行中
-PRIMARY_DARK = "#E5658A"      # 主按钮按下/悬停
-PRIMARY_SOFT = "#FFF0F5"      # 选中行底色、主色系浅底
-PRIMARY_RING = "#FBB8CE"      # 输入框聚焦环（比主色浅，不至于抢眼）
+PRIMARY = "#4F46E5"           # 靛蓝：主按钮、当前选中、进行中
+PRIMARY_DARK = "#4338CA"      # 主按钮按下/悬停
+PRIMARY_SOFT = "#EEF2FF"      # 选中行底色、主色系浅底
+PRIMARY_RING = "#C7D2FE"      # 输入框聚焦环（比主色浅，不至于抢眼）
 
-BG = "#F4F5F7"                # 窗口底色
+BG = "#F8FAFC"                # 窗口底色
 SURFACE = "#FFFFFF"           # 卡片、输入区
-SURFACE_ALT = "#F7F8FA"       # 表头、交替行
-HOVER = "#EFF1F4"             # 悬停底色
+SURFACE_ALT = "#F1F5F9"       # 表头、交替行
+HOVER = "#F1F5F9"             # 悬停底色
 
-TEXT = "#1D2129"              # 主文字
-TEXT_SECONDARY = "#61666D"    # 说明文字、标签
-TEXT_MUTED = "#9499A0"        # 占位符、禁用态
+TEXT = "#0F172A"              # 主文字
+TEXT_SECONDARY = "#64748B"    # 说明文字、标签
+TEXT_MUTED = "#94A3B8"        # 占位符、禁用态
 TEXT_ON_PRIMARY = "#FFFFFF"   # 主按钮上的文字
 
-BORDER = "#E5E7EB"            # 常规分隔线
-BORDER_STRONG = "#D0D4DA"     # 输入框边框
+BORDER = "#E2E8F0"            # 常规分隔线
+BORDER_STRONG = "#CBD5E1"     # 输入框边框
 
-LOG_BG = "#1F2023"            # 日志区深色底
-LOG_TEXT = "#D6D8DA"
+#: 深色侧边导航栏
+NAV_BG = "#1E293B"            # 导航栏背景
+NAV_FG = "#F1F5F9"            # 导航文字
+NAV_HOVER = "#334155"         # 导航悬停
+NAV_ACTIVE_BG = PRIMARY       # 导航选中背景
+NAV_ACTIVE_FG = "#FFFFFF"     # 导航选中文字
+
+LOG_BG = "#0F172A"            # 日志区深色底
+LOG_TEXT = "#CBD5E1"
 
 #: 语义色：**成对**给出前景与浅底。
 #:
@@ -46,13 +53,13 @@ LOG_TEXT = "#D6D8DA"
 #: 又不打断阅读。语义名同时也是 Treeview 的 tag 名，见
 #: :func:`apply_tree_tags`。
 TONES: "dict[str, tuple[str, str]]" = {
-    "ok": ("#0E9F6E", "#E8F8F0"),       # 成功
-    "warn": ("#C4700A", "#FFF5E6"),     # 警告（ffmpeg 缺失等）
-    "error": ("#D93A34", "#FDECEC"),    # 失败
-    "busy": ("#E5658A", "#FFF0F5"),     # 进行中
-    "missing": ("#C4700A", "#FFF5E6"),  # 文件缺失
-    "info": ("#4E5969", "#F2F3F5"),     # 中性信息
-    "idle": ("#9499A0", "#FFFFFF"),     # 待处理：不给底色，保持安静
+    "ok": ("#059669", "#ECFDF5"),       # 成功
+    "warn": ("#D97706", "#FFFBEB"),     # 警告（ffmpeg 缺失等）
+    "error": ("#DC2626", "#FEF2F2"),    # 失败
+    "busy": (PRIMARY, PRIMARY_SOFT),     # 进行中
+    "missing": ("#D97706", "#FFFBEB"),  # 文件缺失
+    "info": ("#475569", "#F1F5F9"),     # 中性信息
+    "idle": ("#94A3B8", "#FFFFFF"),     # 待处理：不给底色，保持安静
 }
 
 # 旧名的兼容别名：新代码请用 :data:`TONES`（成对取色），
@@ -148,6 +155,24 @@ def apply(style: "ttk.Style") -> None:
     style.configure("Card.TFrame", background=SURFACE, relief="flat")
     style.configure("Surface.TFrame", background=SURFACE)
 
+    # 侧边导航专用
+    style.configure("Nav.TFrame", background=NAV_BG)
+    style.configure(
+        "Nav.TButton",
+        background=NAV_BG,
+        foreground=NAV_FG,
+        borderwidth=0,
+        relief="flat",
+        anchor="w",
+        padding=(PAD_LG, PAD_SM + 2),
+        font=FONT_MEDIUM,
+    )
+    style.map(
+        "Nav.TButton",
+        background=[("selected", NAV_ACTIVE_BG), ("active", NAV_HOVER)],
+        foreground=[("selected", NAV_ACTIVE_FG), ("active", NAV_FG)],
+    )
+
     # 文字
     style.configure("TLabel", background=BG, foreground=TEXT, font=FONT_NORMAL)
     style.configure("Card.TLabel", background=SURFACE, foreground=TEXT)
@@ -158,17 +183,19 @@ def apply(style: "ttk.Style") -> None:
         "Card.Secondary.TLabel", background=SURFACE, foreground=TEXT_SECONDARY,
         font=FONT_SMALL,
     )
+    style.configure("Nav.TLabel", background=NAV_BG, foreground=NAV_FG)
+    style.configure("Nav.Secondary.TLabel", background=NAV_BG, foreground=TEXT_MUTED)
     style.configure("Title.TLabel", background=SURFACE, foreground=TEXT, font=FONT_TITLE)
     style.configure("Heading.TLabel", background=SURFACE, foreground=TEXT, font=FONT_LARGE)
 
-    # 按钮：主按钮用品牌粉，次按钮描边
+    # 按钮：主按钮填充主色，次按钮白底主色边框
     style.configure(
         "Primary.TButton",
         background=PRIMARY,
         foreground=TEXT_ON_PRIMARY,
         borderwidth=0,
         font=FONT_MEDIUM,
-        padding=(PAD_LG, PAD_SM),
+        padding=(PAD_LG, PAD_SM + 2),
     )
     style.map(
         "Primary.TButton",
@@ -182,22 +209,23 @@ def apply(style: "ttk.Style") -> None:
         borderwidth=1,
         relief="solid",
         font=FONT_NORMAL,
-        padding=(PAD_MD, PAD_SM - 2),
+        padding=(PAD_MD, PAD_SM),
     )
     style.map(
         "Secondary.TButton",
         background=[("active", PRIMARY_SOFT)],
-        bordercolor=[("active", PRIMARY)],
+        foreground=[("active", PRIMARY_DARK)],
+        bordercolor=[("active", PRIMARY), ("focus", PRIMARY)],
     )
 
-    # 输入框：聚焦时给一圈浅粉，比默认的细蓝框更容易注意到
+    # 输入框：白底灰边，聚焦时给一圈浅靛蓝
     style.configure(
         "TEntry",
         fieldbackground=SURFACE,
         foreground=TEXT,
         bordercolor=BORDER_STRONG,
         lightcolor=BORDER_STRONG,
-        padding=(PAD_SM + 2, PAD_XS + 3),
+        padding=(PAD_SM + 2, PAD_XS + 4),
     )
     style.map("TEntry", bordercolor=[("focus", PRIMARY)],
               lightcolor=[("focus", PRIMARY_RING)])
@@ -223,8 +251,12 @@ def apply(style: "ttk.Style") -> None:
         fieldbackground=SURFACE,
         background=SURFACE,
         foreground=TEXT,
+        bordercolor=BORDER_STRONG,
+        lightcolor=BORDER_STRONG,
         padding=(PAD_SM, PAD_XS + 2),
     )
+    style.map("TCombobox", bordercolor=[("focus", PRIMARY)],
+              lightcolor=[("focus", PRIMARY_RING)])
 
     # 进度条
     style.configure(
@@ -232,7 +264,7 @@ def apply(style: "ttk.Style") -> None:
         thickness=6,
     )
 
-    # 列表（Treeview）：行高放宽到 32，表头去掉立体边框更像现代表格
+    # 列表（Treeview）：行高放宽到 34，表头去掉立体边框更像现代表格
     style.configure(
         "Treeview",
         background=SURFACE,
@@ -250,8 +282,8 @@ def apply(style: "ttk.Style") -> None:
         relief="flat",
         padding=(PAD_SM, PAD_XS + 2),
     )
-    style.map("Treeview", background=[("selected", PRIMARY_SOFT)],
-              foreground=[("selected", TEXT)])
+    style.map("Treeview", background=[("selected", PRIMARY)],
+              foreground=[("selected", TEXT_ON_PRIMARY)])
 
     # 分隔线
     style.configure("TSeparator", background=BORDER)

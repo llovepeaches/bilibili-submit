@@ -118,7 +118,7 @@ class App(ttk.Frame):
     }
 
     def _build_nav(self) -> None:
-        nav = ttk.Frame(self, style="Surface.TFrame", width=theme.NAV_WIDTH)
+        nav = ttk.Frame(self, style="Nav.TFrame", width=theme.NAV_WIDTH)
         nav.grid(row=0, column=0, sticky="nsew")
         nav.grid_propagate(False)
         nav.columnconfigure(0, weight=1)
@@ -150,15 +150,15 @@ class App(ttk.Frame):
         ttk.Label(
             nav,
             text=f"v{__version__}",
-            style="Secondary.TLabel",
+            style="Nav.Secondary.TLabel",
         ).grid(row=100, column=0, sticky="sw", padx=theme.PAD_LG, pady=theme.PAD_MD)
 
     def _build_brand(self, nav: tk.Misc) -> None:
-        """品牌区：粉色方块 + 应用名。
+        """品牌区：主色方块 + 应用名。
 
         导航顶部有个视觉锚点，整块侧栏才不像一串裸按钮。
         """
-        brand = ttk.Frame(nav, style="Surface.TFrame")
+        brand = ttk.Frame(nav, style="Nav.TFrame")
         brand.grid(row=0, column=0, sticky="ew", pady=(theme.PAD_LG, theme.PAD_MD))
         brand.columnconfigure(1, weight=1)
 
@@ -170,15 +170,15 @@ class App(ttk.Frame):
             background=theme.PRIMARY, foreground=theme.TEXT_ON_PRIMARY,
         ).pack(expand=True)
 
-        text_box = ttk.Frame(brand, style="Surface.TFrame")
+        text_box = ttk.Frame(brand, style="Nav.TFrame")
         text_box.grid(row=0, column=1, sticky="w")
         tk.Label(
             text_box, text="哔哩投稿", font=theme.FONT_MEDIUM,
-            background=theme.SURFACE, foreground=theme.TEXT,
+            background=theme.NAV_BG, foreground=theme.NAV_FG,
         ).pack(anchor="w")
         tk.Label(
             text_box, text="自动投稿工具", font=theme.FONT_SMALL,
-            background=theme.SURFACE, foreground=theme.TEXT_MUTED,
+            background=theme.NAV_BG, foreground=theme.TEXT_MUTED,
         ).pack(anchor="w")
 
     def _build_content(self) -> None:
@@ -382,6 +382,8 @@ def launch() -> int:
     root.title(f"哔哩哔哩自动投稿程序 {__version__}")
     root.geometry(f"{theme.DEFAULT_WIDTH}x{theme.DEFAULT_HEIGHT}")
     root.minsize(theme.MIN_WIDTH, theme.MIN_HEIGHT)
+    # 窗口底色跟着主题走，避免默认灰和导航栏/内容区接不上
+    root.configure(background=theme.BG)
 
     style = ttk.Style(root)
     try:
@@ -416,18 +418,6 @@ def _center(root: tk.Tk) -> None:
 
 def _configure_nav_style(style: ttk.Style) -> None:
     """导航按钮样式：选中时加粉色底和左侧竖条。"""
-    style.configure(
-        "Nav.TButton",
-        background=theme.SURFACE,
-        foreground=theme.TEXT,
-        borderwidth=0,
-        relief="flat",
-        anchor="w",
-        padding=(theme.PAD_LG, theme.PAD_SM + 2),
-        font=theme.FONT_MEDIUM,
-    )
-    style.map(
-        "Nav.TButton",
-        background=[("selected", theme.PRIMARY_SOFT), ("active", theme.SURFACE_ALT)],
-        foreground=[("selected", theme.PRIMARY_DARK)],
-    )
+    # Nav.TButton 已在 theme.apply 里统一配置；
+    # 这里只补一个缺省 state 的边框色，避免某些 ttk 主题画出默认黑边。
+    style.configure("Nav.TButton", bordercolor=theme.NAV_BG)
