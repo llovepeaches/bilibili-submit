@@ -55,19 +55,6 @@ TONES: "dict[str, tuple[str, str]]" = {
     "idle": ("#9499A0", "#FFFFFF"),     # 待处理：不给底色，保持安静
 }
 
-#: 旧代码里的单色映射，仍供 :class:`~.widgets.StatusPill` 等处取前景色
-_STATUS_COLORS = {
-    "ok": "#0E9F6E",
-    "success": "#0E9F6E",
-    "warn": "#C4700A",
-    "warning": "#C4700A",
-    "error": "#D93A34",
-    "danger": "#D93A34",
-    "busy": PRIMARY,
-    "info": TEXT_SECONDARY,
-    "idle": TEXT_MUTED,
-}
-
 # 旧名的兼容别名：新代码请用 :data:`TONES`（成对取色），
 # 这三个只保留给还没迁移的调用点，值取自 TONES 以免两处漂移。
 SUCCESS = TONES["ok"][0]
@@ -78,11 +65,6 @@ DANGER = TONES["error"][0]
 def tone(name: str) -> tuple[str, str]:
     """取语义色的 ``(前景, 浅底)``，未知名字退到 ``idle``。"""
     return TONES.get(name, TONES["idle"])
-
-
-def tone_fg(name: str) -> str:
-    """只取语义色的前景色。"""
-    return tone(name)[0]
 
 
 def apply_tree_tags(tree: "object") -> None:

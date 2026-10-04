@@ -164,6 +164,103 @@ def test_worker_cancel_is_cooperative():
     assert hasattr(Worker, "run")
 
 
+def test_safe_after_swallows_tcl_error_on_register():
+    """窗口销毁后再注册 ``after`` 会抛 TclError，必须静默跳过。
+
+    只包回调不够：异常从**注册**那一行就漏出去了，而它发生在工作
+    线程里，一抛整条线程就死——收不到 on_done 也收不到 on_error，
+    界面会永远停在「执行中」。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.workers import safe_after
+
+    class _Dead:
+        """假装窗口已销毁。"""
+
+        def after(self, *_a, **_k):
+            raise tk.TclError("invalid command name 'after'")
+
+    assert safe_after(_Dead(), 0, lambda: None) == ""
+
+
+def test_safe_after_swallows_runtime_error_on_register():
+    """主线程不在事件循环里时 ``after`` 抛 RuntimeError，同样要吞掉。"""
+    from bilibili_submit.ui.workers import safe_after
+
+    class _NoLoop:
+        def after(self, *_a, **_k):
+            raise RuntimeError("main thread is not in main loop")
+
+    assert safe_after(_NoLoop(), 0, lambda: None) == ""
+
+
+def test_safe_after_swallows_tcl_error_in_callback():
+    """回调执行时窗口已被销毁，也要静默跳过。"""
+    import tkinter as tk
+
+    from bilibili_submit.ui.workers import safe_after
+
+    fired = []
+
+    class _Root:
+        def after(self, _delay, fn):
+            fired.append(fn)
+            return "id"
+
+    def boom():
+        raise tk.TclError("invalid command name")
+
+    assert safe_after(_Root(), 0, boom) == "id"
+    fired[0]()          # 不应抛异常
+
+
+def test_safe_after_still_runs_callback():
+    """正常路径不能被加固带偏——回调必须真的执行，参数要原样传。"""
+    from bilibili_submit.ui.workers import safe_after
+
+    seen = []
+    fired = []
+
+    class _Root:
+        def after(self, delay, fn):
+            fired.append((delay, fn))
+            return "id"
+
+    assert safe_after(_Root(), 7, lambda a, b: seen.append((a, b)), 1, "x") == "id"
+    delay, fn = fired[0]
+    assert delay == 7
+    fn()
+    assert seen == [(1, "x")]
+
+
+def test_worker_survives_dead_window():
+    """窗口销毁后 Worker 的上报不应让线程崩掉。
+
+    关窗口时正在跑的任务会继续往回发进度/结果，这些上报必须安全地
+    被丢弃，而不是把工作线程炸掉（那会留下一个永远转圈的假状态）。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.workers import Worker
+
+    class _Dead:
+        def after(self, *_a, **_k):
+            raise tk.TclError("invalid command name 'after'")
+
+    errors = []
+    worker = Worker(_Dead())
+    worker.run(
+        lambda report, is_cancelled: report("进度"),
+        on_progress=lambda m: None,
+        on_done=lambda v: None,
+        on_error=errors.append,
+    )
+    if worker._thread is not None:
+        worker._thread.join(3)
+        assert not worker._thread.is_alive(), "线程应该正常退出，而不是崩掉"
+
+
 # ---------- 需要 Tk ----------
 
 

@@ -40,14 +40,22 @@ class Event:
 
     Attributes:
         kind: ``"start"`` 开始执行某项；``"done"`` 某项结束。
-        index: 当前项下标（从 0 开始）。
-        total: 总项数，用于算进度百分比。
+        index: 当前项在**完整列表**里的下标（从 0 开始），用于定位行。
+        position: 当前项在**本次执行**里是第几个（从 1 开始），用于算进度。
+        total: 本次执行的总项数，用于算进度百分比。
         status: ``"done"`` 时该项的结果文案（成功 / 失败原因）。
         error: 失败原因全文。状态列放不下，双击时弹窗看它。
+
+    .. important::
+       ``index`` 和 ``position`` **不能混用**。用户可能只勾选了下标
+       3 和 5 的两项，此时 ``total=2`` 而 ``index`` 是 3 和 5——
+       拿 ``index + 1`` 除以 ``total`` 会算出 200%，进度条直接顶满，
+       状态栏还会显示「6/2」。凡是算进度的地方一律用 :attr:`position`。
     """
 
     kind: str
     index: int = 0
+    position: int = 0
     total: int = 0
     status: str = ""
     error: str = ""
@@ -60,6 +68,17 @@ class Event:
     def succeeded(self) -> bool:
         """该项是否成功。失败时 ``status`` 是错误文案。"""
         return self.kind == "done" and not self.error
+
+    @property
+    def percent(self) -> float:
+        """完成百分比（0-100），供进度条直接用。
+
+        ``position`` 为 0（调用方没给）时退回 0，而不是拿 ``index`` 顶替——
+        宁可进度条不动，也不要给一个错误的百分比。
+        """
+        if self.position <= 0 or self.total <= 0:
+            return 0.0
+        return min(100.0, self.position / self.total * 100)
 
 
 #: ``report`` 接受的参数：一行日志，或一个结构化事件
@@ -125,20 +144,20 @@ class Worker(Generic[T]):
         def report(message: Report) -> None:
             # 工作线程 → 主线程：用 after 排队，不直接调 UI
             if on_progress:
-                self._root.after(0, lambda m=message: on_progress(m))
+                safe_after(self._root, 0, on_progress, message)
 
         def wrapped() -> None:
             try:
                 value = task(report, self._cancel.is_set)
             # 注意：except 块结束时 Python 会 del 掉 exc（避免循环引用），
             # 而 after 是延迟执行的，直接闭包引用 exc 会拿到未定义名。
-            # 用默认参数把值绑进 lambda，和后面的 i=index 是同一个道理。
+            # safe_after 用参数传值（而不是闭包），顺带解决了这个问题。
             except BaseException as exc:  # noqa: BLE001 - 要兜住所有异常送回主线程
                 if on_error:
-                    self._root.after(0, lambda e=exc: on_error(e))
+                    safe_after(self._root, 0, on_error, exc)
                 return
             if on_done:
-                self._root.after(0, lambda: on_done(value))
+                safe_after(self._root, 0, on_done, value)
 
         self._thread = threading.Thread(target=wrapped, daemon=True)
         self._thread.start()
@@ -147,22 +166,30 @@ class Worker(Generic[T]):
         """请求取消。只是置标志位，任务要自己周期性检查。"""
         self._cancel.set()
 
-    def wait(self, timeout: float = 2.0) -> None:
-        """等待线程结束，超时就放弃（守护线程不会挡住进程退出）。"""
-        if self._thread is not None:
-            self._thread.join(timeout)
-
 
 def safe_after(root: tk.Misc, delay_ms: int, fn: Callable[..., Any], *args: Any) -> str:
-    """注册一个延时回调，窗口已销毁时静默跳过。
+    """注册一个延时回调，**注册和执行**都不认在工作线程上抛异常。
 
-    tkinter 在窗口销毁后仍执行排队的 ``after`` 会抛
-    ``TclError: invalid command name``，关闭窗口时很容易踩到。
+    需要挡的两种情况：
+
+    - ``tk.TclError``：窗口销毁后排队的 ``after`` 已被 Tcl 清掉，
+      再注册或再执行都会炸。关窗口时很容易踩到。
+    - ``RuntimeError: main thread is not in main loop``：主线程还没进
+      事件循环（或已经退出）时，``after`` 注册不到 Tcl 的命令表上。
+
+    .. important::
+       ``try`` 必须包住 :meth:`after` **注册本身**，而不只是回调。
+       只包回调的话异常从注册那一行就漏出去了——而它几乎总是发生在
+       工作线程里，一抛就是整条线程挂掉：既收不到 ``on_done`` 也收不到
+       ``on_error``，界面会永远停在「执行中」，用户既不能重试也不能取消。
     """
     def wrapped() -> None:
         try:
             fn(*args)
-        except tk.TclError:
-            pass  # 窗口已关闭，回调没有意义了
+        except (tk.TclError, RuntimeError):
+            pass  # 窗口已关闭或事件循环已停，回调没有意义了
 
-    return root.after(delay_ms, wrapped)
+    try:
+        return root.after(delay_ms, wrapped)
+    except (tk.TclError, RuntimeError):
+        return ""

@@ -39,9 +39,9 @@ DEFAULT_TIMEOUT = 180
 class _PendingQrCode:
     """内部哨兵，借进度通道把「二维码已就绪」送回主线程。
 
-    :attr:`Worker.report` 只接受 ``str``，而二维码 URL 得等拿到了才知道，
-    没法预先拼进日志文案。这里用哨兵对象当信号，主线程收到后再从
-    :attr:`LoginView._qr_url` 取真正的 URL。
+    :attr:`~..workers.Worker.run` 的 ``report`` 接受 ``str | Event``，
+    但二维码 URL 得等拿到了才知道，没法预先拼进日志文案。这里用哨兵
+    对象当信号，主线程收到后再从 :attr:`LoginView._qr_url` 取真正的 URL。
     """
 
     __slots__ = ()

@@ -51,6 +51,20 @@ def test_event_flags():
     assert Event("done").done
 
 
+def test_event_percent_uses_position_not_index():
+    """进度百分比只能由 ``position`` 算。
+
+    这是个真实踩过的坑：用户只勾了下标 3 和 5 的两项，此时
+    ``total=2`` 而 ``index`` 是 3 和 5——拿 ``index + 1`` 当完成数会算出
+    200% 和 300%，进度条第一项就顶满，状态栏还会显示「6/2」。
+    """
+    assert Event("done", index=3, position=1, total=2).percent == pytest.approx(50)
+    assert Event("done", index=5, position=2, total=2).percent == pytest.approx(100)
+    # position 没给时宁可算 0，也不拿 index 顶替——错误的百分比比没有更糟
+    assert Event("done", index=3, total=2).percent == 0.0
+    assert Event("done", position=1, total=0).percent == 0.0
+
+
 def test_tones_cover_task_states():
     """任务页用到的每种状态都得有对应的语义色，否则会退回默认的灰。"""
     from bilibili_submit.ui import theme
@@ -107,6 +121,7 @@ def _build(root):
 
 def _write_config(tmp_path: Path, entries: list[tuple[str, str]]) -> str:
     """写一份配置；``entries`` 是 (任务名, 文件路径) 列表。"""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     lines = [
         "defaults:",
         "  tid: 21",
@@ -276,12 +291,21 @@ def test_event_updates_row_progress_and_stores_error(tmp_path):
         view._path_var.set(cfg)
         view._load()
 
-        view._on_progress(Event("start", index=0, total=2))
+        view._on_progress(Event("start", index=0, position=1, total=2))
         assert view._tree.item("0", "values")[-1] == "进行中"
         assert view._tree.item("0", "tags") == ("busy",)
 
         long = "601 投稿过于频繁，等待 30 分钟后重试，后面还有更长的解释"
-        view._on_progress(Event("done", index=0, total=2, status=f"失败：{long}", error=long))
+        view._on_progress(
+            Event(
+                "done",
+                index=0,
+                position=1,
+                total=2,
+                status=f"失败：{long}",
+                error=long,
+            )
+        )
 
         shown = view._tree.item("0", "values")[-1]
         assert shown.endswith("…") and len(shown) <= 18, f"状态列没截断：{shown!r}"
@@ -433,5 +457,252 @@ def test_do_run_reports_events_instead_of_touching_tk(tmp_path, monkeypatch):
         assert len(events) == 4, f"应有 2 组 start/done，实际 {len(events)}"
         assert [e.kind for e in events] == ["start", "done", "start", "done"]
         assert not touched, f"_do_run 里不该直接调 after：{touched}"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_do_run_reports_position_not_index(tmp_path, monkeypatch):
+    """非连续勾选时，Event 的 position 必须是「第几个」而不是下标。
+
+    下标 3 和 5 都被勾选时（total=2），若 position 填成 index，
+    进度会算出 200% / 300%，状态栏还会显示「4/2」。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.scheduler import TaskOutcome
+    from bilibili_submit.ui.views import tasks as tasks_mod
+
+    real = _make_video(tmp_path, "real.mp4")
+    cfg = _write_config(
+        tmp_path,
+        [("A", real), ("B", real), ("C", real), ("D", real), ("E", real), ("F", real)],
+    )
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root)
+        view._path_var.set(cfg)
+        view._load()
+
+        monkeypatch.setattr(
+            tasks_mod, "run_task",
+            lambda *a, **k: TaskOutcome(name="A", success=True, bvid="BV1", url="u"),
+        )
+        monkeypatch.setattr(tasks_mod, "get_backend", lambda *a, **k: object())
+        monkeypatch.setattr(
+            type(view.app.ctx), "client", lambda self, need_login=True: object()
+        )
+
+        seen: list[object] = []
+        view._do_run(seen.append, lambda: False, [3, 5])
+        events = [m for m in seen if isinstance(m, Event) and m.done]
+
+        assert [e.position for e in events] == [1, 2]
+        assert [e.total for e in events] == [2, 2]
+        assert [round(e.percent) for e in events] == [50, 100]
+        assert [round(e.index) for e in events] == [3, 5], "index 仍应是真实下标"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_progress_bar_never_exceeds_total(tmp_path):
+    """端到端验证：非连续勾选下，进度条不会第一项就顶满。"""
+    import tkinter as tk
+
+    real = _make_video(tmp_path, "real.mp4")
+    cfg = _write_config(
+        tmp_path,
+        [("A", real), ("B", real), ("C", real), ("D", real), ("E", real), ("F", real)],
+    )
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root)
+        view._path_var.set(cfg)
+        view._load()
+
+        view._on_progress(Event("done", index=3, position=1, total=2, status="成功"))
+        assert view._progress._bar.cget("value") == pytest.approx(50, abs=0.5)
+        assert view.app._status_task.cget("text") == "1/2"
+
+        view._on_progress(Event("done", index=5, position=2, total=2, status="成功"))
+        assert view._progress._bar.cget("value") == pytest.approx(100, abs=0.5)
+        assert view.app._status_task.cget("text") == "2/2"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_retry_button_stays_disabled_while_running(tmp_path):
+    """运行中出现失败项时，「重试失败项」不能被解开。
+
+    ``_mark`` 每完成一项都会刷新汇总，如果汇总不看运行态，
+    第一个失败项一出现按钮就变成可点，而 ``_run`` 会因「已有任务在
+    运行」直接 return——成了按了没反应的假按钮。
+    """
+    import tkinter as tk
+
+    real = _make_video(tmp_path, "real.mp4")
+    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root)
+        view._path_var.set(cfg)
+        view._load()
+
+        view._set_busy(True)
+        assert "disabled" in view._retry_button.state()
+
+        view._mark(0, "失败：x", "error")
+        view._mark(1, "失败：y", "error")
+        assert "disabled" in view._retry_button.state(), (
+            "运行中不该解锁重试按钮"
+        )
+
+        view._set_busy(False)
+        assert "disabled" not in view._retry_button.state(), "结束后应可重试"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_selection_locked_while_running(tmp_path):
+    """执行期间不能改勾选，否则界面与实际执行的列表会静默脱节。"""
+    import tkinter as tk
+
+    real = _make_video(tmp_path, "real.mp4")
+    cfg = _write_config(tmp_path, [("A", real), ("B", real), ("C", real)])
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root)
+        view._path_var.set(cfg)
+        view._load()
+        view._mark(1, "失败：x", "error")
+        view._set_busy(True)
+
+        before = view._selected_indexes()
+        assert before == [0, 1, 2]
+
+        # 每一步都断言：只在最后断言会被「先清空再全选」这种
+        # 恰好抵消的操作掩盖掉，看不出中间的改动。
+        view._select_failed()
+        assert view._selected_indexes() == before, "运行中「只选失败项」不该生效"
+
+        view._select_none()
+        assert view._selected_indexes() == before, "运行中「全不选」不该生效"
+
+        view._toggle("2")
+        assert view._selected_indexes() == before, "运行中点勾选列不该生效"
+
+        # 快捷按钮也应该被禁用，界面上不给按的机会
+        for button in view._summary._buttons:
+            assert "disabled" in button.state()
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_load_blocked_while_running(tmp_path):
+    """执行途中换配置会换掉工作线程正在读的任务列表，必须挡住。"""
+    import tkinter as tk
+
+    real = _make_video(tmp_path, "real.mp4")
+    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
+    other = _write_config(tmp_path.parent / "other", [("X", real)])
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root)
+        view._path_var.set(cfg)
+        view._load()
+        tasks_before = list(view._tasks)
+
+        view._set_busy(True)
+        view._path_var.set(other)
+        view._log.clear()
+        view._load()
+
+        assert view._tasks == tasks_before, "运行中不该换掉任务列表"
+        assert "正在执行任务" in view._log._text.get("1.0", "end")
+        assert "disabled" in view._load_button.state()
+        assert "disabled" in view._pick_button.state()
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_error_reverts_busy_rows(tmp_path):
+    """非取消的异常也要收尾，否则行永远停在「进行中」。
+
+    cookie 过期时 ``_do_run`` 抛的是 ``NotLoggedInError``，不是
+    ``Cancelled``——原先只有取消路径归位，异常路径直接把界面留在
+    「进行中」，进度条也不复位，看着像还在跑。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.exceptions import NotLoggedInError
+
+    real = _make_video(tmp_path, "real.mp4")
+    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
+
+    root = tk.Tk()
+    try:
+        app, view = _build(root)
+        view._path_var.set(cfg)
+        view._load()
+        view._log.clear()
+
+        view._mark(0, "进行中", "busy")
+        view._on_error(NotLoggedInError("cookie 失效"))
+
+        assert view._tree.item("0", "values")[-1] == "待投稿"
+        assert view._tree.item("0", "tags") == ("idle",)
+        assert "已中断" in view._progress._label.cget("text")
+        assert "登录态已失效" in view._log._text.get("1.0", "end")
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_retry_failed_keeps_selection_when_not_logged_in(tmp_path):
+    """未登录时点重试，不能把用户原有的勾选覆盖掉。
+
+    ``_retry_failed`` 原来是「先只选失败项、再跑」——``_run`` 检查登录态
+    后直接 return，用户那一堆勾选已经被改掉了。
+    """
+    import tkinter as tk
+
+    real = _make_video(tmp_path, "real.mp4")
+    cfg = _write_config(tmp_path, [("A", real), ("B", real), ("C", real)])
+
+    root = tk.Tk()
+    try:
+        app, view = _build(root)
+        view._path_var.set(cfg)
+        view._load()
+        view._mark(0, "失败：x", "error")
+        view._mark(1, "成功", "ok")
+        view._mark(2, "失败：y", "error")
+        before = view._selected_indexes()
+        assert before == [0, 1, 2]
+
+        # 换成一个未登录的 ctx，模拟 cookie 失效
+        real_ctx = app.ctx
+
+        class _LoggedOut:
+            logged_in = False
+
+        view.app.ctx = _LoggedOut()
+        try:
+            view._log.clear()
+            view._retry_failed()
+            assert view._selected_indexes() == before, "勾选不该被改掉"
+            assert "尚未登录" in view._log._text.get("1.0", "end")
+        finally:
+            view.app.ctx = real_ctx
     finally:
         root.destroy()

@@ -11,7 +11,7 @@ import tkinter as tk
 
 from . import theme
 
-__all__ = ["qr_matrix", "draw_qr", "qr_modules"]
+__all__ = ["qr_matrix", "draw_qr"]
 
 
 def qr_matrix(url: str) -> list[list[bool]]:
@@ -34,11 +34,6 @@ def qr_matrix(url: str) -> list[list[bool]]:
     qr.add_data(url)
     qr.make(fit=True)
     return [[bool(cell) for cell in row] for row in qr.get_matrix()]
-
-
-def qr_modules(url: str) -> int:
-    """二维码一边的模块数（含 quiet zone），用于算格子像素。"""
-    return len(qr_matrix(url))
 
 
 def draw_qr(

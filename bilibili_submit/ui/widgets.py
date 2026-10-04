@@ -278,7 +278,9 @@ class NavItem(tk.Frame):
        不接受 ``background`` 选项，会报 ``unknown option``）。
        这里底色是动态变化的，tk.Frame 直接得多。
 
-    对外表现得像 ``ttk.Button``：有 ``state()``，可整体点击。
+    对外接口只有 :meth:`set_active`——不要给它补 ``state()`` 之类的
+    ``ttk.Button`` 兼容层：导航项从来不参与 ``state`` 机制，
+    硬凑一个空实现只会让人误以为它支持禁用。
     """
 
     BAR_WIDTH = 3
@@ -333,14 +335,6 @@ class NavItem(tk.Frame):
         """切换选中态。"""
         self._active = active
         self._render()
-
-    def state(self, _spec: "object" = None) -> None:
-        """兼容 ``ttk.Button.state()`` 的调用签名。
-
-        :class:`~.app.App` 原来存的是 Button 并调 ``state(["selected"])``，
-        换成 NavItem 后不想改那套逻辑，所以留个空实现。
-        """
-        return None
 
     # ---------- 内部 ----------
 
@@ -400,16 +394,28 @@ class SummaryBar(ttk.Frame):
 
         self._actions = ttk.Frame(self, style="Card.TFrame")
         self._actions.grid(row=0, column=1, sticky="e")
+        self._buttons: list[ttk.Button] = []
 
     def set_stats(self, text: str) -> None:
         self._stats.configure(text=text)
 
-    def add_action(self, text: str, command: Callable[[], None]) -> None:
-        """往右侧追加一个次按钮。"""
-        count = len(self._actions.winfo_children())
-        SecondaryButton(
-            self._actions, text, command
-        ).grid(row=0, column=count, padx=(theme.PAD_XS, 0))
+    def add_action(self, text: str, command: Callable[[], None]) -> ttk.Button:
+        """往右侧追加一个次按钮，返回该按钮。
+
+        返回出来是为了让调用方在运行态统一开关——这些按钮点下去会
+        改变任务选择，而执行期间的选择是不可改的（见
+        ``TasksView._editable``）。
+        """
+        button = SecondaryButton(self._actions, text, command)
+        button.grid(row=0, column=len(self._buttons), padx=(theme.PAD_XS, 0))
+        self._buttons.append(button)
+        return button
+
+    def set_actions_enabled(self, enabled: bool) -> None:
+        """统一启用/禁用所有快捷按钮。"""
+        state = ["!disabled"] if enabled else ["disabled"]
+        for button in self._buttons:
+            button.state(state)
 
 
 class ProgressBar(ttk.Frame):

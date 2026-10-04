@@ -232,7 +232,7 @@ ttk 的 Treeview 着色只能靠 tag，于是很自然会想「斑马纹一个 t
 再解析太脆。
 
 `workers.Event` 是一个冻结 dataclass，承载
-`kind / index / total / status / error`。回调侧 `isinstance` 区分::
+`kind / index / position / total / status / error`。回调侧 `isinstance` 区分::
 
     def _on_progress(self, message: str | Event) -> None:
         if isinstance(message, Event):
@@ -242,6 +242,49 @@ ttk 的 Treeview 着色只能靠 tag，于是很自然会想「斑马纹一个 t
 
 这样批量任务页的 `_do_run` 里没有任何一处碰 Tk——此前它是直接调
 `self.after(0, ...)` 的，全项目最后一处这类违规。
+
+**`index` 和 `position` 不能混用。** 前者是任务在完整列表里的下标（用来
+定位行），后者是它在**本次执行**里第几个（用来算进度）。用户只勾了第 4 和
+第 6 个任务时，`total=2` 而 `index` 是 3 和 5——拿 `index + 1` 除以 `total`
+会算出 200%，进度条第一项就顶满，状态栏还会显示 `6/2`。
+`Event.percent` 只认 `position`，且 `position` 缺失时返回 0 而不是拿
+`index` 顶替：宁可进度条不动，也不要给一个错的百分比。
+
+### 跨越线程边界的东西必须能安全丢弃
+
+`Worker` 的所有回调都经 `workers.safe_after` 送出。它挡两种异常：
+
+- `tk.TclError`：窗口销毁后排队的 `after` 已被 Tcl 清掉。
+- `RuntimeError`：主线程不在事件循环时（启动阶段、或事件循环已退出），
+  `after` 注册不到 Tcl 的命令表上。
+
+关键在于 `try` 必须包住 **`after` 注册本身**，而不只是回调——只包回调的话
+异常从注册那一行就漏出去了，而它几乎总是发生在工作线程里。一抛整条
+线程就死：`on_done` 和 `on_error` 都收不到，界面永远停在「执行中」，
+用户既不能重试也不能取消。`test_safe_after_swallows_*` 守着这两条。
+
+推论：**工作线程里不要碰任何 Tk 符号**，包括看起来很安全的 `after`
+（`after` 自己也要往 Tcl 的命令表里注册东西，见上面的 `RuntimeError`）。
+
+### 执行期间界面要锁定
+
+批量任务页在执行期间必须拒绝三类操作，否则会出现「界面变了但行为没变」：
+
+| 操作 | 后果 |
+| --- | --- |
+| 改勾选（含全选/只选失败项） | `_run` 启动时已快照 `indexes`，实际执行的仍是原来那几个 |
+| 加载/切换配置 | 整体换掉 `_tasks`/`_cfg`，而工作线程正逐项读这两个属性 |
+| 点「重试失败项」 | `_run` 会因「已有任务在运行」直接 return，成了假按钮 |
+
+判定统一走 `TasksView._editable()`。它同时看 `self._busy`（界面态，
+由 `_set_busy` 维护）和 `self._worker.running`（线程态）——这两个不是
+一回事：线程已经退出、但收尾回调还没执行的那一小段时间里，
+`running` 是 False 而界面仍锁着。只看线程状态的话，这段时间里用户能
+启动第二轮，和刚结束的那次串在一起。
+
+按钮的启用状态则要由**唯一**的收口函数决定。`_mark` 每完成一项都会触发
+`_update_summary`，如果汇总里直接写「有失败项就解锁重试」，运行途中
+出现的第一个失败项会把按钮解开——所以那里必须一并检查 `_editable()`。
 
 ### 会话只能从 `new_session()` 来
 
@@ -321,6 +364,28 @@ pylama --max-complexity 20 bilibili_submit tests tools
 - 需要联网的测试标 `@pytest.mark.network` 且 `skipif` 环境变量
 - 涉及 Windows 编码的测试要**真的构造 cp1252 环境**去验证，
   mock 掉 encoding 属性只能验证一半（`reconfigure` 之后原 buffer 就丢了）
+- UI 测试在无显示环境时自动跳过。**本地验证请用 `xvfb-run`**，
+  否则被跳过的几十项等于没跑::
+
+      xvfb-run -a python -m pytest          # 170 passed / 1 skipped
+      python -m pytest                     # 无显示时约 130 passed / 30+ skipped
+
+### 测试要能抓住它声称要抓的 bug
+
+新加一条测试后，**把修复注回去看它是否变红**。这一步经常发现
+「测试自己就有盲点」。
+
+实际遇到过：验证「运行中不能改勾选」的测试写成
+
+    before = view._selected_indexes()
+    view._select_failed()
+    view._select_none()
+    view._select_all()          # ← 恰好把状态恢复原样
+    assert view._selected_indexes() == before
+
+注回 bug 后测试照样绿——因为最后那次「全选」正好抵消了前面的改动。
+改成每一步都断言才真正抓住。所以顺序：写测试 → 注回 bug → 确认红 →
+还原 → 确认绿。
 
 ## 复杂度豁免
 

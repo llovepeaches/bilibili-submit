@@ -79,6 +79,9 @@ class TasksView(ttk.Frame):
         self._worker = Worker(self)
         self._tasks: list[Any] = []
         self._cfg: Any = None
+        #: 界面是否处于执行态。由 :meth:`_set_busy` 维护，和
+        #: ``_worker.running`` 分工：一个管界面，一个管线程。
+        self._busy = False
         #: iid -> 是否勾选
         self._picked: dict[str, bool] = {}
         #: 文件不存在的 iid
@@ -113,10 +116,10 @@ class TasksView(ttk.Frame):
         ttk.Entry(picker, textvariable=self._path_var).grid(
             row=0, column=0, sticky="ew", padx=(0, theme.PAD_SM)
         )
-        SecondaryButton(picker, "选择配置…", self._pick_config).grid(row=0, column=1)
-        SecondaryButton(picker, "加载", self._load).grid(
-            row=0, column=2, padx=(theme.PAD_SM, 0)
-        )
+        self._pick_button = SecondaryButton(picker, "选择配置…", self._pick_config)
+        self._pick_button.grid(row=0, column=1)
+        self._load_button = SecondaryButton(picker, "加载", self._load)
+        self._load_button.grid(row=0, column=2, padx=(theme.PAD_SM, 0))
 
         # 汇总条：左边统计，右边快捷选择
         self._summary = SummaryBar(card)
@@ -192,6 +195,9 @@ class TasksView(ttk.Frame):
         """切回本页时若已加载过配置，保持列表不变。"""
 
     def _pick_config(self) -> None:
+        if not self._editable():
+            self._log.append("正在执行任务，结束后才能切换配置")
+            return
         path = filedialog.askopenfilename(
             title="选择配置文件",
             filetypes=[("YAML 配置", "*.yaml *.yml"), ("所有文件", "*.*")],
@@ -201,6 +207,12 @@ class TasksView(ttk.Frame):
             self._load()
 
     def _load(self) -> None:
+        # 执行途中换配置会把 self._tasks / self._cfg 整体换掉，而工作线程
+        # 正逐项读这两个属性——轻则把任务投给了错的分区，重则直接 IndexError。
+        # 所以这里必须挡住，「选择配置…」按钮也一并禁用。
+        if not self._editable():
+            self._log.append("正在执行任务，结束后才能加载配置")
+            return
         raw = self._path_var.get().strip()
         if not raw:
             self._log.append("请先选择配置文件")
@@ -309,7 +321,7 @@ class TasksView(ttk.Frame):
         if iid in self._missing:
             self._log.append("该文件不存在，无法勾选")
             return
-        if self._worker.running:
+        if not self._editable():
             return
         self._picked[iid] = not self._picked.get(iid, False)
         self._refresh_pick_cell(iid)
@@ -325,8 +337,27 @@ class TasksView(ttk.Frame):
             picked = False
         self._picked[iid] = picked
 
+    def _editable(self) -> bool:
+        """当前是否允许改动勾选状态。
+
+        执行期间一律锁定：``_run`` 在启动时把 ``indexes`` 快照下来，
+        之后 ``_do_run`` 跑的是那份快照。此时让用户改勾选，界面上看到的
+        选择和实际执行的列表会**静默脱节**——用户以为重跑了勾的那几个，
+        其实跑的还是启动时那几个。
+
+        .. important::
+           要同时看 :attr:`_busy` 和 :attr:`~..workers.Worker.running`，
+           两者不是一回事：工作线程已经退出、但 ``on_done`` 排队的
+           ``after`` 还没执行的那一小段时间里，``running`` 是 False 而
+           界面还是运行态。只看线程状态的话，这段时间里用户能改勾选，
+           还能直接启动第二轮，和刚结束的那次串在一起。
+        """
+        return not (self._busy or self._worker.running)
+
     def _apply_selection(self, predicate: "Any") -> None:
         """按谓词批量设置勾选，然后刷新首列与汇总。"""
+        if not self._editable():
+            return
         for iid in self._tree.get_children():
             self._set_pick(iid, predicate(iid))
             self._refresh_pick_cell(iid)
@@ -361,7 +392,9 @@ class TasksView(ttk.Frame):
         ]
 
     def _run(self) -> None:
-        if self._worker.running:
+        # 用 _editable 而不是 _worker.running：界面还锁着就说明这一轮
+        # 还没收尾，此时再启动一个 Worker 会和上一轮的收尾回调打架
+        if not self._editable():
             return
         indexes = self._selected_indexes()
         if not indexes:
@@ -382,9 +415,27 @@ class TasksView(ttk.Frame):
         )
 
     def _retry_failed(self) -> None:
-        """只重试上一轮失败的项。"""
+        """只重试上一轮失败的项。
+
+        顺序很重要：**先校验再改选区**。反过来写的话，未登录时
+        ``_run`` 会直接 return，用户原来那一堆勾选已经被「只选失败项」
+        覆盖掉了，白丢一次选择。
+        """
+        if not self._failed_indexes():
+            return
+        if not self.app.ctx.logged_in:
+            self._log.append("尚未登录，请先到「登录」页扫码")
+            return
         self._select_failed()
         self._run()
+
+    def _failed_indexes(self) -> list[int]:
+        """上一轮失败项的下标（不含文件缺失的）。"""
+        return [
+            int(iid)
+            for iid in self._tree.get_children()
+            if self._tones.get(iid) == "error"
+        ]
 
     def _cancel(self) -> None:
         self._worker.cancel()
@@ -406,7 +457,7 @@ class TasksView(ttk.Frame):
                 raise Cancelled()
 
             task = self._tasks[index]
-            report(Event("start", index=index, total=total))
+            report(Event("start", index=index, position=position + 1, total=total))
             report(f"[{position + 1}/{total}] 开始：{task.name}")
 
             outcome = run_task(
@@ -427,6 +478,7 @@ class TasksView(ttk.Frame):
                 Event(
                     "done",
                     index=index,
+                    position=position + 1,
                     total=total,
                     status=status,
                     error=error,
@@ -441,16 +493,19 @@ class TasksView(ttk.Frame):
     def _on_progress(self, message: "Any") -> None:
         """分发工作线程的上报：Event 更新界面，字符串进日志。"""
         if isinstance(message, Event):
+            # 注意：算进度只能用 position（本次执行里的第几个），
+            # 不能用 index（下标）——见 Event 的文档。
             if not message.done:
                 self._mark(message.index, "进行中", "busy")
-                self._set_task_status(f"进行中 {message.index + 1}/{message.total}")
+                self._set_task_status(
+                    f"进行中 {message.position}/{message.total}"
+                )
             else:
                 tone = "ok" if message.succeeded else "error"
                 self._mark(message.index, _truncate(message.status), tone)
                 self._errors[str(message.index)] = message.error
-                done_count = message.index + 1
-                self._progress.set_value(done_count / max(1, message.total) * 100)
-                self._set_task_status(f"{done_count}/{message.total}")
+                self._progress.set_value(message.percent)
+                self._set_task_status(f"{message.position}/{message.total}")
             self._update_summary()
             return
         self._log.append(message)
@@ -499,19 +554,31 @@ class TasksView(ttk.Frame):
     def _on_error(self, exc: BaseException) -> None:
         self._set_busy(False)
         if isinstance(exc, Cancelled):
-            self._revert_busy_rows()
+            self._revert_busy_rows("已取消")
             self._log.append("已取消")
             return
+        # 非取消的异常（登录态失效、网络断了、ffmpeg 缺失抛的错）同样要收尾：
+        # 不收的话「进行中」的行会永远停在那里、进度条也不复位，
+        # 界面看着像还在跑，用户既不知道发生了什么也不知道怎么恢复。
+        self._revert_busy_rows("已中断")
         if isinstance(exc, NotLoggedInError):
             self._log.append("登录态已失效，请到「登录」页重新扫码")
-            return
-        self._log.append(f"错误：{exc}")
+            # 登录态变了，状态栏那个「● 已登录」也得跟着改
+            self._refresh_app_status()
+        else:
+            self._log.append(f"错误：{exc}")
 
-    def _revert_busy_rows(self) -> None:
-        """取消后把「进行中」的行恢复成待投稿。
+    def _refresh_app_status(self) -> None:
+        """让主窗口刷新登录态显示（没有这个方法时静默跳过）。"""
+        refresh = getattr(self.app, "refresh_status", None)
+        if refresh:
+            refresh()
 
-        不处理的话，取消的那一批会永远停在「进行中」，
-        进度条也不复位——看着像还在跑。
+    def _revert_busy_rows(self, reason: str = "已取消") -> None:
+        """把「进行中」的行恢复成待投稿，并复位进度条。
+
+        不处理的话，那一批会永远停在「进行中」，进度条也不复位——
+        看着像还在跑。取消和异常都要走这里，所以文案由调用方给。
         """
         pending = 0
         for iid in self._tree.get_children():
@@ -520,10 +587,11 @@ class TasksView(ttk.Frame):
                 pending += 1
         self._progress.reset()
         if pending:
-            self._progress.set_text(f"已取消，{pending} 项未执行")
-            self._set_task_status(f"已取消，{pending} 项未执行")
+            text = f"{reason}，{pending} 项未执行"
         else:
-            self._set_task_status("已取消")
+            text = reason
+        self._progress.set_text(text)
+        self._set_task_status(text)
         self._update_summary()
 
     def _show_error_detail(self, event: tk.Event) -> None:
@@ -541,9 +609,19 @@ class TasksView(ttk.Frame):
         messagebox.showerror(f"失败原因 · {name}", error)
 
     def _set_busy(self, busy: bool) -> None:
+        """切换运行态下的按钮可用性。
+
+        汇总条里的「全选 / 只选失败项」也要一起锁——它们最终都落到
+        :meth:`_apply_selection`，锁按钮和锁逻辑双保险，界面上不会
+        出现「按了没反应」的按钮。
+        """
+        self._busy = busy
         self._run_button.state(["disabled"] if busy else ["!disabled"])
         self._retry_button.state(["disabled"] if busy else ["!disabled"])
         self._cancel_button.state(["!disabled"] if busy else ["disabled"])
+        self._pick_button.state(["disabled"] if busy else ["!disabled"])
+        self._load_button.state(["disabled"] if busy else ["!disabled"])
+        self._summary.set_actions_enabled(not busy)
 
     # ---------- 汇总 ----------
 
@@ -566,7 +644,11 @@ class TasksView(ttk.Frame):
             parts.append(f"缺失 {len(self._missing)}")
 
         self._summary.set_stats("  ·  ".join(parts))
-        # 有失败项才让「重试失败项」可点
-        self._retry_button.state(
-            ["!disabled"] if tones.count("error") else ["disabled"]
-        )
+        # 有失败项才让「重试失败项」可点；但运行中一律锁住——
+        # 每完成一项 _mark 都会触发本方法，不在这里判 running 的话，
+        # 执行途中出现第一个失败项时按钮就会被解开，而 _run 会因为
+        # 「已有任务在运行」直接 return，变成按了没反应的假按钮。
+        if tones.count("error") and self._editable():
+            self._retry_button.state(["!disabled"])
+        else:
+            self._retry_button.state(["disabled"])
