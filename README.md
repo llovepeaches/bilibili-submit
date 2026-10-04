@@ -1,12 +1,20 @@
 # 哔哩哔哩自动投稿程序
 
-扫码登录一次，之后按配置文件把本地视频批量投到 B 站，返回 BV 号。
+把本地视频投到自己的 B 站账号上，**不用打开 B 站网页、也不用手动填投稿表单**。
 
-自研实现，直接调用 B 站创作中心 Web 接口——不依赖 biliup 等第三方二进制，不需要申请开放平台资质，也不受第三方库更新的影响。
+扫码登录一次，之后就两件事：
+
+- **单个视频**——点「选择文件…」，填个标题、选个分区，点「开始投稿」；
+- **一批视频**——写一份 `config.yaml` 列好目录和标题规则，让它自己跑，
+  顺便支持定时发布。
+
+跑完给你一串 BV 号。失败了会告诉你**哪一条、因为什么**，不用自己猜。
 
 ```
 bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常"
 ```
+
+两种用法：图形界面（点几下就行）或命令行。
 
 ## 文档
 
@@ -19,8 +27,6 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 | [架构说明](docs/ARCHITECTURE.md) | 分层与依赖方向、关键设计决策、如何加新命令 |
 
 ## 下载
-
-Releases 里的资产是**公开直链**，任何人点开即下，无需登录：
 
 **图形界面版**（不想用命令行就下这个）：
 
@@ -49,12 +55,9 @@ Releases 里的资产是**公开直链**，任何人点开即下，无需登录�
 
 目标机器**不需要装 Python**。
 
-> **找不到 exe？** 别下页面顶部的 `Source code (zip)`——那是**源码**，里面只有 `.py` 文件。
-> 打包好的 `.exe` 在右侧的 **Releases → Assets** 里，链接见上表。
-
 ### 内置 ffmpeg 的代价
 
-`gui` 和 `standalone` 都把 ffmpeg 塞进了 exe 归档，换来"一个文件走天下"，代价是两条：
+`gui` 和 `standalone` 都把 ffmpeg 塞进了 exe 归档，换来「一个文件走天下」，代价是两条：
 
 - **体积**：约 10~13 MB → 约 69~72 MB（exe 归档有压缩；启动解压后约占 94 MB）。
 - **启动**：单文件版每次启动都要把 ffmpeg 解压到临时目录，启动变慢；
@@ -65,7 +68,7 @@ ffmpeg 只影响 `cover: auto` 自动抽帧，**不影响投稿本身**。
 
 ## 快速开始
 
-### 图形界面版（推荐新用户）
+### 图形界面版
 
 双击 `bilibili-submit-gui.exe`，五个页签走完流程：
 
@@ -82,7 +85,9 @@ ffmpeg 只影响 `cover: auto` 自动抽帧，**不影响投稿本身**。
 GUI 版内置了 ffmpeg，所以状态栏应该显示「ffmpeg 就绪（exe 内嵌）」——
 说明 `cover: auto` 自动抽帧可直接用，不需要另外配置。
 
-界面上的操作都是后台线程跑的，窗口不会卡住；登录和投稿都能随时「取消」。
+所有耗时操作都在后台线程跑，窗口不会卡住；登录和投稿都能随时「取消」。
+
+> 登录只需要扫一次码，cookie 存本地，有效期通常数月。
 
 <details>
 <summary><b>界面截图</b>（点击展开）</summary>
@@ -138,10 +143,9 @@ bilibili-submit.exe submit -c config\my.yaml
 
 > 示例配置里有两个演示任务（单文件 + 批量目录），路径都是占位值。
 > 直接跑会报「目录不存在」——把 `tasks` 换成你自己的路径，或删掉不用的那个。
+> 拿不准就先跑 `--dry-run`：只打印将要做什么，不真投。
 
 源码运行把上面的 `bilibili-submit.exe` 换成 `python run.py` 即可。
-
-Cookie 保存在 `~/.config/bilibili_submit/cookie.json`（权限 0600），有效期通常数月，过期后重新 `login`。
 
 ## 命令
 
@@ -226,11 +230,11 @@ bilibili-submit.exe login --proxy http://127.0.0.1:7890
 
 ## 自行打包
 
-> 打包必须在 Windows 上进行。PyInstaller 官方明确说明它不是交叉编译器
+> **只能在 Windows 上打包。** PyInstaller 官方明确说明它不是交叉编译器
 > （"it is not a cross-compiler"），Nuitka、PyOxidizer 同样不支持——
 > 在 Linux 或 macOS 上跑 `pyinstaller` **产不出** exe。
 
-**方式一：Windows 本地打包（推荐）**
+**方式一：Windows 本地打包**
 
 ```
 1. 装 Python 3.9+（务必勾选 Add Python to PATH）
@@ -241,13 +245,15 @@ bilibili-submit.exe login --proxy http://127.0.0.1:7890
 
 **方式二：GitHub Actions 云端打包**
 
-推 tag 即可，Actions 会在 Windows runner 上打包并发布 Release。仓库自带 `build-windows.yml`（日常构建）和 `release.yml`（发版），两者都带冒烟测试，**打包失败会直接标红而不是给你一个坏 exe**。
+推 tag 即可，Actions 会在 Windows runner 上打包并发 Release。仓库自带 `build-windows.yml`（日常构建）和 `release.yml`（发版），两者都带冒烟测试，**打包失败会直接标红，而不是给你一个坏 exe**。
 
 ```bash
-git tag v0.1.2 && git push origin v0.1.2   # 版本号换成你要发的
+git tag v0.2.1 && git push origin v0.2.1   # 版本号换成你要发的
 ```
 
-发布新版本也可以双击 `publish.bat`，它会自动建公开仓库、推送、打 tag 并打印下载链接。
+版本号要同步改四处：`bilibili_submit/__init__.py`、`bili_submit.spec`、
+`assets/version_info.txt`，以及本文件里的下载链接。
+发布新版本也可以双击 `publish.bat`，它会把这几步一起做完。
 
 ### 打包相关的说明
 
@@ -271,9 +277,12 @@ git tag v0.1.2 && git push origin v0.1.2   # 版本号换成你要发的
 
 ## 已知边界
 
-**Windows exe 与真实投稿**由用户在自己机器上验证：开发环境没有真实账号 cookie，投递这一步无法端到端跑通。已实测的部分包括 WBI 签名算法（对照官方示例密钥，结果一致且被服务端接受）、二维码登录全流程、线路探测、`add/v3` 接口可达性、分片边界算法、断点续传状态管理、ffmpeg 定位与封面抽帧端到端（真实生成测试视频并抽出 JPEG），以及打包链路（spec 语法、依赖分析、打包后 HTTPS 与 CA 证书链可用、图标注入、Windows 控制台编码适配）。
+**投稿投递这一步需要你自己的账号才能验证**——开发时没有真实 cookie，
+所以「上传成功 → 拿到 BV 号」这一段没法自动跑通。其余环节都实测过：
+WBI 签名算法、二维码登录全流程、线路探测、`add/v3` 接口可达性、
+分片边界算法、断点续传、ffmpeg 定位与封面抽帧，以及打包链路本身。
 
-单元测试 68 项（`python -m pytest`）。
+单元测试 174 项（`python -m pytest`）。
 
 **建议第一次拿一个几十 MB 的小视频试跑**，确认「登录 → 上传 → 拿到 BV 号」整条通了再批量用。
 
@@ -282,7 +291,8 @@ git tag v0.1.2 && git push origin v0.1.2   # 版本号换成你要发的
 - 新号、小号投稿频控明显更严，批量投稿务必设置 `per_task_interval_minutes`。
 - 非正式会员单日投稿有数量上限（`200009`），可在主站答题转正式会员解除。
 - **Cookie 等价于账号凭据**，别提交到仓库或外传。
-- 本程序仅供管理自己的账号投稿使用。请勿用于批量注册、刷量或搬运他人作品——高频自动化会触发风控甚至封号。内置的保守退避策略正是为此。
+- 仅供管理自己的账号投稿使用。请勿用于批量注册、刷量或搬运他人作品——
+  高频自动化会触发风控甚至封号，程序内置的保守退避策略正是为此。
 
 ## 项目结构
 
@@ -301,18 +311,31 @@ bilibili_submit/
 ├── exceptions.py   异常体系与错误码映射
 ├── config.py       配置加载与校验
 ├── scheduler.py    任务执行与历史记录
-└── cli.py          命令行入口
+├── cli.py          命令行入口
+└── ui/             图形界面（tkinter，不含业务逻辑）
+    ├── app.py      主窗口：导航、状态栏
+    ├── views/      登录 / 投稿 / 批量任务 / 历史 / 设置
+    ├── widgets.py  可复用组件
+    ├── workers.py  后台线程与线程间消息
+    ├── theme.py    颜色、字体、间距
+    └── qr.py       二维码绘制（不依赖 Pillow）
 
 main.py                PyInstaller 打包入口
+main_gui.py            图形界面打包入口
 run.py                 源码运行入口
 bili_submit.spec       打包配置
 build_windows.bat      Windows 一键打包
-publish.bat            一键发布并生成下载链接
+publish.bat            一键发布
 assets/                图标与 Windows 版本资源
 CHANGELOG.md           更新日志
+docs/                  部署、FAQ、架构、截图
 tools/make_icon.py         图标生成（仅开发时用）
 tools/setup_ffmpeg.py      复制 ffmpeg 到指定目录（--dest vendor 供内嵌打包）
 tools/make_source_zip.py   打包源码 zip
 ```
 
 依赖方向单向：`wbi`/`auth` → `client` → `upload`/`cover`/`submit` → `config`/`scheduler`/`cli`，任一层可独立替换。
+
+`ui/` 只依赖业务层，业务层不反向依赖它——唯一的例外是 `cli.py` 里的
+`gui` 命令会导入 `ui`（延迟导入，这样不带 tkinter 的环境也能用命令行）。
+所以想换掉界面，只需重写 `ui/` 目录，业务层不用动。
