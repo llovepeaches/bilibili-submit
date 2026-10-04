@@ -44,7 +44,7 @@ config / scheduler / cli     编排：配置、任务执行、命令行
 | `console.py` | Windows 控制台 UTF-8 适配 | 任何业务 |
 | `ui/` | 图形界面（tkinter）。见下方「界面层」 | 业务逻辑 |
 | `ui/theme.py` | 颜色/字体/间距的唯一来源 | 具体控件 |
-| `ui/widgets.py` | 可复用组件，不知道 B 站的存在 | 业务概念 |
+| `ui/widgets.py` | 可复用组件（`Collapsible` 折叠区、`OptionSwitches` 投稿开关），不知道 B 站的存在 | 业务概念 |
 | `ui/qr.py` | 二维码矩阵 → Canvas 绘制 | 网络请求 |
 | `ui/workers.py` | 后台线程与取消 | UI 操作 |
 | `ui/state.py` | 批量任务页的偏好读写（目录、默认参数） | Tk 操作 |
@@ -278,6 +278,26 @@ readonly 是 ttk 的**选项**，不是状态标志位。踩过这个坑：yaml 
 改为自己驱动 `request_qrcode` + `poll_qrcode` 的轮询循环，
 这样才能一边轮询一边刷新界面、还能取消。
 
+### 投稿选项有两套名字，翻译点只有两处
+
+界面上叫「关闭弹幕 / Hi-Res」，B 站接口叫 `up_close_danmu` /
+`lossless_music`。名字不统一是故意的：界面说人话，投递说接口的话。
+错位的代价是**静默失效**——字段名写错 B 站不会报错，只是忽略，
+用户看到的是「开关点了没反应」。
+
+翻译只发生在两处，都有测试盯着：
+
+| 位置 | 干什么 |
+| --- | --- |
+| `views/upload.py` 的 `_collect`、`views/tasks.py` 的 `apply()` | 界面 flags → `TaskConfig`（此时已换成接口名 `up_close_reply` 等） |
+| `scheduler.build_archive_meta` | `task.hires` → `ArchiveMeta.lossless_music` |
+
+第二处单独抽成函数就是为了能被**直接**测到。埋在长函数里就只能
+打桩整条上传链路才摸得着，而那种测试一旦挂了看不出是哪一步错。
+
+另外 `dolby` / `lossless_music` 官方参数表标了「必要」，payload 里
+**关着也要写 0**，只在开启时写的话服务端收不到字段。
+
 ### tkinter 不是线程安全的
 
 工作线程里直接改控件会让进程崩溃（Tcl 解释器不可重入）。
@@ -325,6 +345,16 @@ row.add(ttk.Entry, textvariable=self._title_var)
 **加新表单控件时一律用 `row.add(...)`**，别自己 new 完再塞进去。
 `tests/test_ui.py` 里有两条测试专门量控件的实际纵坐标来防回归——
 布局错位静态检查抓不到，必须真跑 Tk 量。
+
+### 实例属性不能叫 `_options`
+
+`Misc` 内部有个 `_options` 方法，`grid()` 会调 `self._options(cnf, kw)`
+拼参数。自定义组件里写 `self._options = ...` 会把它盖掉，然后**所有**
+`grid()` 调用炸成 `TypeError: 'XxxSwitches' object is not callable`——
+堆栈指向 `tkinter/__init__.py`，看着像 Tk 自己的 bug。
+
+所以投稿开关组件在页面里叫 `self._option_switches`。这也是 Tk 组件
+命名时的通用提醒：下划线开头的名字先确认没撞 `Misc` 的方法。
 
 ### 窗口再小也不能让按钮点不到
 
@@ -528,7 +558,7 @@ pylama --max-complexity 20 bilibili_submit tests tools
 - UI 测试在无显示环境时自动跳过。**本地验证请用 `xvfb-run`**，
   否则被跳过的几十项等于没跑::
 
-      xvfb-run -a python -m pytest          # 335 passed / 2 skipped
+      xvfb-run -a python -m pytest          # 375 passed / 2 skipped
       python -m pytest                     # 无显示时约 160 passed / 60+ skipped
 
 ### 异步 UI 测试必须跑真实事件循环
