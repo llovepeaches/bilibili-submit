@@ -368,7 +368,8 @@ def launch() -> int:
         RuntimeError: 环境缺少 tkinter（精简版 Python 常见）。
     """
     try:
-        import tkinter  # noqa: F401  # 只是确认可用，实际 import 在模块顶部
+        import tkinter  # noqa: F401  # pylint: disable=unused-import
+        # 只是确认可用，实际 import 在模块顶部
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
             "当前 Python 未附带 tkinter，无法启动界面。\n"

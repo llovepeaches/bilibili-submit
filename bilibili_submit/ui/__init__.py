@@ -31,7 +31,7 @@ def gui_available() -> tuple[bool, str]:
     一句「无法启动界面」远不如「未附带 tkinter，请装 python3-tk」有用。
     """
     try:
-        import tkinter  # noqa: F401
+        import tkinter  # noqa: F401  # pylint: disable=unused-import
     except ImportError as exc:
         return False, f"当前 Python 未附带 tkinter（{exc}）"
     return True, ""

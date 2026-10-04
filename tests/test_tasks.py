@@ -30,7 +30,6 @@ from bilibili_submit.ui.views.tasks import (  # noqa: E402
     PICKED,
     UNPICKED,
     SharedSubmitValues,
-    TasksView,
     _truncate,
 )
 from bilibili_submit.ui.workers import Event  # noqa: E402
@@ -1153,7 +1152,7 @@ def test_error_reverts_busy_rows(tmp_path, monkeypatch):
 
     root = tk.Tk()
     try:
-        app, view = _build(root, tmp_path, monkeypatch)
+        _app, view = _build(root, tmp_path, monkeypatch)
         _load_folder(root, view, tmp_path, monkeypatch)
         view._log.clear()
 
@@ -1354,6 +1353,7 @@ def test_invalid_dtime_keeps_last_good_state(tmp_path, monkeypatch):
 # ---------- 分 P 合并 ----------
 
 
+@needs_display
 def test_group_switch_merges_series_into_one_task(tmp_path, monkeypatch):
     """开着分 P 合并扫目录：同一套视频应变成一个 multip 任务。"""
     import tkinter as tk
@@ -1379,6 +1379,7 @@ def test_group_switch_merges_series_into_one_task(tmp_path, monkeypatch):
         root.destroy()
 
 
+@needs_display
 def test_group_switch_off_keeps_one_task_per_file(tmp_path, monkeypatch):
     """默认不合并：每个视频一个稿件（与加这个功能之前完全一致）。"""
     import tkinter as tk
@@ -1398,6 +1399,7 @@ def test_group_switch_off_keeps_one_task_per_file(tmp_path, monkeypatch):
         root.destroy()
 
 
+@needs_display
 def test_grouped_task_shows_part_count_in_tree(tmp_path, monkeypatch):
     """列表的「分P」列要能一眼看出哪个是多 P 稿件。"""
     import tkinter as tk
@@ -1422,6 +1424,7 @@ def test_grouped_task_shows_part_count_in_tree(tmp_path, monkeypatch):
         root.destroy()
 
 
+@needs_display
 def test_missing_file_marks_whole_multipart_task(tmp_path, monkeypatch):
     """多 P 稿件缺一个文件就不能投——整行标缺失，不能只标那一个。
 
@@ -1449,6 +1452,7 @@ def test_missing_file_marks_whole_multipart_task(tmp_path, monkeypatch):
         root.destroy()
 
 
+@needs_display
 def test_edit_parts_writes_titles_back(tmp_path, monkeypatch):
     """改完分 P 标题要落回任务对象，执行时才会带上。"""
     import tkinter as tk
@@ -1480,6 +1484,7 @@ def test_edit_parts_writes_titles_back(tmp_path, monkeypatch):
         root.destroy()
 
 
+@needs_display
 def test_edit_parts_ignores_single_file_task(tmp_path, monkeypatch):
     """单 P 任务双击不该弹窗——没什么可改的。"""
     import tkinter as tk
