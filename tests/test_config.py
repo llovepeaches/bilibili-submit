@@ -220,3 +220,88 @@ def test_build_payload_without_videos():
     meta = ArchiveMeta(title="标题")
     with pytest.raises(ConfigError, match="videos 为空"):
         build_payload(meta, csrf="x")
+
+
+# ---------- 多 P 任务 ----------
+
+
+def test_task_files_picks_files_for_multip():
+    from bilibili_submit.config import TaskConfig, task_files
+
+    multip = TaskConfig(type="multip", files=["/v/a.mp4", "/v/b.mp4"])
+    assert [p.name for p in task_files(multip)] == ["a.mp4", "b.mp4"]
+
+    single = TaskConfig(type="single", file="/v/a.mp4")
+    assert [p.name for p in task_files(single)] == ["a.mp4"]
+
+    assert task_files(TaskConfig()) == []
+
+
+def test_files_win_over_file_when_both_set():
+    """两个都给了以 files 为准——否则顺序会变得不确定。"""
+    from bilibili_submit.config import TaskConfig, task_files
+
+    task = TaskConfig(type="multip", file="/v/z.mp4", files=["/v/a.mp4", "/v/b.mp4"])
+    assert [p.name for p in task_files(task)] == ["a.mp4", "b.mp4"]
+
+
+def test_part_titles_default_to_filename(tmp_path):
+    from bilibili_submit.config import TaskConfig, task_part_titles
+
+    files = [tmp_path / "旅行_01.mp4", tmp_path / "旅行_02.mp4"]
+    task = TaskConfig(type="multip", files=[str(f) for f in files])
+    assert task_part_titles(task, files) == ["旅行_01", "旅行_02"]
+
+
+def test_part_titles_override_and_fall_back(tmp_path):
+    """配了几个就用几个，没配到的回落到文件名而不是留空。"""
+    from bilibili_submit.config import TaskConfig, task_part_titles
+
+    files = [tmp_path / f"p{i}.mp4" for i in (1, 2, 3)]
+    task = TaskConfig(type="multip", files=[str(f) for f in files], part_titles=["出发"])
+    assert task_part_titles(task, files) == ["出发", "p2", "p3"]
+
+
+def test_empty_part_title_also_falls_back(tmp_path):
+    """标题填了空串等于没填，播放器里不能出现空白分P。"""
+    from bilibili_submit.config import TaskConfig, task_part_titles
+
+    files = [tmp_path / "a.mp4"]
+    task = TaskConfig(type="multip", files=[str(files[0])], part_titles=["   "])
+    assert task_part_titles(task, files) == ["a"]
+
+
+def test_multip_task_requires_files(tmp_path):
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("tasks:\n  - name: x\n    type: multip\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="缺少 files"):
+        load_config(cfg)
+
+
+def test_part_titles_without_files_is_rejected(tmp_path):
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "tasks:\n  - name: x\n    type: single\n    file: a.mp4\n"
+        "    part_titles: [\"p1\"]\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="part_titles"):
+        load_config(cfg)
+
+
+def test_multip_task_is_not_expanded(tmp_path):
+    """multip 本身就是一个稿件，expand_tasks 不该把它拆开。"""
+    for index in (1, 2):
+        (tmp_path / f"v{index}.mp4").write_bytes(b"x")
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "tasks:\n"
+        "  - name: 一套\n"
+        "    type: multip\n"
+        f"    files: [\"{tmp_path / 'v1.mp4'}\", \"{tmp_path / 'v2.mp4'}\"]\n",
+        encoding="utf-8",
+    )
+    tasks = expand_tasks(load_config(cfg))
+    assert len(tasks) == 1
+    assert tasks[0].type == "multip"
+    assert len(tasks[0].files) == 2

@@ -27,7 +27,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ...config import AppConfig, TaskConfig, expand_tasks, load_config, scan_video_files
+from ...config import task_files, task_part_titles
 from ...exceptions import BiliError, ConfigError, NotLoggedInError
+from ...multipart import PartGroup, group_by_prefix
 from ...scheduler import RunOptions, TaskOutcome, run_task
 from ...submit import get_backend
 from .. import theme
@@ -49,19 +51,25 @@ from .upload import TID_OPTIONS, parse_tid
 
 __all__ = ["TasksView"]
 
-#: 勾选列 + 原来的四列
-COLUMNS = ("pick", "name", "file", "tid", "status")
+#: 勾选列 + 原来的五列
+COLUMNS = ("pick", "name", "file", "parts", "tid", "status")
 _HEADINGS = {
     "pick": "✓",
     "name": "任务",
     "file": "文件",
+    "parts": "分P",
     "tid": "分区",
     "status": "状态",
 }
-_WIDTHS = {"pick": 34, "name": 150, "file": 240, "tid": 56, "status": 130}
+_WIDTHS = {"pick": 34, "name": 150, "file": 240, "parts": 42, "tid": 56, "status": 130}
 
 PICKED = "✓"
 UNPICKED = ""
+
+#: 分 P 合并方式。``分P`` 列是数字，单 P 稿件显示一条横线更分明
+GROUP_OFF = "不合并"
+GROUP_PREFIX = "按文件名前缀分组"
+GROUP_OPTIONS = (GROUP_OFF, GROUP_PREFIX)
 
 #: 状态列最多显示多少字。超出的部分存起来，双击看全文
 STATUS_MAX = 18
@@ -234,6 +242,24 @@ class TasksView(ttk.Frame):
             padx=(theme.PAD_SM, 0),
         )
 
+        # 分 P 合并方式。跟着目录走：它决定「目录里这批文件怎么变成稿件」
+        self._group_var = tk.StringVar(value=GROUP_OFF)
+        row = FormRow(
+            picker,
+            "分P合并",
+            hint="按文件名前缀把同一套视频合成一个稿件的 P1/P2/P3；"
+            "双击列表行可改各分P标题",
+        )
+        row.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_XS, 0))
+        self._group_combo = row.add(
+            ttk.Combobox,
+            textvariable=self._group_var,
+            values=GROUP_OPTIONS,
+            state="readonly",
+            width=18,
+        )
+        self._group_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_group_changed())
+
         # ③ yaml 入口放次要位置。多数用户不该看见它，也不该需要它。
         advanced = ttk.Frame(card, style="Card.TFrame")
         advanced.grid(row=2, column=0, sticky="e", pady=(theme.PAD_XS, theme.PAD_SM))
@@ -288,8 +314,8 @@ class TasksView(ttk.Frame):
         # 点首列切换勾选；表头点全选/全不选
         self._tree.bind("<Button-1>", self._on_tree_click)
         self._tree.bind("<space>", self._on_space)
-        # 双击看完整错误原因
-        self._tree.bind("<Double-1>", self._show_error_detail)
+        # 双击：有失败原因看全文，否则多 P 任务可以改分P标题
+        self._tree.bind("<Double-1>", self._on_double_click)
 
         self._placeholder = Placeholder(
             card, "尚未选择视频文件夹", "选择文件夹…", self._pick_dir
@@ -358,6 +384,7 @@ class TasksView(ttk.Frame):
             "" if state.dtime_offset_hours is None else _fmt_offset(state.dtime_offset_hours)
         )
         self._tid_var.set(tid_option(state.tid))
+        self._group_var.set(GROUP_PREFIX if state.group_parts else GROUP_OFF)
 
     def _current_state(self) -> BatchUIState:
         """收集当前表单为偏好对象。
@@ -376,6 +403,7 @@ class TasksView(ttk.Frame):
             tag=self._tag_var.get().strip(),
             desc=self._desc_var.get().strip(),
             dtime_offset_hours=offset,
+            group_parts=self._group_var.get() == GROUP_PREFIX,
         )
 
     def _save_state(self) -> None:
@@ -424,10 +452,27 @@ class TasksView(ttk.Frame):
         self._source_mode = "folder"
         self._apply_source_mode()
 
+        # 分组方式在这里读好再传进去：工作线程不该回头读 Tk 变量
+        group = self._group_var.get() == GROUP_PREFIX
         self._start_load(
             "正在扫描…",
-            lambda _report, is_cancelled: _scan_to_tasks(directory, is_cancelled),
+            lambda _report, is_cancelled: _scan_to_tasks(
+                directory, is_cancelled, group=group
+            ),
         )
+
+    def _on_group_changed(self) -> None:
+        """切换分 P 合并方式：已选过目录就立刻重扫，并记进偏好。
+
+        不重扫的话用户会觉得开关坏了——列表还是老样子，
+        实际得再点一次「重新扫描」才生效，这种隐性依赖最招骂。
+        """
+        if not self._editable():
+            self._log.append("正在执行任务，结束后才能切换分P合并")
+            return
+        self._save_state()
+        if self._dir_var.get().strip():
+            self._load()
 
     # ---------- 任务来源：yaml（高级） ----------
 
@@ -506,7 +551,15 @@ class TasksView(ttk.Frame):
 
         source = label if label else self._dir_var.get().strip()
         self._source_pill.set(f"{source} · {len(tasks)} 个任务", "ok")
-        self._log.append(f"已加载 {len(tasks)} 个任务")
+        videos = sum(len(task_files(task)) for task in tasks)
+        multip = sum(1 for task in tasks if len(task_files(task)) > 1)
+        if multip:
+            self._log.append(
+                f"已加载 {len(tasks)} 个任务（{videos} 个视频，"
+                f"其中 {multip} 个是多P稿件）"
+            )
+        else:
+            self._log.append(f"已加载 {len(tasks)} 个任务")
         if self._missing:
             self._log.append(
                 f"其中 {len(self._missing)} 个文件不存在，已标为「缺失」且不可勾选"
@@ -538,6 +591,9 @@ class TasksView(ttk.Frame):
         # 不是 state 标志位，走 state() 改它没有效果——
         # 表现为从 yaml 切回文件夹后，下拉框永远灰着。
         self._tid_combo.configure(state="disabled" if yaml_mode else "readonly")
+        # 分 P 合并在 yaml 模式下没有意义：配置文件里的任务已经是
+        # 明确的 single/multip，不该再由界面重新解释一遍
+        self._group_combo.configure(state="disabled" if yaml_mode else "readonly")
         entry_state = ["disabled"] if yaml_mode else ["!disabled"]
         self._tag_entry.state(entry_state)
         self._desc_entry.state(entry_state)
@@ -557,17 +613,25 @@ class TasksView(ttk.Frame):
         self._tree.delete(*self._tree.get_children())
         for index, task in enumerate(tasks):
             iid = str(index)
-            file_path = Path(task.file or "")
-            exists = bool(task.file) and file_path.is_file()
+            files = task_files(task)
+            # 多 P 稿件缺一个文件就投不完整，所以整行都算缺失
+            gone = [path for path in files if not path.is_file()]
+            exists = bool(files) and not gone
 
             if exists:
-                file_text = file_path.name
+                file_text = files[0].name
+                if len(files) > 1:
+                    file_text = f"{files[0].name} 等 {len(files)} 个"
                 status = "待投稿"
                 tone = "idle"
                 # 正常任务默认勾选——大多数情况用户就是要跑全部
                 self._picked[iid] = True
             else:
-                file_text = f"[缺] {file_path.name or '(未设置)'}"
+                if files:
+                    detail = f"（缺 {len(gone)}/{len(files)}）" if len(files) > 1 else ""
+                    file_text = f"[缺] {files[0].name}{detail}"
+                else:
+                    file_text = "[缺] (未设置)"
                 status = "文件缺失"
                 tone = "missing"
                 self._missing.add(iid)
@@ -583,6 +647,7 @@ class TasksView(ttk.Frame):
                     PICKED if self._picked[iid] else UNPICKED,
                     task.name,
                     file_text,
+                    str(len(files)) if len(files) > 1 else "—",
                     shared_tid if self._source_mode == "folder" else (task.tid or ""),
                     status,
                 ),
@@ -967,19 +1032,60 @@ class TasksView(ttk.Frame):
         self._set_task_status(text)
         self._update_summary()
 
-    def _show_error_detail(self, event: tk.Event) -> None:
-        """双击某一行，看完整失败原因。"""
+    def _on_double_click(self, event: tk.Event) -> None:
+        """双击某一行：失败了看完整原因，否则多 P 任务可改分 P 标题。
+
+        「看错误」优先：这一行刚投失败时，用户双击想看的一定是失败原因，
+        而不是去改一个已经投出去的稿件的分 P 标题。
+        """
         if self._tree.identify_region(event.x, event.y) != "cell":
             return
         iid = self._tree.identify_row(event.y)
         if not iid:
             return
+
         error = self._errors.get(iid)
-        if not error:
+        if error:
+            values = self._tree.item(iid, "values")
+            name = values[1] if len(values) > 1 else iid
+            messagebox.showerror(f"失败原因 · {name}", error)
             return
-        values = self._tree.item(iid, "values")
-        name = values[1] if len(values) > 1 else iid
-        messagebox.showerror(f"失败原因 · {name}", error)
+
+        if not self._editable():
+            return
+        self._edit_parts(iid)
+
+    def _edit_parts(self, iid: str) -> None:
+        """改某个多 P 稿件的分 P 标题。
+
+        自动分组给出的标题就是文件名，多数时候够用；但「旅行_01」
+        这种机器味的名字在播放器里不好看，所以留个口子让人改。
+        单 P 任务双击不弹窗——没什么可改的，弹出来纯属打扰。
+        """
+        index = int(iid)
+        if index >= len(self._tasks):
+            return
+        task = self._tasks[index]
+        files = task_files(task)
+        if len(files) < 2:
+            return
+
+        current = task_part_titles(task, files)
+        answer = self._ask_part_titles(task.name or files[0].stem, files, current)
+        if answer is None:
+            return
+        self._tasks[index] = replace(task, part_titles=answer)
+        self._log.append(f"已更新「{task.name}」的 {len(files)} 个分P标题")
+
+    def _ask_part_titles(
+        self, archive: str, files: list[Path], current: list[str]
+    ) -> list[str] | None:
+        """弹对话框要分 P 标题，取消返回 None。
+
+        单独抽出来是因为对话框要跑模态事件循环，测试里替换掉这个
+        方法就能验证 :meth:`_edit_parts` 的写入逻辑本身。
+        """
+        return PartTitlesDialog(self, archive, files, current).show()
 
     def _set_busy(self, busy: bool) -> None:
         """切换运行态下的按钮可用性。
@@ -1032,12 +1138,17 @@ class TasksView(ttk.Frame):
 
 
 def _scan_to_tasks(
-    directory: Path, is_cancelled: "Any"
+    directory: Path, is_cancelled: "Any", group: bool = False
 ) -> tuple[AppConfig, list[TaskConfig]]:
     """扫目录并生成任务（工作线程执行）。
 
-    生成的每个任务：标题默认取文件名，投稿参数留空——顶部统一参数
-    在启动执行时由 :meth:`TasksView.SharedSubmitValues.apply` 填进去。
+    生成的每个任务：标题默认取文件名（多 P 组取组名），投稿参数留空——
+    顶部统一参数在启动执行时由 :meth:`TasksView.SharedSubmitValues.apply`
+    填进去。
+
+    Args:
+        group: True 时按文件名前缀把同一套视频合成**一个**多 P 稿件，
+            否则一个视频一个稿件。
     """
     if is_cancelled():
         raise Cancelled()
@@ -1047,11 +1158,111 @@ def _scan_to_tasks(
     if not files:
         raise ConfigError(f"目录里没有找到视频文件：{directory}")
 
-    tasks = [
-        TaskConfig(name=path.stem, type="single", file=str(path), title=path.stem)
-        for path in files
-    ]
-    return AppConfig(), tasks
+    if not group:
+        tasks = [
+            TaskConfig(name=path.stem, type="single", file=str(path), title=path.stem)
+            for path in files
+        ]
+        return AppConfig(), tasks
+
+    groups = group_by_prefix(files)
+    if is_cancelled():
+        raise Cancelled()
+    return AppConfig(), [_group_to_task(item) for item in groups]
+
+
+def _group_to_task(group: PartGroup) -> TaskConfig:
+    """一个分 P 组 → 一个任务。单文件组退化成普通单 P 投稿。"""
+    files = [str(path) for path in group.files]
+    if len(files) == 1:
+        return TaskConfig(
+            name=group.name, type="single", file=files[0], title=group.name
+        )
+    return TaskConfig(name=group.name, type="multip", files=files, title=group.name)
+
+
+class PartTitlesDialog:
+    """改一个多 P 稿件各分 P 标题的模态对话框。
+
+    每行一个输入框，右边标出对应的文件名——只给 P1/P2 序号的话，
+    用户看不出自己在改哪一个，而分 P 顺序错了是很难补救的。
+    """
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        archive: str,
+        files: list[Path],
+        titles: list[str],
+    ) -> None:
+        self._files = list(files)
+        self._vars: list[tk.StringVar] = []
+        self._result: list[str] | None = None
+
+        self._top = tk.Toplevel(master)
+        self._top.title(f"分P标题 · {archive}")
+        self._top.transient(master)
+        self._top.minsize(440, 220)
+        self._top.columnconfigure(0, weight=1)
+        self._top.rowconfigure(0, weight=1)
+
+        frame = ttk.Frame(self._top, padding=theme.PAD_MD)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            frame,
+            text=f"共 {len(self._files)} 个分P，按此顺序发布；留空则用文件名",
+            style="Card.Secondary.TLabel",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, theme.PAD_SM))
+
+        for index, path in enumerate(self._files):
+            var = tk.StringVar(value=titles[index] if index < len(titles) else "")
+            self._vars.append(var)
+            ttk.Label(frame, text=f"P{index + 1}").grid(
+                row=index + 1, column=0, sticky="w", padx=(0, theme.PAD_SM)
+            )
+            ttk.Entry(frame, textvariable=var).grid(
+                row=index + 1, column=1, sticky="ew", pady=theme.PAD_XS
+            )
+            ttk.Label(frame, text=path.name, style="Card.Secondary.TLabel").grid(
+                row=index + 1, column=2, sticky="w", padx=(theme.PAD_SM, 0)
+            )
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(
+            row=len(self._files) + 1,
+            column=0,
+            columnspan=3,
+            sticky="e",
+            pady=(theme.PAD_MD, 0),
+        )
+        SecondaryButton(buttons, "用文件名", self._reset).pack(
+            side="left", padx=(0, theme.PAD_SM)
+        )
+        SecondaryButton(buttons, "取消", self._cancel).pack(
+            side="left", padx=(0, theme.PAD_SM)
+        )
+        PrimaryButton(buttons, "确定", self._ok).pack(side="left")
+
+    def _reset(self) -> None:
+        """「用文件名」：把每行填回文件名，用户能直接看到将要用的值。"""
+        for var, path in zip(self._vars, self._files):
+            var.set(path.stem)
+
+    def _ok(self) -> None:
+        self._result = [var.get().strip() for var in self._vars]
+        self._top.destroy()
+
+    def _cancel(self) -> None:
+        self._result = None
+        self._top.destroy()
+
+    def show(self) -> list[str] | None:
+        """模态显示，返回各分 P 标题；取消返回 ``None``。"""
+        self._top.grab_set()
+        self._top.wait_window()
+        return self._result
 
 
 def _parse_offset(text: str) -> float | None:

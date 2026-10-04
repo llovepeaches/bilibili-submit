@@ -40,6 +40,7 @@ from .console import setup_console
 from .exceptions import BiliError, ConfigError, NotLoggedInError
 from .ffmpeg import ffmpeg_status, ffmpeg_version
 from .metadata import COMMON_TIDS, ArchiveMeta
+from .multipart import strip_part_marker
 from .scheduler import DEFAULT_HISTORY_FILE, RunOptions, read_history, run_all, run_task
 from .submit import get_backend
 
@@ -75,8 +76,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # upload
-    p_up = sub.add_parser("upload", help="投稿单个视频文件")
-    p_up.add_argument("file", help="视频文件路径")
+    p_up = sub.add_parser(
+        "upload",
+        help="投稿视频（给多个文件即合并为一个稿件的多个分 P）",
+    )
+    p_up.add_argument(
+        "file",
+        nargs="+",
+        metavar="FILE",
+        help="视频文件路径；给多个就合并成同一稿件的 P1/P2/P3",
+    )
     p_up.add_argument("--title", default=None, help="标题（默认取文件名）")
     p_up.add_argument("--tid", type=int, default=None, help="分区 ID")
     p_up.add_argument("--tag", default=None, help="标签，逗号分隔，最多 10 个")
@@ -90,6 +99,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_up.add_argument("-c", "--config", default=None, help="配置文件（可选，提供上传参数）")
     p_up.add_argument("--no-resume", action="store_true", help="禁用断点续传")
+    p_up.add_argument(
+        "--part-title",
+        action="append",
+        default=None,
+        dest="part_titles",
+        metavar="TITLE",
+        help="分 P 标题，按出现顺序对应各文件；可重复给，缺省用文件名",
+    )
 
     # submit
     p_sub = sub.add_parser("submit", help="按配置文件执行投稿")
@@ -178,16 +195,39 @@ def cmd_upload(args: argparse.Namespace) -> int:
     if args.no_resume:
         cfg.upload.resume = False
 
-    file = Path(args.file).expanduser()
-    if not file.is_file():
-        print(f"错误: 视频文件不存在: {file}", file=sys.stderr)
+    files = [Path(item).expanduser() for item in args.file]
+    missing = [str(path) for path in files if not path.is_file()]
+    if missing:
+        print(f"错误: 视频文件不存在: {'、'.join(missing)}", file=sys.stderr)
         return EXIT_FAIL
 
+    multip = len(files) > 1
+    if args.part_titles and not multip:
+        print("提示: 只有一个文件时 --part-title 不生效（没有分 P 可言）", file=sys.stderr)
+    if args.part_titles and multip and len(args.part_titles) > len(files):
+        print(
+            f"提示: 给了 {len(args.part_titles)} 个分 P 标题但只有 {len(files)} 个文件，"
+            "多出来的会被忽略",
+            file=sys.stderr,
+        )
+
+    if args.title:
+        title = args.title
+    elif multip:
+        # 多文件默认标题去掉尾部序号：旅行_01/02 → 「旅行」，
+        # 而不是拿第一个文件的全名当整个稿件的标题
+        base, _ = strip_part_marker(files[0].stem)
+        title = base or files[0].stem
+    else:
+        title = files[0].stem
+
     task = TaskConfig(
-        name=file.stem,
-        type="single",
-        file=str(file),
-        title=args.title,
+        name=title,
+        type="multip" if multip else "single",
+        file=None if multip else str(files[0]),
+        files=[str(path) for path in files] if multip else [],
+        part_titles=list(args.part_titles or []) if multip else [],
+        title=title,
         tid=args.tid,
         tag=args.tag,
         desc=args.desc,
@@ -201,12 +241,18 @@ def cmd_upload(args: argparse.Namespace) -> int:
     # 本地校验放在登录检查之前：参数填错不该让用户先去扫码登录
     task_dtime(task)
     ArchiveMeta(
-        title=task.title or file.stem,
+        title=task.title or title,
         tid=int(task.tid or 21),
         tag=task.tag or "",
         copyright=int(task.copyright or 1),
         source=task.source or "",
+        videos=[{"filename": "", "title": path.stem, "desc": ""} for path in files],
     ).normalized()
+
+    if multip:
+        print(f"将把这 {len(files)} 个文件合并为一个稿件的 {len(files)} 个分P：{title}")
+        for index, path in enumerate(files, start=1):
+            print(f"  P{index}: {path.name}")
 
     client = _client_from_config(cfg)
     outcome = run_task(

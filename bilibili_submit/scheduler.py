@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .client import BiliClient
-from .config import AppConfig, TaskConfig, task_dtime
+from .config import AppConfig, TaskConfig, task_dtime, task_files, task_part_titles
 from .cover import resolve_cover
 from .exceptions import BiliError, ConfigError
 from .lines import pick_line
@@ -44,6 +44,9 @@ class TaskOutcome:
     bvid: str = ""
     url: str = ""
     error: str = ""
+    #: 这个稿件有几个分 P。多 P 投稿时 file 只记第一个文件，
+    #: 靠这个数字才能知道它其实是一整批。
+    parts: int = 0
 
 
 @dataclass
@@ -66,17 +69,29 @@ def run_task(
     backend: SubmitBackend | None = None,
     options: RunOptions | None = None,
 ) -> TaskOutcome:
-    """执行单个投稿任务：上传 → 封面 → 投递。"""
-    options = options or RunOptions()
-    source = Path(task.file or "")
-    outcome = TaskOutcome(name=task.name, success=False, file=str(source))
+    """执行单个投稿任务：上传 → 封面 → 投递。
 
-    if not source.is_file():
-        outcome.error = f"视频文件不存在: {source}"
+    一个任务对应**一个稿件**。任务里可以有多个视频文件（``TaskConfig.files``），
+    它们会成为同一个稿件的 P1/P2/P3，只占一个 av/bv 号。
+    """
+    options = options or RunOptions()
+    sources, error = _prepare_sources(task)
+    outcome = TaskOutcome(
+        name=task.name,
+        success=False,
+        file=str(sources[0]) if sources else "",
+        parts=len(sources),
+    )
+    if error:
+        outcome.error = error
         return outcome
 
+    total = len(sources)
+    first = sources[0]
+
     if options.dry_run:
-        _emit(options, f"[dry-run] 将投稿 {source}（tid={task.tid}）")
+        hint = f" 等 {total} 个分P" if total > 1 else ""
+        _emit(options, f"[dry-run] 将投稿 {first.name}{hint}（tid={task.tid}）")
         outcome.success = True
         return outcome
 
@@ -84,32 +99,25 @@ def run_task(
         dtime = task_dtime(task)
         validate_tid(int(task.tid or 21))
 
-        # 1) 上传视频
+        # 1) 上传视频（多 P 逐个来，断了能从断点续传接着跑）
         line = None
         if cfg.upload.line and cfg.upload.line != "auto":
             line = pick_line(client, prefer=cfg.upload.line)
-        result = upload_video(
-            client,
-            source,
-            line=line,
-            profile=cfg.upload.profile,
-            concurrency=cfg.upload.concurrency,
-            resume=cfg.upload.resume,
-            chunk_retries=cfg.upload.chunk_retries,
-            show_progress=cfg.upload.show_progress,
-        )
-        _emit(options, f"上传完成: {source.name} → filename={result.filename}")
 
-        # 2) 封面
+        videos = _upload_parts(
+            client, sources, task_part_titles(task, sources), cfg, options, line
+        )
+
+        # 2) 封面。整个稿件一张，从第一个分 P 抽帧
         cover_url = None
         if task.cover:
-            cover_url = resolve_cover(client, task.cover, source)
+            cover_url = resolve_cover(client, task.cover, first)
             if cover_url:
                 _emit(options, f"封面已上传: {cover_url}")
 
-        # 3) 组装并投递
+        # 3) 组装并投递（一次提交带上全部分 P）
         meta = ArchiveMeta(
-            title=task.title or source.stem,
+            title=task.title or first.stem,
             tid=int(task.tid or 21),
             tag=task.tag or "",
             desc=task.desc or "",
@@ -117,7 +125,7 @@ def run_task(
             copyright=int(task.copyright or 1),
             source=task.source or "",
             dtime=dtime,
-            videos=[{"filename": result.filename, "title": source.stem, "desc": ""}],
+            videos=videos,
         )
         submitted = submit_archive(
             client,
@@ -132,7 +140,8 @@ def run_task(
         outcome.aid = submitted.aid
         outcome.bvid = submitted.bvid
         outcome.url = submitted.url
-        _emit(options, f"投稿成功: {submitted}  {submitted.url}")
+        hint = f"（{total} 个分P）" if total > 1 else ""
+        _emit(options, f"投稿成功{hint}: {submitted}  {submitted.url}")
     except (BiliError, ConfigError) as exc:
         outcome.error = str(exc)
         logger.error("任务 %s 失败: %s", task.name, exc)
@@ -141,6 +150,60 @@ def run_task(
         logger.exception("任务 %s 发生未预期错误", task.name)
 
     return outcome
+
+
+def _prepare_sources(task: TaskConfig) -> tuple[list[Path], str]:
+    """取出任务要投的视频文件并做本地校验，返回 ``(文件列表, 错误)``。
+
+    多 P 稿件缺一个文件就投不完整，跑到一半才发现更难受，
+    所以这里**一次全查完**再交回去。
+    """
+    sources = task_files(task)
+    if not sources:
+        return [], "任务没有配置视频文件（single 需要 file，multip 需要 files）"
+
+    missing = [str(path) for path in sources if not path.is_file()]
+    if missing:
+        return sources, f"视频文件不存在: {'、'.join(missing)}"
+    return sources, ""
+
+
+def _upload_parts(
+    client: BiliClient,
+    sources: list[Path],
+    titles: list[str],
+    cfg: AppConfig,
+    options: RunOptions,
+    line: "Any",
+) -> list[dict[str, str]]:
+    """逐个上传分 P，返回投稿 payload 需要的 ``videos`` 列表。
+
+    顺序就是 P1/P2/P3 的顺序——B 站按数组下标排分 P，传反了没法在
+    投稿后调整，所以这里严格按 ``sources`` 原序，不做任何重排。
+    """
+    total = len(sources)
+    videos: list[dict[str, str]] = []
+    for position, source in enumerate(sources, start=1):
+        prefix = f"[{position}/{total}] " if total > 1 else ""
+        _emit(options, f"{prefix}开始上传: {source.name}")
+        result = upload_video(
+            client,
+            source,
+            line=line,
+            profile=cfg.upload.profile,
+            concurrency=cfg.upload.concurrency,
+            resume=cfg.upload.resume,
+            chunk_retries=cfg.upload.chunk_retries,
+            show_progress=cfg.upload.show_progress,
+        )
+        _emit(
+            options,
+            f"{prefix}上传完成: {source.name} → filename={result.filename}",
+        )
+        videos.append(
+            {"filename": result.filename, "title": titles[position - 1], "desc": ""}
+        )
+    return videos
 
 
 def run_all(
@@ -190,6 +253,8 @@ def append_history(outcome: TaskOutcome, path: str = DEFAULT_HISTORY_FILE) -> No
             "bvid": outcome.bvid,
             "url": outcome.url,
             "time": time.time(),
+            # 多 P 稿件只记了第一个文件，补上分 P 数才看得出是一整批
+            "parts": outcome.parts or 1,
         }
     )
     tmp = path.with_suffix(".tmp")

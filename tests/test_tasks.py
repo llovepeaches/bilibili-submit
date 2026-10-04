@@ -1349,3 +1349,152 @@ def test_invalid_dtime_keeps_last_good_state(tmp_path, monkeypatch):
     finally:
         root.destroy()
     assert BatchUIState().dtime_offset_hours is None
+
+
+# ---------- 分 P 合并 ----------
+
+
+def test_group_switch_merges_series_into_one_task(tmp_path, monkeypatch):
+    """开着分 P 合并扫目录：同一套视频应变成一个 multip 任务。"""
+    import tkinter as tk
+
+    _make_video(tmp_path, "旅行_01.mp4")
+    _make_video(tmp_path, "旅行_02.mp4")
+    _make_video(tmp_path, "旅行_03.mp4")
+    _make_video(tmp_path, "教程.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._group_var.set("按文件名前缀分组")
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        tasks = view._tasks
+        names = {t.name: (t.type, len(t.files or ([t.file] if t.file else [])))
+                 for t in tasks}
+        assert names["旅行"][0] == "multip"
+        assert names["旅行"][1] == 3, "三个分P合进一个稿件"
+        assert names["教程"][0] == "single", "孤立文件仍各自投稿"
+    finally:
+        root.destroy()
+
+
+def test_group_switch_off_keeps_one_task_per_file(tmp_path, monkeypatch):
+    """默认不合并：每个视频一个稿件（与加这个功能之前完全一致）。"""
+    import tkinter as tk
+
+    _make_video(tmp_path, "旅行_01.mp4")
+    _make_video(tmp_path, "旅行_02.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        assert view._group_var.get() == "不合并"
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        assert len(view._tasks) == 2
+        assert all(t.type == "single" for t in view._tasks)
+    finally:
+        root.destroy()
+
+
+def test_grouped_task_shows_part_count_in_tree(tmp_path, monkeypatch):
+    """列表的「分P」列要能一眼看出哪个是多 P 稿件。"""
+    import tkinter as tk
+
+    _make_video(tmp_path, "旅行_01.mp4")
+    _make_video(tmp_path, "旅行_02.mp4")
+    _make_video(tmp_path, "教程.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._group_var.set("按文件名前缀分组")
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        rows = {
+            view._tree.item(iid, "values")[1]: view._tree.item(iid, "values")[3]
+            for iid in view._tree.get_children()
+        }
+        assert rows["旅行"] == "2"
+        assert rows["教程"] == "—"
+    finally:
+        root.destroy()
+
+
+def test_missing_file_marks_whole_multipart_task(tmp_path, monkeypatch):
+    """多 P 稿件缺一个文件就不能投——整行标缺失，不能只标那一个。
+
+    先建好再删，模拟"扫描过后文件被移走"的真实情况。
+    """
+    import tkinter as tk
+
+    _make_video(tmp_path, "旅行_01.mp4")
+    gone = _make_video(tmp_path, "旅行_02.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._group_var.set("按文件名前缀分组")
+        _load_folder(root, view, tmp_path, monkeypatch)
+        assert not view._missing, "扫描时两个文件都还在"
+
+        gone.unlink()
+        view._fill_tree(view._tasks)
+
+        children = view._tree.get_children()
+        assert len(view._missing) == 1, "缺一个分P，整行就该算缺失"
+        assert "缺 1/2" in view._tree.item(children[0], "values")[2]
+    finally:
+        root.destroy()
+
+
+def test_edit_parts_writes_titles_back(tmp_path, monkeypatch):
+    """改完分 P 标题要落回任务对象，执行时才会带上。"""
+    import tkinter as tk
+
+    _make_video(tmp_path, "旅行_01.mp4")
+    _make_video(tmp_path, "旅行_02.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._group_var.set("按文件名前缀分组")
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        seen: dict[str, object] = {}
+
+        def fake_ask(archive, files, current):
+            seen["archive"] = archive
+            seen["current"] = current
+            return ["出发", "到达"]
+
+        monkeypatch.setattr(view, "_ask_part_titles", fake_ask)
+        view._edit_parts("0")
+
+        assert seen["current"] == ["旅行_01", "旅行_02"], "默认标题取文件名"
+        task = view._tasks[0]
+        assert task.part_titles == ["出发", "到达"]
+        assert task.files and len(task.files) == 2, "文件列表不该被动过"
+    finally:
+        root.destroy()
+
+
+def test_edit_parts_ignores_single_file_task(tmp_path, monkeypatch):
+    """单 P 任务双击不该弹窗——没什么可改的。"""
+    import tkinter as tk
+
+    _make_video(tmp_path, "教程.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        def boom(*_a, **_k):
+            raise AssertionError("单P任务不该弹分P标题对话框")
+
+        monkeypatch.setattr(view, "_ask_part_titles", boom)
+        view._edit_parts("0")  # 不抛即通过
+    finally:
+        root.destroy()

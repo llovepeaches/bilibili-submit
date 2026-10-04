@@ -40,6 +40,8 @@ class BatchUIState:
     tag: str = ""
     desc: str = ""
     dtime_offset_hours: float | None = None
+    #: 是否按文件名前缀把目录里的视频合并成多分 P 稿件
+    group_parts: bool = False
 
 
 def ui_state_path() -> Path:
@@ -81,6 +83,7 @@ def load_ui_state(path: Path | None = None) -> tuple[BatchUIState, str]:
         tag=_as_str(batch.get("tag")),
         desc=_as_str(batch.get("desc")),
         dtime_offset_hours=_as_offset(batch.get("dtime_offset_hours")),
+        group_parts=_as_bool(batch.get("group_parts")),
     ), ""
 
 
@@ -121,6 +124,15 @@ def _as_tid(value: object) -> int:
     if isinstance(value, int) and value > 0:
         return value
     return DEFAULT_TID
+
+
+def _as_bool(value: object) -> bool:
+    """只认真布尔。字符串 "false" 也当假，免得手改过的文件把开关反过来。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().casefold() not in ("", "false", "0", "no", "off")
+    return bool(value)
 
 
 def _as_offset(value: object) -> float | None:

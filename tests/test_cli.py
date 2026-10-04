@@ -179,3 +179,38 @@ def test_proxy_under_account_section_is_accepted(tmp_path):
         encoding="utf-8",
     )
     assert cli.load_config(cfg).account.proxy == "http://127.0.0.1:7890"
+
+
+# ---------- 多分 P 投稿 ----------
+
+
+def test_upload_accepts_multiple_files():
+    """给多个文件就是多 P 投稿——只投一次稿，占一个 av 号。"""
+    args = cli.build_parser().parse_args(["upload", "a.mp4", "b.mp4", "c.mp4"])
+    assert args.file == ["a.mp4", "b.mp4", "c.mp4"]
+
+
+def test_upload_single_file_keeps_working():
+    args = cli.build_parser().parse_args(["upload", "a.mp4"])
+    assert args.file == ["a.mp4"]
+
+
+def test_part_titles_are_collected_in_order():
+    args = cli.build_parser().parse_args(
+        ["upload", "a.mp4", "b.mp4", "--part-title", "出发", "--part-title", "到达"]
+    )
+    assert args.part_titles == ["出发", "到达"]
+
+
+def test_part_titles_default_to_none():
+    """不填就不填，回落逻辑在 task_part_titles 里（那边有单独用例）。"""
+    args = cli.build_parser().parse_args(["upload", "a.mp4"])
+    assert args.part_titles is None
+
+
+def test_default_multipart_title_drops_trailing_number():
+    """多文件不填 --title 时，标题不该是「旅行_01」而应是「旅行」。"""
+    from bilibili_submit.multipart import strip_part_marker
+
+    base, _ = strip_part_marker("旅行_01")
+    assert base == "旅行"

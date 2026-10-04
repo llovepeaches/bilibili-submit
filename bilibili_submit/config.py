@@ -27,6 +27,8 @@ __all__ = [
     "load_config",
     "expand_tasks",
     "scan_video_files",
+    "task_files",
+    "task_part_titles",
 ]
 
 DEFAULT_COOKIE_FILE = os.path.expanduser("~/.config/bilibili_submit/cookie.json")
@@ -102,9 +104,12 @@ class DefaultsConfig:
 @dataclass
 class TaskConfig:
     name: str = "未命名任务"
-    type: str = "single"               # single | batch
+    type: str = "single"               # single | batch | multip
     # single
     file: str | None = None
+    # multip：一个稿件挂多个分 P，files 的顺序就是 P1/P2/P3 的顺序
+    files: list[str] = field(default_factory=list)
+    part_titles: list[str] = field(default_factory=list)
     # batch
     dir: str | None = None
     include: list[str] = field(default_factory=lambda: ["*.mp4"])
@@ -182,17 +187,35 @@ def load_config(path: str | Path) -> AppConfig:
         tasks=[_build(TaskConfig, t) for t in (raw.get("tasks") or [])],
     )
 
+    _validate_tasks(cfg)
+    return cfg
+
+
+def _validate_tasks(cfg: AppConfig) -> None:
+    """逐条校验任务配置。
+
+    抽成独立函数是因为 single / batch / multip 三种任务的必填项各不相同
+    （还多出一条 part_titles 的联动约束），全挤在 :func:`load_config`
+    里会让那个函数一眼读不完。
+    """
     if not cfg.tasks:
         raise ConfigError("配置中没有 tasks，至少要有一个投稿任务")
     for task in cfg.tasks:
-        if task.type not in ("single", "batch"):
-            raise ConfigError(f"任务 {task.name!r} 的 type 必须是 single 或 batch")
+        if task.type not in ("single", "batch", "multip"):
+            raise ConfigError(
+                f"任务 {task.name!r} 的 type 必须是 single / batch / multip"
+            )
         if task.type == "single" and not task.file:
             raise ConfigError(f"任务 {task.name!r} 是 single 类型但缺少 file")
+        if task.type == "multip" and not task.files:
+            raise ConfigError(f"任务 {task.name!r} 是 multip 类型但缺少 files")
         if task.type == "batch" and not task.dir:
             raise ConfigError(f"任务 {task.name!r} 是 batch 类型但缺少 dir")
-
-    return cfg
+        if task.part_titles and not task.files:
+            raise ConfigError(
+                f"任务 {task.name!r} 配了 part_titles 但没有 files"
+                "（分 P 标题只对多 P 任务有意义）"
+            )
 
 
 def scan_video_files(directory: str | Path) -> list[Path]:
@@ -225,7 +248,8 @@ def expand_tasks(cfg: AppConfig) -> list[TaskConfig]:
     """把 batch 任务按目录展开成单个任务列表，并继承 defaults。"""
     out: list[TaskConfig] = []
     for task in cfg.tasks:
-        if task.type == "single":
+        # multip 本身就是一个稿件（内含多个分 P），不需要再展开
+        if task.type in ("single", "multip"):
             out.append(task.merged(cfg.defaults))
             continue
 
@@ -284,6 +308,34 @@ def _scan_files(
     else:
         found.sort(key=lambda p: p.name)
     return found
+
+
+def task_files(task: TaskConfig) -> list[Path]:
+    """任务要上传的视频文件。
+
+    多 P 任务返回 ``files``（顺序即 P1/P2/P3 的顺序），
+    其余返回单个 ``file``。两者都没配时返回空列表，由调用方报错。
+    """
+    if task.files:
+        return [Path(item).expanduser() for item in task.files]
+    if task.file:
+        return [Path(task.file).expanduser()]
+    return []
+
+
+def task_part_titles(task: TaskConfig, files: list[Path]) -> list[str]:
+    """每个分 P 的标题。
+
+    优先用配置里的 ``part_titles``（按下标对应），没配或配短了的部分
+    回落到文件名——分 P 标题空着会让播放器里显示一片空白，
+    宁可显示文件名也不要留空。
+    """
+    configured = list(task.part_titles or [])
+    titles: list[str] = []
+    for index, path in enumerate(files):
+        custom = configured[index].strip() if index < len(configured) else ""
+        titles.append(custom or path.stem)
+    return titles
 
 
 def tid_known(tid: int) -> bool:
