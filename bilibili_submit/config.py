@@ -100,6 +100,24 @@ class DefaultsConfig:
     dynamic: str = ""
     dtime: int | None = None
     dtime_offset_hours: float | None = None
+    # 互动设置。字段名与 B 站接口一致，省掉一层翻译。
+    up_close_reply: bool = False       # 关闭评论区
+    up_close_danmu: bool = False       # 关闭弹幕
+    up_selection_reply: bool = False   # 开启精选评论
+    # 音质增强。``hires`` 在这里用用户听得懂的名字，投递时映射到接口
+    # 字段 ``lossless_music``（B 站官方文档就叫这个，不叫 hires）。
+    dolby: int = 0                     # 杜比音效
+    hires: int = 0                     # Hi-Res 无损音质
+
+    def __post_init__(self) -> None:
+        # 写 "1" / true / yes 都认。不能直接 int(bool(...))：
+        # bool("0") 是 True，手改配置时写 dolby: "0" 会被当成开启，正好弄反。
+        self.no_reprint = _as_flag(self.no_reprint)
+        self.dolby = _as_flag(self.dolby)
+        self.hires = _as_flag(self.hires)
+        self.up_close_reply = _as_bool(self.up_close_reply)
+        self.up_close_danmu = _as_bool(self.up_close_danmu)
+        self.up_selection_reply = _as_bool(self.up_selection_reply)
 
 
 @dataclass
@@ -133,6 +151,13 @@ class TaskConfig:
     mission_id: int | None = None
     dtime: int | None = None
     dtime_offset_hours: float | None = None
+    # 互动设置与音质增强。None 表示「没配」，走 defaults 的值——
+    # 所以想显式关掉要写 false / 0，不能靠省略（省略等于听 defaults 的）。
+    up_close_reply: bool | None = None
+    up_close_danmu: bool | None = None
+    up_selection_reply: bool | None = None
+    dolby: int | None = None
+    hires: int | None = None
     # 批量节奏控制
     per_task_interval_minutes: float = 0.0
     stop_on_error: bool = True
@@ -156,6 +181,25 @@ class AppConfig:
     submit: SubmitConfig = field(default_factory=SubmitConfig)
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
     tasks: list[TaskConfig] = field(default_factory=list)
+
+
+#: 配置文件里表示「开」的写法。手改配置的人不会记得引号规则，
+#: 见 :func:`_as_flag` 为什么不能直接 ``int(bool(value))``。
+_TRUTHY = {"1", "true", "yes", "on", "y", "t"}
+
+
+def _as_flag(value: object) -> int:
+    """把开关类的配置值统一成 0/1，返回 int。"""
+    if isinstance(value, str):
+        return 1 if value.strip().lower() in _TRUTHY else 0
+    return int(bool(value))
+
+
+def _as_bool(value: object) -> bool:
+    """把开关类的配置值统一成 bool。"""
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUTHY
+    return bool(value)
 
 
 def _build(cls: Any, data: Mapping[str, Any] | None) -> Any:

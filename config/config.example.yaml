@@ -41,6 +41,13 @@ defaults:
   no_reprint: 0          # 0=允许转载 1=禁止转载
   dtime: null
   dtime_offset_hours: null
+  # 互动设置：关掉之后就不再有新的弹幕/评论，已发布的稿件不受影响
+  up_close_danmu: false
+  up_close_reply: false
+  up_selection_reply: false   # 开启精选评论
+  # 音质增强。源文件本身得是杜比/无损音轨，否则开了也不会有效果
+  dolby: 0
+  hires: 0                    # Hi-Res（接口字段名叫 lossless_music）
 
 tasks:
   # ---- 模式 A：单个文件 ----

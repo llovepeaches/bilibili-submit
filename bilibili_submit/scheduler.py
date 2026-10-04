@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -27,6 +27,7 @@ DEFAULT_HISTORY_FILE = os.path.expanduser(
 
 __all__ = [
     "TaskOutcome",
+    "build_archive_meta",
     "run_task",
     "run_all",
     "append_history",
@@ -54,6 +55,39 @@ class RunOptions:
     dry_run: bool = False
     history_file: str = DEFAULT_HISTORY_FILE
     on_progress: Callable[[str], None] | None = None
+
+
+def build_archive_meta(
+    task: TaskConfig,
+    videos: list[dict[str, str]],
+    cover_url: str | None = None,
+    dtime: int | None = None,
+) -> ArchiveMeta:
+    """把任务配置翻译成投稿元数据。
+
+    单独抽出来（而不是埋在 :func:`run_task` 里）是因为配置层与接口层的
+    字段名并不一致——配置说 ``hires``，B 站接口要 ``lossless_music``。
+    这种改名必须有地方能被**直接**测到，埋在长函数里就只能靠打桩整条
+    上传链路才摸得着，那条路一旦绕过去，改名写错也不会有人发现。
+    """
+    return ArchiveMeta(
+        title=task.title or "",
+        tid=int(task.tid or 21),
+        tag=task.tag or "",
+        desc=task.desc or "",
+        cover=cover_url,
+        copyright=int(task.copyright or 1),
+        source=task.source or "",
+        dtime=dtime,
+        up_close_reply=bool(task.up_close_reply),
+        up_close_danmu=bool(task.up_close_danmu),
+        up_selection_reply=bool(task.up_selection_reply),
+        dolby=int(task.dolby or 0),
+        # 配置/界面叫 Hi-Res（hires），B 站接口字段叫 lossless_music。
+        # 这里是唯一一处改名，别的地方一律用 hires 跟用户说话。
+        lossless_music=int(task.hires or 0),
+        videos=videos,
+    )
 
 
 def _emit(options: RunOptions, message: str) -> None:
@@ -116,17 +150,10 @@ def run_task(
                 _emit(options, f"封面已上传: {cover_url}")
 
         # 3) 组装并投递（一次提交带上全部分 P）
-        meta = ArchiveMeta(
-            title=task.title or first.stem,
-            tid=int(task.tid or 21),
-            tag=task.tag or "",
-            desc=task.desc or "",
-            cover=cover_url,
-            copyright=int(task.copyright or 1),
-            source=task.source or "",
-            dtime=dtime,
-            videos=videos,
-        )
+        # 标题为空时回落到第一个文件名——补在调用处而不是塞进
+        # build_archive_meta 的参数里，那个函数的签名已经够长了
+        titled = replace(task, title=task.title or first.stem)
+        meta = build_archive_meta(titled, videos, cover_url=cover_url, dtime=dtime)
         submitted = submit_archive(
             client,
             meta,

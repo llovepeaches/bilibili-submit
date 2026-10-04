@@ -109,6 +109,26 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TITLE",
         help="分 P 标题，按出现顺序对应各文件；可重复给，缺省用文件名",
     )
+    # 互动设置与音质增强。default=None 是刻意的：命令行不指定时听配置文件的，
+    # 不能因为没传参就把配置里开着的项悄悄关掉。所以这些开关只能「开」，
+    # 想关请改配置文件（或留空让它走 defaults）。
+    p_up.add_argument("--close-reply", action="store_true", default=None, help="关闭评论区")
+    p_up.add_argument("--close-danmu", action="store_true", default=None, help="关闭弹幕")
+    p_up.add_argument(
+        "--selection-reply", action="store_true", default=None, help="开启精选评论"
+    )
+    p_up.add_argument(
+        "--dolby",
+        action="store_true",
+        default=None,
+        help="开启杜比音效（源文件本身得是杜比音轨，否则开了也没效果）",
+    )
+    p_up.add_argument(
+        "--hires",
+        action="store_true",
+        default=None,
+        help="开启 Hi-Res 无损音质（源文件本身得是无损音轨）",
+    )
 
     # submit
     p_sub = sub.add_parser("submit", help="按配置文件执行投稿")
@@ -272,6 +292,11 @@ def cmd_upload(args: argparse.Namespace) -> int:
         source=args.source,
         dtime=args.dtime,
         dtime_offset_hours=args.dtime_offset,
+        up_close_reply=args.close_reply,
+        up_close_danmu=args.close_danmu,
+        up_selection_reply=args.selection_reply,
+        dolby=args.dolby,
+        hires=args.hires,
     ).merged(cfg.defaults)
 
     # 本地校验放在登录检查之前：参数填错不该让用户先去扫码登录

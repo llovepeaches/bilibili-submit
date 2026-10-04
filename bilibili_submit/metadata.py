@@ -64,8 +64,13 @@ class ArchiveMeta:
     dynamic: str = ""
     subtitle_open: int = 0
     subtitle_lan: str = ""
-    up_close_reply: bool = False
-    up_close_danmu: bool = False
+    up_close_reply: bool = False       # 关闭评论区
+    up_close_danmu: bool = False       # 关闭弹幕
+    up_selection_reply: bool = False   # 开启精选评论
+    # 音视频增强。字段名按 B 站官方参数表来：Hi-Res 叫 lossless_music，
+    # 不叫 hires——猜错名字的话接口会静默忽略，开着开关却没效果。
+    dolby: int = 0                     # 杜比音效 0=否 1=是
+    lossless_music: int = 0            # Hi-Res 无损音质 0=否 1=是
     videos: list[dict[str, str]] = field(default_factory=list)
 
     def normalized(self) -> "ArchiveMeta":
@@ -99,6 +104,10 @@ class ArchiveMeta:
             subtitle_lan=self.subtitle_lan,
             up_close_reply=self.up_close_reply,
             up_close_danmu=self.up_close_danmu,
+            up_selection_reply=self.up_selection_reply,
+            # 允许传 True/False，统一成 0/1 B 站才认
+            dolby=int(bool(self.dolby)),
+            lossless_music=int(bool(self.lossless_music)),
             videos=list(self.videos),
         )
 
@@ -233,4 +242,9 @@ def build_payload(meta: ArchiveMeta, csrf: str, desc_format_id: int = 9999) -> d
         payload["up_close_reply"] = True
     if meta.up_close_danmu:
         payload["up_close_danmu"] = True
+    if meta.up_selection_reply:
+        payload["up_selection_reply"] = True
+    # 这两个官方参数表标了「必要」，0 也要带上，不能只在开启时写
+    payload["dolby"] = meta.dolby
+    payload["lossless_music"] = meta.lossless_music
     return payload
