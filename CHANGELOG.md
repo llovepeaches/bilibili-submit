@@ -6,7 +6,10 @@
 所有值得记录的变更都会写进这里。格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [未发布]
+## [0.2.5] - 2026-10-05
+
+投稿类型能选自制 / 转载了；互动设置与音质开关进了界面；顶部参数收进
+折叠区，把高度还给任务列表。
 
 ### 新增
 
@@ -527,7 +530,8 @@
 - 配置里 `proxy` 段位写错（`upload.proxy` 而非 `account.proxy`）会静默失效，
   现改为直接报错。
 
-[未发布]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.4...HEAD
+[未发布]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.1...v0.2.2
