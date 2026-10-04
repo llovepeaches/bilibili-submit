@@ -10,6 +10,79 @@
 
 暂无。
 
+## [0.2.2] - 2026-10-12
+
+客户端批量任务不再需要配置文件；设置页打开卡顿修复。
+
+### 新增
+
+- **批量任务页改为选视频文件夹**：点「选择文件夹…」自动扫描目录里的视频
+  （mp4/mkv/flv/avi/mov/webm/wmv/m4v/mpeg/mpg/ts），每个视频生成一条任务，
+  标题默认取文件名。**不需要再手写 `config.yaml`**——之前不加载配置文件
+  就用不了客户端，这是最劝退的一处。
+  扫描只做一层、不递归：文件对话框里很容易指到「视频」这种大目录，
+  递归下去可能一次生成上千条任务。
+- **顶部统一投稿参数**：分区、标签、简介、延时发布在页面顶部填一次，
+  这一批任务共用。不用逐个视频重复填。
+- **自动记住上次的目录和参数**：存在
+  `~/.config/bilibili_submit/ui-state.json`，下次打开客户端自动回填并重扫。
+  目录被移走时保留路径并提示，不会静默清掉让你以为设置丢了。
+- **YAML 入口降级为高级功能**：熟悉配置文件的用户仍可从「从 YAML 加载…」进入，
+  逐任务元数据、`title_template`、`submit.backend` 等能力完整保留。
+  该模式下顶部统一参数自动置灰——一刀盖成统一值等于把这些能力废了。
+
+### 修复
+
+- **设置页打开卡顿**：每次切到设置页都在 Tk 主线程同步跑环境自检，
+  里面读 cookie 文件、探测 ffmpeg 路径，还要**启动子进程跑 `ffmpeg -version`**
+  （最坏 10 秒超时）。用户点开设置页看到的是程序死了而不是在忙。
+  现在探测搬到工作线程，主线程只负责先把界面摆成「检测中」再回填结果。
+- **状态栏刷新同样异步**：`refresh_status()` 也有同样的问题，且有 4 个调用方
+  （启动、换 cookie 路径、登录成功后、批量页发现登录态失效），
+  只修设置页不够。实测切换设置页从数百毫秒降到约 3 毫秒。
+- **一次检测读两次 cookie 文件**：
+  `theme.tone(...) if ctx.logged_in else ...` 和 `text=... if ctx.logged_in else ...`
+  写在同一行，那个 property 在表达式里被求值了两遍，文件也就读了两遍。
+  现在一次检测只读一次。
+- **快速连续刷新时旧结果覆盖新结果**：换 cookie 路径后立刻刷新，
+  旧路径的探测可能更慢、后到，把新结果显示覆盖掉——用户明明换好了
+  却看到「未登录」。现在每次刷新推进一个代号，回包时比对，过期的丢弃。
+- 探测或状态栏刷新抛异常时不再永远停在「检测中…」。
+- 扫描目录加载失败时保留上一批任务，不静默清空列表。
+- 分区下拉框在 yaml 与文件夹模式间切换时状态错乱（`state(["!readonly"])`
+  对 readonly 组合框无效，readonly 是选项不是状态标志）。
+
+### 内部整理
+
+- `config.scan_video_files()` 抽出为公开函数，与 yaml 的通配符扫描分开。
+- `ui/state.py` 新增：批量页的界面偏好读写，缺失与损坏区分处理、原子写入。
+- `ui/environment.py` 新增：登录态与 ffmpeg 的纯探测函数，一个 Tk 符号都不碰。
+- `_do_run` 改为接收主线程准备好的快照，不再读页面上的可变属性——
+  执行途中「重新扫描」原本会把任务列表整个换掉。
+- `AppContext.config_path` 删除，批量任务不再有「配置文件」这个概念。
+- `parse_tid` 从 `_parse_tid` 提为公共函数，投稿页与批量任务页共用同一份
+  分区列表。
+- `KeyValueList` 增加 `rows()` / `text()` 读回接口。
+- `version_info.txt` 的 `filevers` / `prodvers` 还停在 `(0, 1, 3, 0)`，
+  Windows 文件属性面板显示的是 0.1.3 而不是 0.2.1，一并修正。
+
+### 测试
+
+- 227 项（此前 174）。新增 `tests/test_ui_state.py`（偏好文件往返、
+  缺失与损坏区分、原子写入）与 `tests/test_settings.py`（探测线程、
+  竞态、错误路径）。
+- 两条直接对应本次改动的守卫：
+  `test_folder_scan_needs_no_yaml` 把 `load_config` 打桩成一调即抛，
+  走文件夹加载仍要成功——「不用配置文件」这句话由它守着；
+  `test_probe_runs_off_main_thread` 用闸门把探测卡住，
+  验证 `refresh()` 立刻返回、界面显示「检测中」、探测线程 id 不是主线程。
+- 异步 UI 测试统一用 `run_until()` 跑**真实 `mainloop`** 等待。
+  `update_idletasks()` 只跑重绘不处理普通 `after` 回调，
+  Worker 完成 ≠ Tk 已执行结果回调——用它等待会得到假绿。
+- 六项双向验证：逐个回注 bug（folder 路径改回依赖 yaml、探测移回主线程、
+  恢复两次 cookie 读取、删掉代号比对、去掉执行期守卫、
+  让异常漏出工作线程），确认每条都让对应测试变红。
+
 ## [0.2.1] - 2026-10-05
 
 代码审查修复。上一版重做批量任务页时引入的几个真 bug，
@@ -347,7 +420,10 @@
 - 配置里 `proxy` 段位写错（`upload.proxy` 而非 `account.proxy`）会静默失效，
   现改为直接报错。
 
-[未发布]: https://github.com/llovepeaches/bilibili-submit/compare/v0.1.3...HEAD
+[未发布]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/llovepeaches/bilibili-submit/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/llovepeaches/bilibili-submit/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/llovepeaches/bilibili-submit/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/llovepeaches/bilibili-submit/compare/v0.1.0...v0.1.1

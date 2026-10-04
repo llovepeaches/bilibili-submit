@@ -66,14 +66,22 @@ def test_qr_matrix_is_square_and_nonempty():
 
 
 def test_tid_parsing():
-    """下拉框选项是「21 - 日常」这种，要能取回分区号。"""
-    from bilibili_submit.ui.views.upload import _parse_tid
+    """下拉框选项是「21 - 日常」这种，要能取回分区号。
 
-    assert _parse_tid("21 - 日常") == 21
-    assert _parse_tid("171 - 电子竞技") == 171
+    投稿页和批量任务页共用这一个函数，两边的分区列表才不会哪天不一样。
+    """
+    from bilibili_submit.ui.views.upload import TID_OPTIONS, parse_tid
+
+    assert parse_tid("21 - 日常") == 21
+    assert parse_tid("171 - 电子竞技") == 171
     # 无法解析时回退默认值，而不是抛异常打断表单填写
-    assert _parse_tid("") == 21
-    assert _parse_tid("乱七八糟") == 21
+    assert parse_tid("") == 21
+    assert parse_tid("乱七八糟") == 21
+
+    # 每个选项都要能往返解析，否则用户选了下拉框却投到别的分区
+    for text in TID_OPTIONS:
+        head = text.split(" - ")[0]
+        assert parse_tid(text) == int(head), text
 
 
 def test_history_time_formatting():

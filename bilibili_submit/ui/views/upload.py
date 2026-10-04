@@ -28,10 +28,23 @@ from ..widgets import (
 )
 from ..workers import Cancelled, Worker
 
-__all__ = ["UploadView"]
+__all__ = ["UploadView", "parse_tid", "TID_OPTIONS"]
 
 #: 标签上限，B 站硬性限制
 MAX_TAGS = 10
+
+#: 分区下拉的选项，格式 ``"21 - 日常"``。投稿页和批量任务页共用同一份，
+#: 免得两个页面的分区列表哪天不一样，用户要重新适应。
+TID_OPTIONS = [f"{tid} - {name}" for tid, name in sorted(COMMON_TIDS.items())]
+
+
+def parse_tid(text: str, default: int = 21) -> int:
+    """从「21 - 日常」这样的下拉项里取出分区号。"""
+    head = (text or "").split("-")[0].strip()
+    try:
+        return int(head)
+    except (ValueError, IndexError):
+        return default
 
 
 class UploadView(ttk.Frame):
@@ -85,13 +98,12 @@ class UploadView(ttk.Frame):
 
         # 分区
         self._tid_var = tk.StringVar()
-        tid_names = [f"{tid} - {name}" for tid, name in sorted(COMMON_TIDS.items())]
         row = FormRow(form, "分区", hint="B 站投稿分区，决定稿件出现在哪里")
         row.grid(row=2, column=0, sticky="ew", pady=4)
         row.add(
             ttk.Combobox,
             textvariable=self._tid_var,
-            values=tid_names,
+            values=TID_OPTIONS,
             state="readonly",
         )
         self._tid_var.set("21 - 日常")
@@ -170,7 +182,7 @@ class UploadView(ttk.Frame):
         if not file.is_file():
             raise BiliError(f"视频文件不存在: {file}")
 
-        tid = _parse_tid(self._tid_var.get(), default=21)
+        tid = parse_tid(self._tid_var.get(), default=21)
 
         offset_text = self._dtime_var.get().strip()
         offset = None
@@ -281,12 +293,3 @@ class UploadView(ttk.Frame):
         self._submit_button.state(state)
         self._preview_button.state(state)
         self._cancel_button.state(["!disabled"] if busy else ["disabled"])
-
-
-def _parse_tid(text: str, default: int = 21) -> int:
-    """从「21 - 日常」这样的下拉项里取出分区号。"""
-    head = (text or "").split("-")[0].strip()
-    try:
-        return int(head)
-    except (ValueError, IndexError):
-        return default

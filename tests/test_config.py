@@ -13,6 +13,7 @@ from bilibili_submit.config import (  # noqa: E402
     UploadConfig,
     expand_tasks,
     load_config,
+    scan_video_files,
 )
 from bilibili_submit.exceptions import ConfigError  # noqa: E402
 from bilibili_submit.metadata import (  # noqa: E402
@@ -113,6 +114,55 @@ def test_batch_dir_missing(tmp_path):
     )
     with pytest.raises(ConfigError, match="目录不存在"):
         expand_tasks(load_config(path))
+
+
+# ---------- 目录扫描（客户端免配置路径）----------
+
+
+def _touch(path):
+    path.write_text("x", encoding="utf-8")
+    return path
+
+
+def test_scan_only_video_files(tmp_path):
+    _touch(tmp_path / "a.mp4")
+    _touch(tmp_path / "b.mkv")
+    _touch(tmp_path / "notes.txt")
+    _touch(tmp_path / "cover.jpg")
+    _touch(tmp_path / "noext")
+    (tmp_path / "sub").mkdir()
+    _touch(tmp_path / "sub" / "deep.mp4")
+
+    found = scan_video_files(tmp_path)
+    assert [p.name for p in found] == ["a.mp4", "b.mkv"]
+
+
+def test_scan_accepts_uppercase_suffix(tmp_path):
+    _touch(tmp_path / "A.MP4")
+    _touch(tmp_path / "B.Mp4")
+    assert [p.name for p in scan_video_files(tmp_path)] == ["A.MP4", "B.Mp4"]
+
+
+def test_scan_is_not_recursive(tmp_path):
+    """只扫第一层。递归下去用户误选大目录会一次生成上千任务。"""
+    (tmp_path / "nested").mkdir()
+    _touch(tmp_path / "nested" / "deep.mp4")
+    assert scan_video_files(tmp_path) == []
+
+
+def test_scan_sorted_casefold(tmp_path):
+    for name in ("b.mp4", "A.mp4", "c.mp4"):
+        _touch(tmp_path / name)
+    assert [p.name for p in scan_video_files(tmp_path)] == ["A.mp4", "b.mp4", "c.mp4"]
+
+
+def test_scan_empty_dir_returns_empty(tmp_path):
+    assert scan_video_files(tmp_path) == []
+
+
+def test_scan_missing_dir_raises(tmp_path):
+    with pytest.raises(ConfigError, match="目录不存在"):
+        scan_video_files(tmp_path / "nope")
 
 
 # ---------- 元数据 ----------

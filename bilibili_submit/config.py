@@ -23,10 +23,33 @@ __all__ = [
     "DefaultsConfig",
     "TaskConfig",
     "AppConfig",
+    "VIDEO_SUFFIXES",
     "load_config",
+    "expand_tasks",
+    "scan_video_files",
 ]
 
 DEFAULT_COOKIE_FILE = os.path.expanduser("~/.config/bilibili_submit/cookie.json")
+
+#: 客户端「选文件夹」时认的视频扩展名。
+#:
+#: 与 yaml 里 ``include: ["*.mp4"]`` 的通配符语义**分开**：那边的
+#: pattern 由用户自己写，这里是给不想碰配置文件的人一个开箱可用的默认值。
+VIDEO_SUFFIXES = frozenset(
+    {
+        ".mp4",
+        ".mkv",
+        ".flv",
+        ".avi",
+        ".mov",
+        ".webm",
+        ".wmv",
+        ".m4v",
+        ".mpeg",
+        ".mpg",
+        ".ts",
+    }
+)
 
 
 @dataclass
@@ -170,6 +193,32 @@ def load_config(path: str | Path) -> AppConfig:
             raise ConfigError(f"任务 {task.name!r} 是 batch 类型但缺少 dir")
 
     return cfg
+
+
+def scan_video_files(directory: str | Path) -> list[Path]:
+    """扫出目录第一层里的视频文件，按文件名排序。
+
+    客户端批量任务页用它代替 yaml 配置：选个文件夹就能出一批任务，
+    不用先写 ``config.yaml``。
+
+    .. important::
+       **只扫第一层，不递归。** 用户在文件对话框里很容易指到
+       「视频」这种大目录，递归下去可能一次生成上千个任务——
+       真正想要多层目录时会明确加开关，而不是默认替他决定。
+
+    扩展名大小写不敏感（``.MP4`` 也要认），排序用 ``casefold()``
+    以免同一批文件在不同系统上顺序不同。
+    """
+    directory = Path(directory).expanduser()
+    if not directory.is_dir():
+        raise ConfigError(f"视频目录不存在: {directory}")
+
+    files = [
+        path
+        for path in directory.iterdir()
+        if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES
+    ]
+    return sorted(files, key=lambda path: path.name.casefold())
 
 
 def expand_tasks(cfg: AppConfig) -> list[TaskConfig]:

@@ -1,4 +1,4 @@
-"""批量任务视图：加载配置文件，挑出要投稿的任务并依次执行。
+"""批量任务视图：选一个视频文件夹，挑出要投稿的任务并依次执行。
 
 这个页要解决的核心问题是**可控**：
 
@@ -8,33 +8,44 @@
 - 跑的过程中每一行实时变色，扫一眼就知道成败。
 - 失败了能一键只重试失败项，不用手动挑。
 
+**不要求用户写配置文件**：选个视频文件夹，页面顶部填一次分区/
+标签/简介，下面自动列出全部任务。下次打开自动恢复上次的目录和参数。
+熟悉 yaml 的高级用户仍可从次要入口加载 ``config.yaml``，那份配置里
+的逐任务元数据和 ``submit.backend`` 依然生效。
+
 线程纪律：执行在工作线程，UI 更新一律经 :class:`~..workers.Event`
-由 ``report`` 送回主线程——**不在工作线程里直接调 Tk**。
+由 ``report`` 送回主线程——**不在工作线程里直接调 Tk，也不读页面
+上之后可能被改掉的属性**。要用的东西在启动前做成快照传进去。
 """
 
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from ...config import expand_tasks, load_config
+from ...config import AppConfig, TaskConfig, expand_tasks, load_config, scan_video_files
 from ...exceptions import BiliError, ConfigError, NotLoggedInError
 from ...scheduler import RunOptions, TaskOutcome, run_task
 from ...submit import get_backend
 from .. import theme
+from ..state import BatchUIState, DEFAULT_TID, load_ui_state, save_ui_state
 from ..widgets import (
     Card,
+    FormRow,
     LogConsole,
     Placeholder,
     PrimaryButton,
     ProgressBar,
     SecondaryButton,
     SectionTitle,
+    StatusPill,
     SummaryBar,
 )
 from ..workers import Cancelled, Event, Worker
+from .upload import TID_OPTIONS, parse_tid
 
 __all__ = ["TasksView"]
 
@@ -55,6 +66,13 @@ UNPICKED = ""
 #: 状态列最多显示多少字。超出的部分存起来，双击看全文
 STATUS_MAX = 18
 
+#: 任务来源
+#:
+#: ``folder`` 是默认路径，不碰 yaml；``yaml`` 是高级兼容路径，
+#: 此时顶部统一参数**不可编辑**——配置里的逐任务 tid、title_template、
+#: submit.backend 会被统一参数覆盖掉，那些能力就等于没了。
+SourceMode = Literal["folder", "yaml"]
+
 
 def _truncate(text: str, limit: int = STATUS_MAX) -> str:
     """截断长文本，保留尾部信息（错误原因的尾巴通常更有用）。
@@ -67,6 +85,33 @@ def _truncate(text: str, limit: int = STATUS_MAX) -> str:
     return text[: limit - 1] + "…"
 
 
+@dataclass(frozen=True)
+class SharedSubmitValues:
+    """顶部统一填的投稿参数，这一批任务共用。
+
+    刻意做成**不可变 + 产出新对象**（见 :meth:`apply`）而不是就地改
+    ``TaskConfig``：执行线程可能正拿着那些对象读，就地改会读到
+    改了一半的字段——比如 tag 已经换了、tid 还是旧的。
+    """
+
+    tid: int
+    tag: str = ""
+    desc: str = ""
+    dtime_offset_hours: float | None = None
+
+    def apply(self, task: TaskConfig) -> TaskConfig:
+        return replace(
+            task,
+            tid=self.tid,
+            tag=self.tag or None,
+            desc=self.desc or None,
+            dtime_offset_hours=self.dtime_offset_hours,
+            # 顶部是「距今几小时」，逐任务的绝对时间要一并清掉，
+            # 否则两套定时来源打架，resolve_dtime 拿到的是旧值
+            dtime=None,
+        )
+
+
 class TasksView(ttk.Frame):
     """批量投稿页。"""
 
@@ -76,12 +121,27 @@ class TasksView(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
+        #: 投稿执行用。跑完才结束，所以独占「取消」按钮的时间最长。
         self._worker = Worker(self)
-        self._tasks: list[Any] = []
-        self._cfg: Any = None
+        #: 读目录/读 yaml 用。目录大了（几千个文件）或 yaml 解析慢时
+        #: 主线程会僵住，所以同样挪到工作线程。
+        self._load_worker = Worker(self)
+        #: 界面偏好读写。纯小文件，但失败不该弹窗打断用户。
+        self._state_worker = Worker(self)
+        #: 当前正在跑的 worker，取消按钮作用于它
+        self._active_worker: Worker[Any] | None = None
+
+        self._tasks: list[TaskConfig] = []
+        self._cfg: AppConfig = AppConfig()
+        self._source_mode: SourceMode = "folder"
         #: 界面是否处于执行态。由 :meth:`_set_busy` 维护，和
         #: ``_worker.running`` 分工：一个管界面，一个管线程。
         self._busy = False
+        #: 界面状态只恢复一次，否则每次切页都重扫目录
+        self._restored = False
+        #: 偏好文件路径。None 表示用默认位置；测试注入临时路径用，
+        #: 否则测试会去动用户真实的 ~/.config 下的文件。
+        self._state_file: Path | None = None
         #: iid -> 是否勾选
         self._picked: dict[str, bool] = {}
         #: 文件不存在的 iid
@@ -99,39 +159,109 @@ class TasksView(ttk.Frame):
         SectionTitle(
             self,
             "批量任务",
-            "加载配置文件后勾选要投稿的任务。执行前会先检查文件是否存在。",
+            "选一个视频文件夹，顶部参数填一次，下面就是全部待投稿任务。",
         ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
 
         card = Card(self)
         card.grid(row=1, column=0, sticky="nsew")
         card.columnconfigure(0, weight=1)
-        card.rowconfigure(2, weight=1)
+        card.rowconfigure(5, weight=1)
 
-        # 配置文件选择
+        # ① 顶部统一投稿参数。四个控件都要留引用：yaml 模式下要置灰
+        self._shared_section = ttk.Frame(card, style="Card.TFrame")
+        self._shared_section.grid(row=0, column=0, sticky="ew")
+        self._shared_section.columnconfigure(0, weight=1)
+
+        self._tid_var = tk.StringVar(value=tid_option(DEFAULT_TID))
+        row = FormRow(
+            self._shared_section,
+            "分区",
+            hint="这一批视频统一发到哪个分区",
+        )
+        row.grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        self._tid_combo = row.add(
+            ttk.Combobox,
+            textvariable=self._tid_var,
+            values=TID_OPTIONS,
+            state="readonly",
+        )
+
+        self._tag_var = tk.StringVar()
+        row = FormRow(self._shared_section, "标签", hint="逗号分隔，这一批共用")
+        row.grid(row=1, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        self._tag_entry = row.add(ttk.Entry, textvariable=self._tag_var)
+
+        self._desc_var = tk.StringVar()
+        row = FormRow(self._shared_section, "简介", hint="可留空")
+        row.grid(row=2, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        self._desc_entry = row.add(ttk.Entry, textvariable=self._desc_var)
+
+        self._dtime_var = tk.StringVar()
+        row = FormRow(
+            self._shared_section,
+            "延时发布",
+            hint="距今多少小时后统一发布，需大于 4；留空为立即发布",
+        )
+        row.grid(row=3, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        self._dtime_entry = row.add(ttk.Entry, textvariable=self._dtime_var)
+
+        # ② 目录来源
+        self._dir_var = tk.StringVar()
         picker = ttk.Frame(card, style="Card.TFrame")
-        picker.grid(row=0, column=0, sticky="ew")
+        picker.grid(row=1, column=0, sticky="ew")
         picker.columnconfigure(0, weight=1)
 
-        self._path_var = tk.StringVar()
-        ttk.Entry(picker, textvariable=self._path_var).grid(
-            row=0, column=0, sticky="ew", padx=(0, theme.PAD_SM)
+        row = FormRow(
+            picker,
+            "视频文件夹",
+            hint="只扫描这一层，不含子目录",
         )
-        self._pick_button = SecondaryButton(picker, "选择配置…", self._pick_config)
-        self._pick_button.grid(row=0, column=1)
-        self._load_button = SecondaryButton(picker, "加载", self._load)
-        self._load_button.grid(row=0, column=2, padx=(theme.PAD_SM, 0))
+        row.grid(row=0, column=0, sticky="ew")
+        row.add(ttk.Entry, textvariable=self._dir_var, padx=(0, theme.PAD_SM))
+        self._pick_button = row.add(
+            SecondaryButton,
+            text="选择文件夹…",
+            command=self._pick_dir,
+            column=1,
+            sticky="w",
+        )
+        self._load_button = row.add(
+            SecondaryButton,
+            text="重新扫描",
+            command=self._load,
+            column=2,
+            sticky="w",
+            padx=(theme.PAD_SM, 0),
+        )
 
-        # 汇总条：左边统计，右边快捷选择
+        # ③ yaml 入口放次要位置。多数用户不该看见它，也不该需要它。
+        advanced = ttk.Frame(card, style="Card.TFrame")
+        advanced.grid(row=2, column=0, sticky="e", pady=(theme.PAD_XS, theme.PAD_SM))
+        ttk.Label(
+            advanced,
+            text="熟悉配置文件？可从 yaml 加载，逐任务参数与投稿后端以配置为准。",
+            style="Card.Secondary.TLabel",
+        ).pack(side="left", padx=(0, theme.PAD_SM))
+        self._config_button = SecondaryButton(
+            advanced, "从 YAML 加载…", self._pick_config
+        )
+        self._config_button.pack(side="left")
+
+        self._source_pill = StatusPill(card, "尚未选择文件夹", "idle")
+        self._source_pill.grid(
+            row=3, column=0, sticky="w", pady=(0, theme.PAD_SM)
+        )
+
+        # ④ 以下与原版一致：汇总条 + 列表 + 操作 + 进度 + 日志
         self._summary = SummaryBar(card)
-        self._summary.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_MD, theme.PAD_XS))
+        self._summary.grid(row=4, column=0, sticky="ew", pady=(0, theme.PAD_XS))
         self._summary.add_action("全选", self._select_all)
         self._summary.add_action("全不选", self._select_none)
         self._summary.add_action("只选失败项", self._select_failed)
 
-        # 任务列表
         list_holder = ttk.Frame(card, style="Card.TFrame")
         list_holder.grid(
-            row=2, column=0, sticky="nsew", pady=(theme.PAD_XS, theme.PAD_SM)
+            row=5, column=0, sticky="nsew", pady=(theme.PAD_XS, theme.PAD_SM)
         )
         list_holder.columnconfigure(0, weight=1)
         list_holder.rowconfigure(0, weight=1)
@@ -162,13 +292,12 @@ class TasksView(ttk.Frame):
         self._tree.bind("<Double-1>", self._show_error_detail)
 
         self._placeholder = Placeholder(
-            card, "尚未加载配置文件", "选择配置…", self._pick_config
+            card, "尚未选择视频文件夹", "选择文件夹…", self._pick_dir
         )
-        self._placeholder.grid(row=2, column=0, sticky="nsew")
+        self._placeholder.grid(row=5, column=0, sticky="nsew")
 
-        # 操作区
         actions = ttk.Frame(card, style="Card.TFrame")
-        actions.grid(row=3, column=0, sticky="ew")
+        actions.grid(row=6, column=0, sticky="ew")
 
         self._run_button = PrimaryButton(actions, "开始投稿", self._run)
         self._run_button.pack(side="left", padx=(0, theme.PAD_SM))
@@ -183,58 +312,238 @@ class TasksView(ttk.Frame):
         self._cancel_button.state(["disabled"])
 
         self._progress = ProgressBar(card)
-        self._progress.grid(row=4, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+        self._progress.grid(row=7, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
 
         self._log = LogConsole(card, height=7)
-        self._log.grid(row=5, column=0, sticky="nsew", pady=(theme.PAD_SM, 0))
-        card.rowconfigure(5, weight=1)
+        self._log.grid(row=8, column=0, sticky="nsew", pady=(theme.PAD_SM, 0))
+        card.rowconfigure(8, weight=1)
+
+        self._apply_source_mode()
 
     # ---------- 行为 ----------
 
     def refresh(self) -> None:
-        """切回本页时若已加载过配置，保持列表不变。"""
+        """切到本页时：首次恢复上次目录，之后保持列表不变。
 
-    def _pick_config(self) -> None:
-        if not self._editable():
-            self._log.append("正在执行任务，结束后才能切换配置")
+        恢复只做一次。没这么做的话每次切页都会重扫目录、重置勾选，
+        用户执行到一半切去看了眼历史，回来发现选择被清了。
+        """
+        if self._restored:
             return
-        path = filedialog.askopenfilename(
-            title="选择配置文件",
-            filetypes=[("YAML 配置", "*.yaml *.yml"), ("所有文件", "*.*")],
+        self._restored = True
+        self._restore_state()
+
+    def _restore_state(self) -> None:
+        """读界面偏好并回填，目录还在就自动扫描。"""
+        state, problem = load_ui_state(self._state_file)
+        if problem:
+            self._log.append(problem)
+        self._apply_state(state)
+        if not state.directory:
+            return
+        if not Path(state.directory).expanduser().is_dir():
+            # 目录没了（移动过/U盘拔了）。路径留着让用户看见并改，
+            # 静默清掉的话他会以为程序把设置弄丢了
+            self._log.append(f"上次的文件夹已不存在：{state.directory}")
+            return
+        self._log.append(f"正在加载上次的文件夹：{state.directory}")
+        self._load()
+
+    def _apply_state(self, state: BatchUIState) -> None:
+        """把偏好填进表单（纯内存，主线程安全）。"""
+        self._dir_var.set(state.directory)
+        self._tag_var.set(state.tag)
+        self._desc_var.set(state.desc)
+        self._dtime_var.set(
+            "" if state.dtime_offset_hours is None else _fmt_offset(state.dtime_offset_hours)
         )
-        if path:
-            self._path_var.set(path)
-            self._load()
+        self._tid_var.set(tid_option(state.tid))
+
+    def _current_state(self) -> BatchUIState:
+        """收集当前表单为偏好对象。
+
+        只收**成功解析**的值：延时填到一半（比如还没输完）时不该把
+        上次那个能用的值覆盖掉。但解析失败只影响那一个字段——
+        分区、标签、简介都照常收集，不能因为延时手滑就把整份偏好丢光。
+        """
+        try:
+            offset = _parse_offset(self._dtime_var.get())
+        except BiliError:
+            offset = None
+        return BatchUIState(
+            directory=self._dir_var.get().strip(),
+            tid=parse_tid(self._tid_var.get()),
+            tag=self._tag_var.get().strip(),
+            desc=self._desc_var.get().strip(),
+            dtime_offset_hours=offset,
+        )
+
+    def _save_state(self) -> None:
+        """异步保存偏好。失败只在日志里说一次，不弹窗打断用户。"""
+        state = self._current_state()
+        try:
+            worker = self._state_worker
+            if worker.running:
+                return
+            worker.run(
+                lambda _report, _cancelled: save_ui_state(state, self._state_file),
+                on_error=lambda exc: self._log.append(f"偏好保存失败：{exc}"),
+            )
+        except RuntimeError:
+            pass
+
+    # ---------- 任务来源：文件夹 ----------
+
+    def _pick_dir(self) -> None:
+        if not self._editable():
+            self._log.append("正在执行任务，结束后才能切换文件夹")
+            return
+        path = filedialog.askdirectory(title="选择视频文件夹")
+        if not path:
+            return
+        self._dir_var.set(path)
+        self._source_mode = "folder"
+        self._apply_source_mode()
+        self._load()
 
     def _load(self) -> None:
-        # 执行途中换配置会把 self._tasks / self._cfg 整体换掉，而工作线程
-        # 正逐项读这两个属性——轻则把任务投给了错的分区，重则直接 IndexError。
-        # 所以这里必须挡住，「选择配置…」按钮也一并禁用。
+        """扫描当前目录，生成任务列表。
+
+        执行途中换目录会把 ``self._tasks`` 整体换掉，而工作线程正逐项读
+        那个列表——轻则把任务投给了错的分区，重则直接 IndexError。
+        所以这里必须挡住，「选择文件夹…」「重新扫描」也一并禁用。
+        """
         if not self._editable():
-            self._log.append("正在执行任务，结束后才能加载配置")
+            self._log.append("正在执行任务，结束后才能重新扫描")
             return
-        raw = self._path_var.get().strip()
+        raw = self._dir_var.get().strip()
         if not raw:
-            self._log.append("请先选择配置文件")
+            self._log.append("请先选择视频文件夹")
             return
-        try:
-            cfg = load_config(Path(raw).expanduser())
-            tasks = expand_tasks(cfg)
-        except (ConfigError, BiliError) as exc:
-            self._log.append(f"配置加载失败：{exc}")
+        directory = Path(raw).expanduser()
+        self._source_mode = "folder"
+        self._apply_source_mode()
+
+        self._start_load(
+            "正在扫描…",
+            lambda _report, is_cancelled: _scan_to_tasks(directory, is_cancelled),
+        )
+
+    # ---------- 任务来源：yaml（高级） ----------
+
+    def _pick_config(self) -> None:
+        """高级入口：从 yaml 加载任务。
+
+        保留是为了不丢功能——``submit.backend``、``upload.concurrency``、
+        逐任务 ``title_template`` 这些只有 yaml 能表达。
+        """
+        if not self._editable():
+            self._log.append("正在执行任务，结束后才能切换任务来源")
+            return
+        path = filedialog.askopenfilename(
+            title="选择 YAML 配置文件",
+            filetypes=[("YAML 配置", "*.yaml *.yml"), ("所有文件", "*.*")],
+        )
+        if not path:
             return
 
-        self.app.ctx.config_path = raw
-        self._tasks = tasks
+        def load_yaml(_report: Any, is_cancelled: Any) -> tuple[AppConfig, list[TaskConfig]]:
+            cfg = load_config(Path(path).expanduser())
+            if is_cancelled():
+                raise Cancelled()
+            return cfg, expand_tasks(cfg)
+
+        self._start_load("正在读取配置…", load_yaml, mode="yaml", label=Path(path).name)
+
+    def _start_load(
+        self,
+        pending_text: str,
+        loader: Any,
+        *,
+        mode: SourceMode = "folder",
+        label: str = "",
+    ) -> None:
+        """在后台加载任务来源，完成后替换列表。
+
+        加载期间置 ``_busy``：复用 :meth:`_editable` 那套守卫，
+        扫描还没跑完就点「开始投稿」的话，投出去的是**上一批**任务——
+        用户看到的是新列表，执行的却是旧内容。
+        """
+        self._source_pill.set(pending_text, "busy")
+        self._set_busy(True)
+        try:
+            worker = self._load_worker
+            self._active_worker = worker
+            worker.run(
+                loader,
+                on_done=lambda result, m=mode, lb=label: self._on_loaded(result, m, lb),
+                on_error=self._on_load_error,
+            )
+        except Exception as exc:  # noqa: BLE001 - 启动失败必须把界面解锁
+            self._set_busy(False)
+            self._active_worker = None
+            self._source_pill.set("加载失败", "error")
+            self._log.append(f"无法启动加载：{exc}")
+
+    def _on_loaded(
+        self, result: tuple[AppConfig, list[TaskConfig]], mode: SourceMode, label: str
+    ) -> None:
+        self._set_busy(False)
+        self._active_worker = None
+        cfg, tasks = result
+        if not tasks:
+            self._source_pill.set("没有可投稿的任务", "warn")
+            self._log.append("没有找到可投稿的任务")
+            return
+
         self._cfg = cfg
+        self._tasks = tasks
+        self._source_mode = mode
+        self._apply_source_mode()
         self._reset_state()
         self._fill_tree(tasks)
         self._run_button.state(["!disabled"])
+
+        source = label if label else self._dir_var.get().strip()
+        self._source_pill.set(f"{source} · {len(tasks)} 个任务", "ok")
         self._log.append(f"已加载 {len(tasks)} 个任务")
         if self._missing:
             self._log.append(
                 f"其中 {len(self._missing)} 个文件不存在，已标为「缺失」且不可勾选"
             )
+        if mode == "folder":
+            self._save_state()
+
+    def _on_load_error(self, exc: BaseException) -> None:
+        self._set_busy(False)
+        self._active_worker = None
+        if isinstance(exc, Cancelled):
+            self._source_pill.set("已取消", "idle")
+            self._log.append("已取消加载")
+            return
+        # 加载失败保留上一批任务：用户已经看到列表了，静默清空等于
+        # 「我明明选好了怎么又没了」
+        self._source_pill.set("加载失败", "error")
+        self._log.append(f"加载失败：{exc}")
+
+    def _apply_source_mode(self) -> None:
+        """yaml 模式下把顶部参数置灰。
+
+        统一参数只在文件夹模式生效。yaml 模式下一批任务可能各有各的
+        分区和标题模板，用一份统一值盖上去等于把这些能力废了。
+        """
+        yaml_mode = self._source_mode == "yaml"
+        # 分区下拉框必须用 ``configure(state=...)`` 而不是
+        # ``state(["!readonly"])``：readonly 是 ttk 的**选项**，
+        # 不是 state 标志位，走 state() 改它没有效果——
+        # 表现为从 yaml 切回文件夹后，下拉框永远灰着。
+        self._tid_combo.configure(state="disabled" if yaml_mode else "readonly")
+        entry_state = ["disabled"] if yaml_mode else ["!disabled"]
+        self._tag_entry.state(entry_state)
+        self._desc_entry.state(entry_state)
+        self._dtime_entry.state(entry_state)
+        if yaml_mode:
+            self._source_pill.set("参数由 YAML 提供", "idle")
 
     def _reset_state(self) -> None:
         """清空上一轮的选择与结果。"""
@@ -243,7 +552,8 @@ class TasksView(ttk.Frame):
         self._errors.clear()
         self._tones.clear()
 
-    def _fill_tree(self, tasks: list[Any]) -> None:
+    def _fill_tree(self, tasks: list[TaskConfig]) -> None:
+        shared_tid = parse_tid(self._tid_var.get())
         self._tree.delete(*self._tree.get_children())
         for index, task in enumerate(tasks):
             iid = str(index)
@@ -273,7 +583,7 @@ class TasksView(ttk.Frame):
                     PICKED if self._picked[iid] else UNPICKED,
                     task.name,
                     file_text,
-                    task.tid or "",
+                    shared_tid if self._source_mode == "folder" else (task.tid or ""),
                     status,
                 ),
                 tags=(tone,),
@@ -347,14 +657,15 @@ class TasksView(ttk.Frame):
 
         .. important::
            只看 :attr:`_busy`，不要掺 ``_worker.running``。两个信号
-           并不等价：``on_done`` / ``on_error`` 是排进 Tk 事件循环执行的，
+           并非等价：``on_done`` / ``on_error`` 是排进 Tk 事件循环执行的，
            那一刻工作线程**还没退出**（它只是排完队就返回了），
            ``running`` 仍为 True。若拿它当条件，收尾时会把「重试失败项」
            重新锁死，而之后没有任何东西再来刷新一次——
            有失败项却点不了重试。
 
-           ``_busy`` 覆盖了「线程还活着」的整个窗口：``_run`` 开头置
-           True，``_on_done`` / ``_on_error`` / 启动失败三处归 False。
+           ``_busy`` 覆盖了「线程还活着」的整个窗口：``_run`` /
+           ``_start_load`` 开头置 True，``_on_done`` / ``_on_error`` /
+           ``_on_loaded`` / ``_on_load_error`` / 启动失败五处归 False。
            相比线程内部状态，界面态才是这里真正该依据的东西。
         """
         return not self._busy
@@ -396,6 +707,38 @@ class TasksView(ttk.Frame):
             if self._picked.get(iid) and iid not in self._missing
         ]
 
+    def _collect_shared(self) -> SharedSubmitValues:
+        """读顶部统一参数。**主线程调用**，只碰内存里的 Tk 变量。"""
+        offset = _parse_offset(self._dtime_var.get())
+        return SharedSubmitValues(
+            tid=parse_tid(self._tid_var.get()),
+            tag=self._tag_var.get().strip(),
+            desc=self._desc_var.get().strip(),
+            dtime_offset_hours=offset,
+        )
+
+    def _snapshot_run(
+        self, indexes: list[int]
+    ) -> tuple[AppConfig, list[tuple[int, TaskConfig]]]:
+        """为本轮执行做完整快照。
+
+        **工作线程不许读页面上的可变属性**。``self._tasks`` /
+        ``self._cfg`` 随时可能被下一次「重新扫描」整体换掉，而执行线程
+        正逐项遍历它——换掉一半的话，投出去的是新任务里的一半、参数却
+        还是旧的。所以这里在主线程把要用的东西全拷出来再传进去。
+        """
+        cfg = replace(self._cfg) if self._source_mode == "yaml" else AppConfig()
+        if self._source_mode == "folder":
+            shared = self._collect_shared()
+            selected = [
+                (index, shared.apply(self._tasks[index])) for index in indexes
+            ]
+        else:
+            selected = [
+                (index, replace(self._tasks[index])) for index in indexes
+            ]
+        return cfg, selected
+
     def _run(self) -> None:
         # 用 _editable 而不是 _worker.running：界面还锁着就说明这一轮
         # 还没收尾，此时再启动一个 Worker 会和上一轮的收尾回调打架
@@ -408,13 +751,21 @@ class TasksView(ttk.Frame):
         if not self.app.ctx.logged_in:
             self._log.append("尚未登录，请先到「登录」页扫码")
             return
+        try:
+            cfg, selected = self._snapshot_run(indexes)
+        except BiliError as exc:
+            self._log.append(f"参数有误：{exc}")
+            return
 
         self._set_busy(True)
         try:
             self._log.clear()
             self._progress.reset()
+            self._active_worker = self._worker
             self._worker.run(
-                lambda report, is_cancelled: self._do_run(report, is_cancelled, indexes),
+                lambda report, is_cancelled: self._do_run(
+                    report, is_cancelled, selected, cfg
+                ),
                 on_progress=self._on_progress,
                 on_done=self._on_done,
                 on_error=self._on_error,
@@ -424,6 +775,7 @@ class TasksView(ttk.Frame):
             # 卡在 True——「开始投稿」灰着、取消点不动，只能重启进程。
             # 这里与 _on_error 做同样的归位。
             self._set_busy(False)
+            self._active_worker = None
             self._log.append(f"无法启动任务：{exc}")
 
     def _retry_failed(self) -> None:
@@ -450,32 +802,39 @@ class TasksView(ttk.Frame):
         ]
 
     def _cancel(self) -> None:
-        self._worker.cancel()
+        worker = self._active_worker
+        if worker:
+            worker.cancel()
         self._log.append("已请求取消…")
 
-    def _do_run(self, report, is_cancelled, indexes: list[int]) -> list[TaskOutcome]:
+    def _do_run(
+        self,
+        report,
+        is_cancelled,
+        selected: list[tuple[int, TaskConfig]],
+        cfg: AppConfig,
+    ) -> list[TaskOutcome]:
         """依次执行勾选的任务（工作线程）。
 
         UI 更新一律走 ``report``：文字进度直接是字符串，
         行状态与进度条用 :class:`~..workers.Event`。
         """
         client = self.app.ctx.client()
-        backend = get_backend(self._cfg.submit.backend, self._cfg.submit.app)
+        backend = get_backend(cfg.submit.backend, cfg.submit.app)
         outcomes: list[TaskOutcome] = []
 
-        total = len(indexes)
-        for position, index in enumerate(indexes):
+        total = len(selected)
+        for position, (index, task) in enumerate(selected, start=1):
             if is_cancelled():
                 raise Cancelled()
 
-            task = self._tasks[index]
-            report(Event("start", index=index, position=position + 1, total=total))
-            report(f"[{position + 1}/{total}] 开始：{task.name}")
+            report(Event("start", index=index, position=position, total=total))
+            report(f"[{position}/{total}] 开始：{task.name}")
 
             outcome = run_task(
                 client,
                 task,
-                self._cfg,
+                cfg,
                 backend=backend,
                 options=RunOptions(on_progress=report),
             )
@@ -490,13 +849,13 @@ class TasksView(ttk.Frame):
                 Event(
                     "done",
                     index=index,
-                    position=position + 1,
+                    position=position,
                     total=total,
                     status=status,
                     error=error,
                 )
             )
-            report(f"[{position + 1}/{total}] {task.name} → {status}")
+            report(f"[{position}/{total}] {task.name} → {status}")
 
         return outcomes
 
@@ -553,6 +912,7 @@ class TasksView(ttk.Frame):
 
     def _on_done(self, outcomes: list[TaskOutcome]) -> None:
         self._set_busy(False)
+        self._active_worker = None
         ok = sum(1 for o in outcomes if o.success)
         self._progress.set_value(100)
         self._progress.set_text(f"完成 {ok}/{len(outcomes)}")
@@ -565,6 +925,7 @@ class TasksView(ttk.Frame):
 
     def _on_error(self, exc: BaseException) -> None:
         self._set_busy(False)
+        self._active_worker = None
         if isinstance(exc, Cancelled):
             self._revert_busy_rows("已取消")
             self._log.append("已取消")
@@ -633,6 +994,7 @@ class TasksView(ttk.Frame):
         self._cancel_button.state(["!disabled"] if busy else ["disabled"])
         self._pick_button.state(["disabled"] if busy else ["!disabled"])
         self._load_button.state(["disabled"] if busy else ["!disabled"])
+        self._config_button.state(["disabled"] if busy else ["!disabled"])
         self._summary.set_actions_enabled(not busy)
 
     # ---------- 汇总 ----------
@@ -664,3 +1026,53 @@ class TasksView(ttk.Frame):
             self._retry_button.state(["!disabled"])
         else:
             self._retry_button.state(["disabled"])
+
+
+# ---------- 模块级辅助 ----------
+
+
+def _scan_to_tasks(
+    directory: Path, is_cancelled: "Any"
+) -> tuple[AppConfig, list[TaskConfig]]:
+    """扫目录并生成任务（工作线程执行）。
+
+    生成的每个任务：标题默认取文件名，投稿参数留空——顶部统一参数
+    在启动执行时由 :meth:`TasksView.SharedSubmitValues.apply` 填进去。
+    """
+    if is_cancelled():
+        raise Cancelled()
+    files = scan_video_files(directory)
+    if is_cancelled():
+        raise Cancelled()
+    if not files:
+        raise ConfigError(f"目录里没有找到视频文件：{directory}")
+
+    tasks = [
+        TaskConfig(name=path.stem, type="single", file=str(path), title=path.stem)
+        for path in files
+    ]
+    return AppConfig(), tasks
+
+
+def _parse_offset(text: str) -> float | None:
+    """把「6」这样的输入转成小时数。空串表示立即发布。"""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise BiliError(f"延时发布小时数不是数字: {raw}") from exc
+
+
+def _fmt_offset(value: float) -> str:
+    """小时数回填到输入框。整数就不带 ``.0``。"""
+    return str(int(value)) if value == int(value) else str(value)
+
+
+def tid_option(tid: int) -> str:
+    """分区号 → 下拉框里的文字，认不出来的分区原样显示。"""
+    for text in TID_OPTIONS:
+        if parse_tid(text) == tid:
+            return text
+    return str(tid)

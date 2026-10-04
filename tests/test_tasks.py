@@ -5,21 +5,34 @@
 所以拆成两类：
 
 1. **纯逻辑**（默认跑）：截断、语义色映射、Event 结构——不需要显示器
-2. **需要 Tk**（无 display 时跳过）：真的建窗口、加载配置、点列表
+2. **需要 Tk**（无 display 时跳过）：真的建窗口、扫描文件夹、点列表
 
-第 2 类用一个临时生成的配置文件，其中**故意包含一个不存在的文件**，
+第 2 类用一个临时视频目录，其中**故意放一个扫描后删掉的文件**，
 用来验证预检——这是本页最容易出错也最有用的功能。
+
+.. important::
+   凡是走 Worker 的测试都靠 :func:`run_until` 等**真实事件循环**。
+   ``update_idletasks()`` 只处理重绘，不处理普通 ``after()`` 回调：
+   Worker 结束 ≠ Tk 已经执行了结果回调，用它等待会得到「列表还没填上」
+   的假失败，或者更糟——压根没等，断言了一个还没发生的状态。
 """
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from bilibili_submit.ui.views.tasks import PICKED, UNPICKED, TasksView, _truncate  # noqa: E402
+from bilibili_submit.ui.views.tasks import (  # noqa: E402
+    PICKED,
+    UNPICKED,
+    SharedSubmitValues,
+    TasksView,
+    _truncate,
+)
 from bilibili_submit.ui.workers import Event  # noqa: E402
 
 
@@ -81,6 +94,38 @@ def test_unknown_tone_falls_back_to_idle():
     assert theme.tone("不存在的状态") == theme.TONES["idle"]
 
 
+def test_shared_values_apply_clears_absolute_dtime():
+    """统一参数填的是「距今几小时」，逐任务的绝对时间必须一并清掉。
+
+    留着的话 resolve_dtime 会拿到一个上次执行的旧时间点，
+    定时投稿会定到过去——而界面上根本没提示。
+    """
+    from bilibili_submit.config import TaskConfig
+
+    task = TaskConfig(name="A", file="/x/a.mp4", dtime=1700000000, tid=1, tag="旧")
+    shared = SharedSubmitValues(tid=138, tag="新,标签", desc="简介", dtime_offset_hours=6.0)
+
+    out = shared.apply(task)
+
+    assert out.tid == 138
+    assert out.tag == "新,标签"
+    assert out.desc == "简介"
+    assert out.dtime_offset_hours == 6.0
+    assert out.dtime is None
+    # 原对象不能被就地改掉：执行线程可能正拿着它读
+    assert task.tid == 1 and task.tag == "旧"
+
+
+def test_shared_values_blank_tag_becomes_none():
+    """空标签转成 None，而不是空串——空串会被当成「显式清空标签」。"""
+    from bilibili_submit.config import TaskConfig
+
+    out = SharedSubmitValues(tid=21).apply(TaskConfig(name="A", file="/x/a.mp4"))
+    assert out.tag is None
+    assert out.desc is None
+    assert out.dtime_offset_hours is None
+
+
 # ---------- 需要 Tk ----------
 
 
@@ -100,9 +145,41 @@ needs_display = pytest.mark.skipif(
 )
 
 
-def _build(root):
-    """建 App 并返回批量任务页视图。"""
-    import tkinter as tk  # noqa: F401
+def run_until(root, predicate, timeout_ms: int = 5000) -> None:
+    """跑真实事件循环直到 ``predicate()`` 为真。
+
+    为什么不用 ``update_idletasks()``：那只跑重绘，**不跑普通 ``after``
+    回调**。Worker 完成只是把结果 ``after(0)`` 排进队列，能不能排上、
+    什么时候排上都由事件循环说了算。
+
+    超时直接 fail 而不是静默通过——宁可红一次，也不要让「异步结果没到达」
+    被读成「功能正常」。
+    """
+    state = {"done": False}
+
+    def poll():
+        if predicate():
+            state["done"] = True
+            root.quit()
+        else:
+            root.after(10, poll)
+
+    def on_timeout():
+        root.quit()
+
+    root.after(0, poll)
+    root.after(timeout_ms, on_timeout)
+    root.mainloop()
+    assert state["done"], f"等待异步结果超时（{timeout_ms}ms）"
+    assert predicate()
+
+
+def _build(root, tmp_path=None, monkeypatch=None):
+    """建 App 并返回批量任务页视图。
+
+    ``tmp_path`` 给定时，偏好文件会指向临时目录、状态探测会被打桩，
+    测试绝不碰用户真实的 ~/.config。
+    """
     from tkinter import ttk
 
     from bilibili_submit.ui import theme
@@ -111,23 +188,69 @@ def _build(root):
     style = ttk.Style(root)
     try:
         style.theme_use("clam")
-    except tk.TclError:
+    except root.tk.TclError:
         pass
     theme.apply(style)
     app = App(root)
     app.pack(fill="both", expand=True)
-    return app, app._views["批量任务"]
+    view = app._views["批量任务"]
+    if tmp_path is not None:
+        view._state_file = tmp_path / "ui-state.json"
+    if monkeypatch is not None:
+        _stub_probe(monkeypatch, app)
+    return app, view
 
 
-def _write_config(tmp_path: Path, entries: list[tuple[str, str]]) -> str:
-    """写一份配置；``entries`` 是 (任务名, 文件路径) 列表。"""
-    tmp_path.mkdir(parents=True, exist_ok=True)
+def _stub_probe(monkeypatch, app) -> None:
+    """把环境探测打桩成立即返回，省掉每次读文件 + 探 ffmpeg 路径。"""
+    from bilibili_submit.ui import environment as env_mod
+
+    class _Info:
+        source = "system"
+        path = "ffmpeg"
+
+    snap = env_mod.EnvironmentSnapshot(logged_in=False, ffmpeg=_Info(), ffmpeg_version="")
+    calls: list[tuple[str, bool]] = []
+
+    def fake(cookie_file, *, include_ffmpeg_version=False):
+        calls.append((cookie_file, include_ffmpeg_version))
+        return snap
+
+    monkeypatch.setattr(environment_probe_targets()[0], "probe_environment", fake)
+    monkeypatch.setattr(environment_probe_targets()[1], "probe_environment", fake)
+
+
+def environment_probe_targets() -> tuple[object, object]:
+    """探测函数被打桩的位置（app 与 settings 各自导入了一份）。"""
+    from bilibili_submit.ui import app as app_mod
+    from bilibili_submit.ui.views import settings as settings_mod
+
+    return app_mod, settings_mod
+
+
+def _make_video(directory: Path, name: str) -> Path:
+    video = directory / name
+    video.parent.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b"\x00" * 1024)
+    return video
+
+
+def _load_folder(root, view, directory, monkeypatch=None) -> None:
+    """走文件夹来源加载，等真实结果落地。"""
+    if monkeypatch is not None:
+        _stub_probe(monkeypatch, view.app)
+    view._dir_var.set(str(directory))
+    view._load()
+    run_until(root, lambda: not view._busy)
+
+
+def _write_yaml(directory: Path, entries: list[tuple[str, str]]) -> str:
+    """写一份 yaml 配置；``entries`` 是 (任务名, 文件路径) 列表。"""
+    directory.mkdir(parents=True, exist_ok=True)
     lines = [
         "defaults:",
         "  tid: 21",
-        "  tag: \"测试\"",
-        "account:",
-        f"  cookie_file: {tmp_path / 'cookie.json'}",
+        "  tag: \"来自yaml的标签\"",
         "submit:",
         "  backend: web",
         "tasks:",
@@ -136,85 +259,340 @@ def _write_config(tmp_path: Path, entries: list[tuple[str, str]]) -> str:
         lines.append(f"  - name: \"{name}\"")
         lines.append(f"    file: {file_path}")
         lines.append(f"    title: \"{name}\"")
-    path = tmp_path / "config.yaml"
+    path = directory / "config.yaml"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return str(path)
 
 
-def _make_video(tmp_path: Path, name: str) -> str:
-    video = tmp_path / name
-    video.write_bytes(b"\x00" * 1024)
-    return str(video)
+def _load_yaml(root, view, path) -> None:
+    """走高级 yaml 入口加载，等真实结果落地。"""
+    view._pick_config_from = None  # 标记不是文件对话框路径
+    view._dir_var.set(str(path))
+    from bilibili_submit.config import expand_tasks, load_config
+
+    def loader(_report, is_cancelled):
+        cfg = load_config(Path(path))
+        return cfg, expand_tasks(cfg)
+
+    view._start_load("读配置…", loader, mode="yaml", label=Path(path).name)
+    run_until(root, lambda: not view._busy)
 
 
 @needs_display
-def test_load_marks_missing_files_and_skips_them(tmp_path):
-    """文件不存在的任务要被标成缺失、默认不勾、且勾不上。"""
+def test_folder_scan_needs_no_yaml(tmp_path, monkeypatch):
+    """**客户端批量任务不用配置文件**——这条用例是那句话的守卫。
+
+    把 ``load_config`` 打桩成一调就抛，再走文件夹加载：还能成功出列表，
+    就证明主路径确实没碰 yaml。反向验证时把它改回 ``load_config``，
+    这条必须变红。
+    """
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    gone = str(tmp_path / "gone.mp4")
-    cfg = _write_config(tmp_path, [("存在", real), ("不见了", gone)])
+    from bilibili_submit.ui.views import tasks as tasks_mod
+
+    _make_video(tmp_path, "a.mp4")
+    _make_video(tmp_path, "b.mkv")
+    (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise AssertionError("文件夹路径不该碰 load_config")
+
+    monkeypatch.setattr(tasks_mod, "load_config", boom)
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
-        root.update_idletasks()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
 
-        assert view._missing == {"1"}, f"应只把 1 号判为缺失，实际 {view._missing}"
+        assert [Path(t.file).name for t in view._tasks] == ["a.mp4", "b.mkv"]
+        assert len(view._tree.get_children()) == 2
+    finally:
+        root.destroy()
 
-        # 缺失项：未勾选 + 状态是「文件缺失」+ 用 missing 语义色
-        assert view._picked["1"] is False
-        values = view._tree.item("1", "values")
-        assert values[0] == UNPICKED
-        assert values[-1] == "文件缺失"
-        assert view._tree.item("1", "tags") == ("missing",)
 
-        # 存在的项：默认勾选 + 待投稿
-        assert view._picked["0"] is True
-        assert view._tree.item("0", "values")[0] == PICKED
+@needs_display
+def test_folder_tasks_use_filename_stem(tmp_path, monkeypatch):
+    """文件夹模式下任务名和标题都取文件名 stem，用户少填一次。"""
+    import tkinter as tk
+
+    _make_video(tmp_path, "第一集.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        task = view._tasks[0]
+        assert task.name == "第一集"
+        assert task.title == "第一集"
+        assert task.type == "single"
+        assert view._tree.item("0", "values")[1] == "第一集"
+        assert view._tree.item("0", "values")[0] == PICKED, "正常任务默认勾选"
         assert view._tree.item("0", "tags") == ("idle",)
     finally:
         root.destroy()
 
 
 @needs_display
-def test_toggle_refuses_missing_file(tmp_path):
-    """点缺失项不该勾上——勾了却在执行时被跳过最让人困惑。"""
+def test_shared_top_params_applied_to_every_task(tmp_path, monkeypatch):
+    """顶部统一参数要落到**每一个**任务上，逐项断言。
+
+    不做「最后把所有任务汇总比较一次」——那样某一项漏了也可能被
+    其他项的正确值掩盖住，看着像全对。
+    """
     import tkinter as tk
 
-    gone = str(tmp_path / "gone.mp4")
-    cfg = _write_config(tmp_path, [("不见了", gone)])
+    for name in ("a.mp4", "b.mp4", "c.mkv"):
+        _make_video(tmp_path, name)
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
 
-        view._toggle("0")
-        assert view._picked["0"] is False, "缺失项不该被勾上"
-        assert view._tree.item("0", "values")[0] == UNPICKED
+        view._tid_var.set("17 - 单机游戏")
+        view._tag_var.set("日常,记录")
+        view._desc_var.set("统一简介")
+        view._dtime_var.set("6")
+
+        cfg, selected = view._snapshot_run(view._selected_indexes())
+
+        assert len(selected) == 3
+        for index, task in selected:
+            assert task.tid == 17, f"下标 {index} 的分区没跟上"
+            assert task.tag == "日常,记录", f"下标 {index} 的标签没跟上"
+            assert task.desc == "统一简介", f"下标 {index} 的简介没跟上"
+            assert task.dtime_offset_hours == 6.0, f"下标 {index} 的延时没跟上"
+        # 标题仍各是各的文件名，不能被统一参数抹平
+        assert [Path(t.file).stem for _, t in selected] == ["a", "b", "c"]
+        assert cfg.submit.backend == "web"
     finally:
         root.destroy()
 
 
 @needs_display
-def test_select_failed_picks_only_errors(tmp_path):
-    """「只选失败项」要选中失败的，且排除文件缺失的。"""
+def test_snapshot_does_not_mutate_task_list(tmp_path, monkeypatch):
+    """快照不能就地改 ``self._tasks``。
+
+    执行线程正拿着那些对象读，就地改会读到改了一半的字段。
+    """
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    gone = str(tmp_path / "gone.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real), ("C", gone)])
+    _make_video(tmp_path, "a.mp4")
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        view._tid_var.set("17 - 单机游戏")
+        before = list(view._tasks)
+        view._snapshot_run([0])
+
+        assert view._tasks == before, "任务列表不该被快照过程改掉"
+        assert before[0].tid != 17
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_bad_dtime_rejected_before_worker_starts(tmp_path, monkeypatch):
+    """延时填了非数字，要在**起线程之前**就报错。
+
+    报错太晚会走 ``_on_error`` 那条路，虽然也能解锁，但用户已经看到
+    界面闪了一圈「进行中」，而且白白起了一个线程。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.views import tasks as tasks_mod
+
+    _make_video(tmp_path, "a.mp4")
+
+    root = tk.Tk()
+    try:
+        app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        class _Ctx:
+            logged_in = True
+
+            def client(self, need_login=True):
+                return object()
+
+        app.ctx = _Ctx()
+        view._dtime_var.set("六")
+
+        started = []
+        monkeypatch.setattr(
+            tasks_mod.Worker, "run", lambda self, *a, **k: started.append(a)
+        )
+        view._log.clear()
+        view._run()
+
+        assert started == [], "参数非法时不该启动任何线程"
+        assert "不是数字" in view._log._text.get("1.0", "end")
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_missing_file_marked_and_unpickable(tmp_path, monkeypatch):
+    """扫描之后文件被删掉的行要标缺失、默认不勾、且勾不上。"""
+    import tkinter as tk
+
+    real = _make_video(tmp_path, "a_real.mp4")
+    doomed = _make_video(tmp_path, "b_gone.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+        assert sorted(view._picked) == ["0", "1"]
+
+        # 扫描完成后再删——模拟用户自己把文件挪走了
+        doomed.unlink()
+
+        view._reset_state()
+        view._fill_tree(view._tasks)
+
+        assert view._missing == {"1"}, f"应只把 gone 判为缺失，实际 {view._missing}"
+        assert view._picked["1"] is False
+        assert view._tree.item("1", "values")[0] == UNPICKED
+        assert view._tree.item("1", "values")[-1] == "文件缺失"
+        assert view._tree.item("1", "tags") == ("missing",)
+
+        view._toggle("1")
+        assert view._picked["1"] is False, "缺失项不该被勾上"
+        assert Path(real).is_file()
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_empty_dir_keeps_previous_tasks(tmp_path, monkeypatch):
+    """空目录加载失败要保住上一批任务，并说明原因。
+
+    静默清空的话，用户明明看到列表在，回来发现空了却不知道原因。
+    """
+    import tkinter as tk
+
+    _make_video(tmp_path, "a.mp4")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+        assert len(view._tasks) == 1
+
+        view._log.clear()
+        _load_folder(root, view, empty, monkeypatch)
+
+        assert len(view._tasks) == 1, "空目录不该清掉已有任务"
+        assert "没有找到视频文件" in view._log._text.get("1.0", "end")
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_yaml_mode_keeps_per_task_values(tmp_path, monkeypatch):
+    """高级 yaml 入口不能被统一参数覆盖掉。
+
+    yaml 的价值就在于逐任务能配不同的分区/标题，还有
+    ``submit.backend``——一刀盖成统一值等于把这些能力废了。
+    """
+    import tkinter as tk
+
+    real_a = _make_video(tmp_path, "a.mp4")
+    real_b = _make_video(tmp_path, "b.mp4")
+    path = _write_yaml(tmp_path, [("甲", str(real_a)), ("乙", str(real_b))])
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_yaml(root, view, path)
+
+        assert view._source_mode == "yaml"
+        assert view._cfg.submit.backend == "web", "yaml 的投稿后端要留着"
+        assert [t.tag for t in view._tasks] == ["来自yaml的标签", "来自yaml的标签"]
+
+        cfg, selected = view._snapshot_run([0, 1])
+        assert cfg.submit.backend == "web"
+        assert selected[0][1].tag == "来自yaml的标签"
+        # 顶部参数在 yaml 模式下不生效
+        assert selected[0][1].tid == 21
+        assert "disabled" in view._tid_combo.state(), "yaml 模式顶部参数应置灰"
+        assert "disabled" in view._tag_entry.state()
+        assert "disabled" in view._dtime_entry.state()
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_back_to_folder_reenables_shared_params(tmp_path, monkeypatch):
+    """从 yaml 切回文件夹，顶部参数要恢复可编辑。"""
+    import tkinter as tk
+
+    _make_video(tmp_path, "a.mp4")
+    path = _write_yaml(tmp_path, [("甲", str(tmp_path / "a.mp4"))])
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_yaml(root, view, path)
+        assert "disabled" in view._tid_combo.state()
+
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        assert view._source_mode == "folder"
+        assert "disabled" not in view._tid_combo.state()
+        assert "disabled" not in view._tag_entry.state()
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_toggle_refuses_missing_file(tmp_path, monkeypatch):
+    """点缺失项不该勾上——勾了却在执行时被跳过最让人困惑。"""
+    import tkinter as tk
+
+    real = _make_video(tmp_path, "a.mp4")
+    doomed = _make_video(tmp_path, "b.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+        # 只留下 a（index 0），b 被删掉后 index 1 变成缺失行
+        doomed.unlink()
+        view._reset_state()
+        view._fill_tree(view._tasks)
+        assert view._missing == {"1"}
+
+        view._toggle("1")
+        assert view._picked["1"] is False, "缺失项不该被勾上"
+        assert view._tree.item("1", "values")[0] == UNPICKED
+        assert Path(real).is_file()
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_select_failed_picks_only_errors(tmp_path, monkeypatch):
+    """「只选失败项」要选中失败的，且排除文件缺失的。"""
+    import tkinter as tk
+
+    for name in ("a.mp4", "b.mp4"):
+        _make_video(tmp_path, name)
+    doomed = _make_video(tmp_path, "c.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+        doomed.unlink()
+        view._fill_tree(view._tasks)
 
         view._mark(0, "成功", "ok")
         view._mark(1, "失败：原因", "error")
@@ -228,19 +606,19 @@ def test_select_failed_picks_only_errors(tmp_path):
 
 
 @needs_display
-def test_select_all_never_picks_missing(tmp_path):
+def test_select_all_never_picks_missing(tmp_path, monkeypatch):
     """全选也要跳过缺失项，否则执行时会扑空。"""
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    gone = str(tmp_path / "gone.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", gone)])
+    _make_video(tmp_path, "a.mp4")
+    doomed = _make_video(tmp_path, "b.mp4")
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+        doomed.unlink()
+        view._fill_tree(view._tasks)
 
         view._select_all()
         assert view._selected_indexes() == [0]
@@ -250,20 +628,19 @@ def test_select_all_never_picks_missing(tmp_path):
 
 
 @needs_display
-def test_cancel_reverts_busy_rows(tmp_path):
+def test_cancel_reverts_busy_rows(tmp_path, monkeypatch):
     """取消后「进行中」必须回到待投稿，否则看着像还在跑。"""
     import tkinter as tk
 
     from bilibili_submit.ui.workers import Cancelled
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
+    for name in ("a.mp4", "b.mp4"):
+        _make_video(tmp_path, name)
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
 
         view._mark(0, "进行中", "busy")
         view._mark(1, "进行中", "busy")
@@ -278,18 +655,17 @@ def test_cancel_reverts_busy_rows(tmp_path):
 
 
 @needs_display
-def test_event_updates_row_progress_and_stores_error(tmp_path):
+def test_event_updates_row_progress_and_stores_error(tmp_path, monkeypatch):
     """Event 到界面的映射：着色、截断、进度、完整错误都要对。"""
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
+    for name in ("a.mp4", "b.mp4"):
+        _make_video(tmp_path, name)
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
 
         view._on_progress(Event("start", index=0, position=1, total=2))
         assert view._tree.item("0", "values")[-1] == "进行中"
@@ -318,40 +694,39 @@ def test_event_updates_row_progress_and_stores_error(tmp_path):
 
 
 @needs_display
-def test_plain_string_still_goes_to_log(tmp_path):
+def test_plain_string_still_goes_to_log(tmp_path, monkeypatch):
     """字符串上报仍进日志——Event 不能把普通日志吞掉。"""
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real)])
+    _make_video(tmp_path, "a.mp4")
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
         view._log.clear()
 
-        view._on_progress("[1/1] 开始：A")
-        assert "[1/1] 开始：A" in view._log._text.get("1.0", "end")
+        view._on_progress("[1/1] 开始：a")
+        assert "[1/1] 开始：a" in view._log._text.get("1.0", "end")
     finally:
         root.destroy()
 
 
 @needs_display
-def test_summary_counts_and_retry_button(tmp_path):
+def test_summary_counts_and_retry_button(tmp_path, monkeypatch):
     """汇总条的成败计数与「重试失败项」的可用状态联动。"""
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    gone = str(tmp_path / "gone.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real), ("C", gone)])
+    for name in ("a.mp4", "b.mp4", "c.mp4"):
+        _make_video(tmp_path, name)
+    doomed = tmp_path / "c.mp4"
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+        doomed.unlink()
+        view._fill_tree(view._tasks)
 
         text = view._summary._stats.cget("text")
         assert "共 3" in text and "缺失 1" in text, text
@@ -369,18 +744,16 @@ def test_summary_counts_and_retry_button(tmp_path):
 
 
 @needs_display
-def test_run_without_selection_does_nothing(tmp_path):
+def test_run_without_selection_does_nothing(tmp_path, monkeypatch):
     """一个都没勾时点开始，应该提示而不是空跑一趟。"""
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real)])
+    _make_video(tmp_path, "a.mp4")
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
         view._log.clear()
 
         view._select_none()
@@ -391,18 +764,16 @@ def test_run_without_selection_does_nothing(tmp_path):
 
 
 @needs_display
-def test_row_never_carries_two_tags(tmp_path):
+def test_row_never_carries_two_tags(tmp_path, monkeypatch):
     """每行只打一个 tag——多个 tag 的背景色会互相打架。"""
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
+    _make_video(tmp_path, "a.mp4")
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
 
         for tone in ("busy", "ok", "error", "idle"):
             view._mark(0, "x", tone)
@@ -424,14 +795,13 @@ def test_do_run_reports_events_instead_of_touching_tk(tmp_path, monkeypatch):
     from bilibili_submit.scheduler import TaskOutcome
     from bilibili_submit.ui.views import tasks as tasks_mod
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
+    for name in ("a.mp4", "b.mp4"):
+        _make_video(tmp_path, name)
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
 
         # 把真实网络调用挡掉
         monkeypatch.setattr(
@@ -449,14 +819,64 @@ def test_do_run_reports_events_instead_of_touching_tk(tmp_path, monkeypatch):
             view, "after", lambda *a, **k: touched.append(a)
         )
 
+        _cfg, selected = view._snapshot_run([0, 1])
         seen: list[object] = []
-        outcomes = view._do_run(seen.append, lambda: False, [0, 1])
+        outcomes = view._do_run(seen.append, lambda: False, selected, _cfg)
 
         assert len(outcomes) == 2
         events = [m for m in seen if isinstance(m, Event)]
         assert len(events) == 4, f"应有 2 组 start/done，实际 {len(events)}"
         assert [e.kind for e in events] == ["start", "done", "start", "done"]
         assert not touched, f"_do_run 里不该直接调 after：{touched}"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_do_run_uses_snapshot_not_live_tasks(tmp_path, monkeypatch):
+    """执行途中换掉 ``self._tasks``，本轮投的仍该是启动时那份快照。
+
+    没有快照的话，``_do_run`` 边跑边读 ``self._tasks``，用户中途点
+    「重新扫描」就会把任务投给错的分区，或者直接 IndexError。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.config import TaskConfig
+    from bilibili_submit.scheduler import TaskOutcome
+    from bilibili_submit.ui.views import tasks as tasks_mod
+
+    _make_video(tmp_path, "a.mp4")
+    _make_video(tmp_path, "b.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        seen_tasks = []
+        monkeypatch.setattr(
+            tasks_mod, "run_task",
+            lambda client, task, cfg, **k: (
+                seen_tasks.append(task)
+                or TaskOutcome(name="x", success=True, bvid="BV1", url="u")
+            ),
+        )
+        monkeypatch.setattr(tasks_mod, "get_backend", lambda *a, **k: object())
+        monkeypatch.setattr(
+            type(view.app.ctx), "client", lambda self, need_login=True: object()
+        )
+
+        _cfg, selected = view._snapshot_run([0, 1])
+
+        # 执行线程启动后，用户在主线程把任务列表整个换掉
+        view._tasks = [TaskConfig(name="别的", file="/x/other.mp4")]
+        view._cfg = tasks_mod.AppConfig()
+
+        view._do_run(lambda _m: None, lambda: False, selected, _cfg)
+
+        assert [t.name for t in seen_tasks] == ["a", "b"], (
+            f"本轮该跑快照里的 a、b，实际 {[t.name for t in seen_tasks]}"
+        )
     finally:
         root.destroy()
 
@@ -473,17 +893,13 @@ def test_do_run_reports_position_not_index(tmp_path, monkeypatch):
     from bilibili_submit.scheduler import TaskOutcome
     from bilibili_submit.ui.views import tasks as tasks_mod
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(
-        tmp_path,
-        [("A", real), ("B", real), ("C", real), ("D", real), ("E", real), ("F", real)],
-    )
+    for i in range(6):
+        _make_video(tmp_path, f"v{i}.mp4")
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
 
         monkeypatch.setattr(
             tasks_mod, "run_task",
@@ -494,8 +910,9 @@ def test_do_run_reports_position_not_index(tmp_path, monkeypatch):
             type(view.app.ctx), "client", lambda self, need_login=True: object()
         )
 
+        cfg, selected = view._snapshot_run([3, 5])
         seen: list[object] = []
-        view._do_run(seen.append, lambda: False, [3, 5])
+        view._do_run(seen.append, lambda: False, selected, cfg)
         events = [m for m in seen if isinstance(m, Event) and m.done]
 
         assert [e.position for e in events] == [1, 2]
@@ -507,21 +924,17 @@ def test_do_run_reports_position_not_index(tmp_path, monkeypatch):
 
 
 @needs_display
-def test_progress_bar_never_exceeds_total(tmp_path):
+def test_progress_bar_never_exceeds_total(tmp_path, monkeypatch):
     """端到端验证：非连续勾选下，进度条不会第一项就顶满。"""
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(
-        tmp_path,
-        [("A", real), ("B", real), ("C", real), ("D", real), ("E", real), ("F", real)],
-    )
+    for i in range(6):
+        _make_video(tmp_path, f"v{i}.mp4")
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
 
         view._on_progress(Event("done", index=3, position=1, total=2, status="成功"))
         assert view._progress._bar.cget("value") == pytest.approx(50, abs=0.5)
@@ -535,7 +948,7 @@ def test_progress_bar_never_exceeds_total(tmp_path):
 
 
 @needs_display
-def test_retry_button_stays_disabled_while_running(tmp_path):
+def test_retry_button_stays_disabled_while_running(tmp_path, monkeypatch):
     """运行中出现失败项时，「重试失败项」不能被解开。
 
     ``_mark`` 每完成一项都会刷新汇总，如果汇总不看运行态，
@@ -544,14 +957,13 @@ def test_retry_button_stays_disabled_while_running(tmp_path):
     """
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
+    for name in ("a.mp4", "b.mp4"):
+        _make_video(tmp_path, name)
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
 
         view._set_busy(True)
         assert "disabled" in view._retry_button.state()
@@ -569,18 +981,17 @@ def test_retry_button_stays_disabled_while_running(tmp_path):
 
 
 @needs_display
-def test_selection_locked_while_running(tmp_path):
+def test_selection_locked_while_running(tmp_path, monkeypatch):
     """执行期间不能改勾选，否则界面与实际执行的列表会静默脱节。"""
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real), ("C", real)])
+    for i in range(3):
+        _make_video(tmp_path, f"v{i}.mp4")
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
         view._mark(1, "失败：x", "error")
         view._set_busy(True)
 
@@ -606,23 +1017,22 @@ def test_selection_locked_while_running(tmp_path):
 
 
 @needs_display
-def test_load_blocked_while_running(tmp_path):
-    """执行途中换配置会换掉工作线程正在读的任务列表，必须挡住。"""
+def test_load_blocked_while_running(tmp_path, monkeypatch):
+    """执行途中换目录会换掉工作线程正在读的任务列表，必须挡住。"""
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
-    other = _write_config(tmp_path.parent / "other", [("X", real)])
+    _make_video(tmp_path, "a.mp4")
+    other = tmp_path.parent / "other_videos"
+    _make_video(other, "x.mp4")
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
         tasks_before = list(view._tasks)
 
         view._set_busy(True)
-        view._path_var.set(other)
+        view._dir_var.set(str(other))
         view._log.clear()
         view._load()
 
@@ -630,6 +1040,7 @@ def test_load_blocked_while_running(tmp_path):
         assert "正在执行任务" in view._log._text.get("1.0", "end")
         assert "disabled" in view._load_button.state()
         assert "disabled" in view._pick_button.state()
+        assert "disabled" in view._config_button.state(), "yaml 入口也要锁"
     finally:
         root.destroy()
 
@@ -646,16 +1057,14 @@ def test_summary_unlocks_retry_while_thread_alive(tmp_path, monkeypatch):
     这里用真线程卡住来复现那个瞬间：线程 ``join`` 之前就调用收尾。
     """
     import tkinter as tk
-    import threading
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
+    for name in ("a.mp4", "b.mp4"):
+        _make_video(tmp_path, name)
 
     root = tk.Tk()
     try:
-        _app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
         view._mark(0, "失败：x", "error")
         view._set_busy(True)
 
@@ -696,14 +1105,12 @@ def test_run_failure_unlocks_buttons(tmp_path, monkeypatch):
     """
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real)])
+    _make_video(tmp_path, "a.mp4")
 
     root = tk.Tk()
     try:
-        app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
         view._log.clear()
 
         class _Ctx:
@@ -730,7 +1137,7 @@ def test_run_failure_unlocks_buttons(tmp_path, monkeypatch):
 
 
 @needs_display
-def test_error_reverts_busy_rows(tmp_path):
+def test_error_reverts_busy_rows(tmp_path, monkeypatch):
     """非取消的异常也要收尾，否则行永远停在「进行中」。
 
     cookie 过期时 ``_do_run`` 抛的是 ``NotLoggedInError``，不是
@@ -741,14 +1148,13 @@ def test_error_reverts_busy_rows(tmp_path):
 
     from bilibili_submit.exceptions import NotLoggedInError
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
+    for name in ("a.mp4", "b.mp4"):
+        _make_video(tmp_path, name)
 
     root = tk.Tk()
     try:
-        app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
         view._log.clear()
 
         view._mark(0, "进行中", "busy")
@@ -763,7 +1169,7 @@ def test_error_reverts_busy_rows(tmp_path):
 
 
 @needs_display
-def test_retry_failed_keeps_selection_when_not_logged_in(tmp_path):
+def test_retry_failed_keeps_selection_when_not_logged_in(tmp_path, monkeypatch):
     """未登录时点重试，不能把用户原有的勾选覆盖掉。
 
     ``_retry_failed`` 原来是「先只选失败项、再跑」——``_run`` 检查登录态
@@ -771,14 +1177,13 @@ def test_retry_failed_keeps_selection_when_not_logged_in(tmp_path):
     """
     import tkinter as tk
 
-    real = _make_video(tmp_path, "real.mp4")
-    cfg = _write_config(tmp_path, [("A", real), ("B", real), ("C", real)])
+    for i in range(3):
+        _make_video(tmp_path, f"v{i}.mp4")
 
     root = tk.Tk()
     try:
-        app, view = _build(root)
-        view._path_var.set(cfg)
-        view._load()
+        app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
         view._mark(0, "失败：x", "error")
         view._mark(1, "成功", "ok")
         view._mark(2, "失败：y", "error")
@@ -801,3 +1206,146 @@ def test_retry_failed_keeps_selection_when_not_logged_in(tmp_path):
             view.app.ctx = real_ctx
     finally:
         root.destroy()
+
+
+# ---------- 偏好恢复 ----------
+
+
+@needs_display
+def test_state_saved_and_restored_across_windows(tmp_path, monkeypatch):
+    """目录和顶部参数要能跨启动恢复。
+
+    两个真窗口先后建：第一个填好并保存，销毁，第二个从同一个状态文件
+    恢复并自动重扫。用真 ``mainloop`` 等，不用 ``update_idletasks``。
+    """
+    import tkinter as tk
+
+    for name in ("a.mp4", "b.mp4"):
+        _make_video(tmp_path, name)
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._dir_var.set(str(tmp_path))
+        view._tid_var.set("17 - 单机游戏")
+        view._tag_var.set("日常,记录")
+        view._desc_var.set("统一简介")
+        view._dtime_var.set("6")
+        view._save_state()
+        run_until(root, lambda: view._state_file.is_file())
+    finally:
+        root.destroy()
+
+    assert (tmp_path / "ui-state.json").is_file()
+
+    root2 = tk.Tk()
+    try:
+        _app, view2 = _build(root2, tmp_path, monkeypatch)
+        view2.refresh()  # 触发恢复
+        run_until(root2, lambda: not view2._busy and view2._tasks)
+
+        assert view2._dir_var.get() == str(tmp_path)
+        assert view2._tag_var.get() == "日常,记录"
+        assert view2._desc_var.get() == "统一简介"
+        assert view2._dtime_var.get() == "6"
+        assert len(view2._tasks) == 2, "目录还在就该自动重扫"
+        assert len(view2._tree.get_children()) == 2
+    finally:
+        root2.destroy()
+
+
+@needs_display
+def test_restore_reports_missing_directory(tmp_path, monkeypatch):
+    """上次的目录没了要说明，不能静默清掉。
+
+    静默清掉的话用户会以为程序把设置弄丢了。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.state import BatchUIState, save_ui_state
+
+    gone = tmp_path / "已移动的目录"
+    state_file = tmp_path / "ui-state.json"
+    save_ui_state(BatchUIState(directory=str(gone)), state_file)
+    assert not gone.exists()
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view.refresh()
+
+        run_until(root, lambda: "已不存在" in view._log._text.get("1.0", "end"))
+        assert view._dir_var.get() == str(gone), "路径要留着让用户看见并改"
+        assert view._tasks == [], "目录没了不该凭空造任务"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_refresh_only_restores_once(tmp_path, monkeypatch):
+    """恢复只做一次，否则每次切页都重扫、执行到一半切页选择被清空。"""
+    import tkinter as tk
+
+    _make_video(tmp_path, "a.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._dir_var.set(str(tmp_path))
+        view._load()
+        run_until(root, lambda: not view._busy and view._tasks)
+        view._select_none()
+
+        view.refresh()
+        root.update_idletasks()
+
+        assert view._selected_indexes() == [], "已有选择不该被第二次恢复冲掉"
+        assert view._restored is True
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_corrupt_state_file_is_reported(tmp_path, monkeypatch):
+    """偏好文件损坏要提示，别装作首次使用。"""
+    import tkinter as tk
+
+    (tmp_path / "ui-state.json").write_text("{ 坏了", encoding="utf-8")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view.refresh()
+        assert "读取失败" in view._log._text.get("1.0", "end")
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_invalid_dtime_keeps_last_good_state(tmp_path, monkeypatch):
+    """延时填到一半时保存，不该把上次那个能用的值覆盖掉。"""
+    import tkinter as tk
+
+    from bilibili_submit.ui.state import BatchUIState
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._tid_var.set("17 - 单机游戏")
+        view._dtime_var.set("6")
+        view._save_state()
+        run_until(root, lambda: view._state_file.is_file())
+
+        view._dtime_var.set("六")
+        current = view._current_state()
+        assert current.tid == 17, "能解析的字段照常保存"
+        assert current.dtime_offset_hours is None, "非数字不该被写进去"
+
+        saved, _ = __import__(
+            "bilibili_submit.ui.state", fromlist=["load_ui_state"]
+        ).load_ui_state(view._state_file)
+        assert saved.dtime_offset_hours == 6.0, "上次那个值该留着"
+        assert saved.tid == 17
+    finally:
+        root.destroy()
+    assert BatchUIState().dtime_offset_hours is None

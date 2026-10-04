@@ -5,8 +5,8 @@
 扫码登录一次，之后就两件事：
 
 - **单个视频**——点「选择文件…」，填个标题、选个分区，点「开始投稿」；
-- **一批视频**——写一份 `config.yaml` 列好目录和标题规则，让它自己跑，
-  顺便支持定时发布。
+- **一批视频**——点「选择文件夹…」选中装着视频的目录，顶部填一次分区和标签，
+  下面自动列出全部待投稿的任务，勾几个就能跑。**不用写配置文件。**
 
 跑完给你一串 BV 号。失败了会告诉你**哪一条、因为什么**，不用自己猜。
 
@@ -32,16 +32,16 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 
 | 资产 | 体积 | ffmpeg | 说明 |
 |---|---|---|---|
-| [`bilibili-submit-gui.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.1/bilibili-submit-gui.exe) | ~72 MB | 内置 | **双击开窗口**，扫码登录 + 表单投稿，不用管 ffmpeg 放哪 |
+| [`bilibili-submit-gui.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.2/bilibili-submit-gui.exe) | ~72 MB | 内置 | **双击开窗口**，扫码登录 + 表单投稿，不用管 ffmpeg 放哪 |
 
 **命令行版**：
 
 | 资产 | 体积 | ffmpeg | 说明 |
 |---|---|---|---|
-| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.1/bilibili-submit-standalone.exe) | ~69 MB | 内置 | **单个 exe，双击即用**，不用管 ffmpeg 放哪 |
-| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.1/bilibili-submit.exe) | ~10 MB | 需自备 | 轻量 exe |
-| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.1/bilibili-submit-full-windows.zip) | ~40 MB | 外置 | 轻量 exe + `ffmpeg.exe`，启动最快 |
-| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.1/bilibili-submit-mini-windows.zip) | ~10 MB | 需自备 | 轻量 exe + config + 文档 |
+| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.2/bilibili-submit-standalone.exe) | ~69 MB | 内置 | **单个 exe，双击即用**，不用管 ffmpeg 放哪 |
+| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.2/bilibili-submit.exe) | ~10 MB | 需自备 | 轻量 exe |
+| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.2/bilibili-submit-full-windows.zip) | ~40 MB | 外置 | 轻量 exe + `ffmpeg.exe`，启动最快 |
+| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.2/bilibili-submit-mini-windows.zip) | ~10 MB | 需自备 | 轻量 exe + config + 文档 |
 
 命令行版怎么选：只想双击就用、不想管 ffmpeg → `standalone`；
 在意体积和启动速度 → `full`，把 `ffmpeg.exe` 和 exe 放一起就行。
@@ -76,7 +76,7 @@ ffmpeg 只影响 `cover: auto` 自动抽帧，**不影响投稿本身**。
 |---|---|
 | **登录** | 点「获取二维码」→ 手机 B 站 App 扫 → **在手机上点「确认登录」**。二维码直接画在窗口里，扫不了可以点链接复制到剪贴板 |
 | **投稿** | 选文件 → 填标题/分区/标签/简介 → 「开始投稿」。有「预览」按钮可以先空跑一遍验证参数 |
-| **批量任务** | 加载 `config.yaml`，**可勾选要跑哪几条**，执行前先检查文件是否存在。跑的过程中每行实时变色（成功绿 / 失败红 / 进行中粉 / 缺失橙），失败的可以一键只重试失败项 |
+| **批量任务** | **点「选择文件夹…」自动扫描目录里的视频，不用写配置文件**。顶部填一次分区/标签/简介/延时，这一批共用。**可勾选要跑哪几条**，执行前先检查文件是否存在。跑的过程中每行实时变色（成功绿 / 失败红 / 进行中粉 / 缺失橙），失败的可以一键只重试失败项。下次打开自动恢复上次的目录和参数 |
 | **历史** | 看本机投过的稿（BV 号、时间） |
 | **设置** | 配代理、换 cookie 路径，并做一次环境自检（登录态 / ffmpeg / 代理） |
 
@@ -88,6 +88,10 @@ GUI 版内置了 ffmpeg，所以状态栏应该显示「ffmpeg 就绪（exe 内�
 所有耗时操作都在后台线程跑，窗口不会卡住；登录和投稿都能随时「取消」。
 
 > 登录只需要扫一次码，cookie 存本地，有效期通常数月。
+>
+> 批量任务页上次选的目录和顶部参数会记在
+> `~/.config/bilibili_submit/ui-state.json`，下次打开自动回填并重新扫描。
+> 这个文件里没有任何凭据，可以放心删。
 
 <details>
 <summary><b>界面截图</b>（点击展开）</summary>
@@ -248,7 +252,7 @@ bilibili-submit.exe login --proxy http://127.0.0.1:7890
 推 tag 即可，Actions 会在 Windows runner 上打包并发 Release。仓库自带 `build-windows.yml`（日常构建）和 `release.yml`（发版），两者都带冒烟测试，**打包失败会直接标红，而不是给你一个坏 exe**。
 
 ```bash
-git tag v0.2.1 && git push origin v0.2.1   # 版本号换成你要发的
+git tag v0.2.2 && git push origin v0.2.2   # 版本号换成你要发的
 ```
 
 版本号要同步改四处：`bilibili_submit/__init__.py`、`bili_submit.spec`、
@@ -282,7 +286,7 @@ git tag v0.2.1 && git push origin v0.2.1   # 版本号换成你要发的
 WBI 签名算法、二维码登录全流程、线路探测、`add/v3` 接口可达性、
 分片边界算法、断点续传、ffmpeg 定位与封面抽帧，以及打包链路本身。
 
-单元测试 174 项（`python -m pytest`）。
+单元测试 227 项（`python -m pytest`）。
 
 **建议第一次拿一个几十 MB 的小视频试跑**，确认「登录 → 上传 → 拿到 BV 号」整条通了再批量用。
 

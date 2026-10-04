@@ -33,8 +33,8 @@ from ..auth import (
     load_cookies,
 )
 from ..client import BiliClient
-from ..ffmpeg import ffmpeg_status
 from . import theme
+from .environment import EnvironmentSnapshot, probe_environment
 from .widgets import NavItem
 from .views import (
     HistoryView,
@@ -43,7 +43,7 @@ from .views import (
     TasksView,
     UploadView,
 )
-from .workers import safe_after
+from .workers import Worker, safe_after
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +53,15 @@ __all__ = ["AppContext", "App", "launch"]
 class AppContext:
     """各视图共享的状态。
 
-    视图之间不直接互相引用，都通过 context 读配置路径、拿客户端——
-    这样加新页不用改已有页。
+    视图之间不直接互相引用，都通过 context 读 cookie 路径、代理，
+    拿客户端——这样加新页不用改已有页。
+
+    这里只有「当前设置」和「构造客户端」两件事。像「上次选了哪个
+    视频文件夹」那种页面级状态不放这里：那是任务来源页自己的偏好，
+    存 :mod:`.state`，别把 context 变成什么都往里塞的抽屉。
     """
 
     def __init__(self) -> None:
-        self.config_path: str = ""
         self.cookie_file: str = DEFAULT_COOKIE_FILE
         self.proxy: str | None = None
 
@@ -82,6 +85,11 @@ class App(ttk.Frame):
         super().__init__(master, style="TFrame")
         self.master = master
         self.ctx = AppContext()
+
+        #: 状态栏探测用。每次刷新一个新 Worker，配 ``_status_generation``
+        #: 丢弃晚到的过期结果。理由见 :meth:`refresh_status`。
+        self._status_worker: Worker[EnvironmentSnapshot] | None = None
+        self._status_generation = 0
 
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
@@ -244,13 +252,63 @@ class App(ttk.Frame):
             refresh()
 
     def refresh_status(self) -> None:
-        """刷新状态栏：登录态与 ffmpeg。"""
-        fg, _bg = theme.tone("ok") if self.ctx.logged_in else theme.tone("idle")
-        self._status_login.configure(
-            text="● 已登录" if self.ctx.logged_in else "○ 未登录", foreground=fg
-        )
+        """刷新状态栏：登录态与 ffmpeg。
 
-        info = ffmpeg_status()
+        **探测在后台跑**，这里只负责先摆个「检测中」再排回主线程更新。
+        它有 4 个调用方（启动、换 cookie 路径、登录成功后、批量页
+        发现登录态失效），每个都在主线程——同步探测的话，ffmpeg 定位
+        慢一点就会让整窗卡住，而登录页刚扫码完那一下最需要界面活着。
+
+        签名和返回值都不变，调用方不用等检测结果。
+
+        .. important::
+           不要用「已有探测在跑就 return」来防重入。用户刚换完 cookie
+           路径就又点了刷新，第二次探测必须能发出去，否则界面会永远
+           停在**上一个路径**的登录态上——而用户恰恰是在确认新路径
+           有没有登录成功。
+        """
+        self._status_generation += 1
+        generation = self._status_generation
+        ctx = self.ctx
+
+        login_fg, _bg = theme.tone("busy")
+        self._status_login.configure(text="◌ 登录态检测中…", foreground=login_fg)
+        self._status_ffmpeg.configure(text="◌ ffmpeg 检测中…", foreground=login_fg)
+
+        worker: Worker[EnvironmentSnapshot] = Worker(self)
+        self._status_worker = worker
+        try:
+            worker.run(
+                # 状态栏只要知道 ffmpeg 在不在，不需要版本号——
+                # 读版本要启动子进程，那是最贵的一步
+                lambda _report, _cancelled: probe_environment(
+                    ctx.cookie_file, include_ffmpeg_version=False
+                ),
+                on_done=lambda snap: self._apply_status(generation, snap),
+                on_error=lambda exc: self._apply_status_failed(generation, exc),
+            )
+        except RuntimeError as exc:
+            self._apply_status_failed(generation, str(exc))
+
+    def _apply_status(
+        self, generation: int, snapshot: EnvironmentSnapshot
+    ) -> None:
+        # 过期结果丢弃：晚到的属于上一次刷新的 cookie 路径
+        if generation != self._status_generation:
+            return
+
+        fg, _bg = theme.tone("ok") if snapshot.logged_in else theme.tone("idle")
+        if snapshot.login_error:
+            self._status_login.configure(
+                text="○ 未登录（cookie 读取失败）", foreground=fg
+            )
+        else:
+            self._status_login.configure(
+                text="● 已登录" if snapshot.logged_in else "○ 未登录",
+                foreground=fg,
+            )
+
+        info = snapshot.ffmpeg
         if info is None:
             warn_fg, _ = theme.tone("warn")
             self._status_ffmpeg.configure(
@@ -261,6 +319,16 @@ class App(ttk.Frame):
             self._status_ffmpeg.configure(
                 text=f"ffmpeg 就绪（{info.source}）", foreground=theme.TEXT_SECONDARY
             )
+
+    def _apply_status_failed(self, generation: int, reason: str) -> None:
+        """探测炸了要显示出来。状态栏不能永远停在「检测中…」。"""
+        if generation != self._status_generation:
+            return
+        idle_fg, _bg = theme.tone("idle")
+        self._status_login.configure(text="○ 登录态未知", foreground=idle_fg)
+        self._status_ffmpeg.configure(
+            text=f"环境检测失败：{reason}", foreground=idle_fg
+        )
 
 
 def _set_dpi_aware() -> None:

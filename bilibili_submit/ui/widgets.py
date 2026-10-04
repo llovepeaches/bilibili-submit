@@ -565,3 +565,17 @@ class KeyValueList(ttk.Frame):
             )
             value_label.grid(row=row_index, column=1, sticky="w")
             self._rows.append((key_label, value_label))
+
+    def rows(self) -> list[tuple[str, str]]:
+        """读回当前内容，``(键, 值)`` 列表。
+
+        给测试用：环境自检是异步填的，要断言「界面已经显示成结果了」
+        就得能读回控件上的文字。顺带对使用者也是个方便的取值口。
+        """
+        return [
+            (key.cget("text"), value.cget("text")) for key, value in self._rows
+        ]
+
+    def text(self) -> str:
+        """全部内容拼成一段文本，便于断言某个词在不在。"""
+        return "\n".join(f"{key}{value}" for key, value in self.rows())
