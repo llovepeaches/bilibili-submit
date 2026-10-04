@@ -6,6 +6,7 @@ spec 不是普通模块——它引用了 PyInstaller 注入的 ``Analysis``/``E
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -37,6 +38,53 @@ def test_app_name_and_version_are_consistent():
 
     assert ns["VERSION"] == __version__, (
         f"spec VERSION={ns['VERSION']} 与 __version__={__version__} 不一致"
+    )
+
+
+def test_windows_version_resource_matches_package():
+    """Windows exe 属性里显示的版本号也要跟着走。
+
+    ``assets/version_info.txt`` 会烧进 exe 的资源段——就是右键「属性」
+    里看到的那个版本。它不参与 ``--version``，所以漏改的时候
+    **没有任何测试会红**，只有用户对着两个对不上的版本号困惑。
+
+    版本号要同步改四处（README 里也写了），靠人肉记必漏，这里锁死。
+    """
+    from bilibili_submit import __version__
+
+    text = (ROOT / "assets" / "version_info.txt").read_text(encoding="utf-8")
+
+    expected = tuple(int(seg) for seg in __version__.split("."))
+
+    for key in ("filevers", "prodvers"):
+        match = re.search(rf"{key}=\(([^)]*)\)", text)
+        assert match, f"version_info.txt 里找不到 {key}"
+        got = tuple(int(seg) for seg in match.group(1).split(","))
+        # 第四段是 Windows 惯例的补零，不参与比较
+        assert got[:3] == expected, (
+            f"{key}={got[:3]} 与 __version__={__version__} 不一致"
+        )
+
+    for key in ("FileVersion", "ProductVersion"):
+        match = re.search(rf"StringStruct\(u'{key}', u'([^']*)'\)", text)
+        assert match, f"version_info.txt 里找不到 {key}"
+        assert match.group(1) == __version__, (
+            f"{key}={match.group(1)!r} 与 __version__={__version__!r} 不一致"
+        )
+
+
+def test_changelog_has_an_entry_for_current_version():
+    """CHANGELOG 里要真有当前版本的段，否则发版说明无从谈起。
+
+    发版时最容易漏的一步就是：版本号 bump 了，CHANGELOG 还停在
+    ``[未发布]``。这条会红，正好提醒先把改动归到版本段里。
+    """
+    from bilibili_submit import __version__
+
+    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert f"## [{__version__}]" in text, (
+        f"CHANGELOG.md 里没有 [{__version__}] 段——"
+        f"发版前请把 [未发布] 下的内容归到该版本下"
     )
 
 

@@ -6,7 +6,9 @@
 所有值得记录的变更都会写进这里。格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [未发布]
+## [0.2.3] - 2026-10-05
+
+一套视频可以合成一个稿件的多个分 P，只占一个 BV 号。
 
 ### 新增
 
@@ -447,7 +449,8 @@
 - 配置里 `proxy` 段位写错（`upload.proxy` 而非 `account.proxy`）会静默失效，
   现改为直接报错。
 
-[未发布]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.2...HEAD
+[未发布]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/llovepeaches/bilibili-submit/compare/v0.1.3...v0.2.0

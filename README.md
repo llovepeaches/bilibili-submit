@@ -33,16 +33,16 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 
 | 资产 | 体积 | ffmpeg | 说明 |
 |---|---|---|---|
-| [`bilibili-submit-gui.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.2/bilibili-submit-gui.exe) | ~76 MB | 内置 | **双击开窗口**，扫码登录 + 表单投稿，不用管 ffmpeg 放哪 |
+| [`bilibili-submit-gui.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.3/bilibili-submit-gui.exe) | ~76 MB | 内置 | **双击开窗口**，扫码登录 + 表单投稿，不用管 ffmpeg 放哪 |
 
 **命令行版**：
 
 | 资产 | 体积 | ffmpeg | 说明 |
 |---|---|---|---|
-| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.2/bilibili-submit-standalone.exe) | ~73 MB | 内置 | **单个 exe，双击即用**，不用管 ffmpeg 放哪 |
-| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.2/bilibili-submit.exe) | ~11 MB | 需自备 | 轻量 exe |
-| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.2/bilibili-submit-full-windows.zip) | ~43 MB | 外置 | 轻量 exe + `ffmpeg.exe`，启动最快 |
-| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.2/bilibili-submit-mini-windows.zip) | ~10 MB | 需自备 | 轻量 exe + config + 文档 |
+| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.3/bilibili-submit-standalone.exe) | ~73 MB | 内置 | **单个 exe，双击即用**，不用管 ffmpeg 放哪 |
+| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.3/bilibili-submit.exe) | ~11 MB | 需自备 | 轻量 exe |
+| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.3/bilibili-submit-full-windows.zip) | ~43 MB | 外置 | 轻量 exe + `ffmpeg.exe`，启动最快 |
+| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.3/bilibili-submit-mini-windows.zip) | ~10 MB | 需自备 | 轻量 exe + config + 文档 |
 
 命令行版怎么选：只想双击就用、不想管 ffmpeg → `standalone`；
 在意体积和启动速度 → `full`，把 `ffmpeg.exe` 和 exe 放一起就行。
@@ -289,11 +289,12 @@ bilibili-submit.exe login --proxy http://127.0.0.1:7890
 推 tag 即可，Actions 会在 Windows runner 上打包并发 Release。仓库自带 `build-windows.yml`（日常构建）和 `release.yml`（发版），两者都带冒烟测试，**打包失败会直接标红，而不是给你一个坏 exe**。
 
 ```bash
-git tag v0.2.2 && git push origin v0.2.2   # 版本号换成你要发的
+git tag v0.2.3 && git push origin v0.2.3   # 版本号换成你要发的
 ```
 
 版本号要同步改四处：`bilibili_submit/__init__.py`、`bili_submit.spec`、
 `assets/version_info.txt`，以及本文件里的下载链接。
+前三处有测试兜底（`tests/test_spec_bundle.py`），改漏了会直接变红。
 发布新版本也可以双击 `publish.bat`，它会把这几步一起做完。
 
 ### 打包相关的说明
@@ -323,7 +324,7 @@ git tag v0.2.2 && git push origin v0.2.2   # 版本号换成你要发的
 WBI 签名算法、二维码登录全流程、线路探测、`add/v3` 接口可达性、
 分片边界算法、断点续传、ffmpeg 定位与封面抽帧，以及打包链路本身。
 
-单元测试 286 项（`python -m pytest`）。
+单元测试 288 项（`python -m pytest`）。
 
 **建议第一次拿一个几十 MB 的小视频试跑**，确认「登录 → 上传 → 拿到 BV 号」整条通了再批量用。
 
