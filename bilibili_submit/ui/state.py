@@ -39,6 +39,10 @@ class BatchUIState:
 
     directory: str = ""
     tid: int = DEFAULT_TID
+    #: 投稿类型：1=自制 2=转载（B 站 ``copyright`` 字段）
+    copyright: int = 1
+    #: 转载来源。``copyright=2`` 时必填，缺了服务端会拒稿（21004）
+    source: str = ""
     tag: str = ""
     desc: str = ""
     dtime_offset_hours: float | None = None
@@ -98,6 +102,8 @@ def load_ui_state(path: Path | None = None) -> tuple[BatchUIState, str]:
     return BatchUIState(
         directory=_as_str(batch.get("directory")),
         tid=_as_tid(batch.get("tid")),
+        copyright=_as_copyright(batch.get("copyright")),
+        source=_as_str(batch.get("source")),
         tag=_as_str(batch.get("tag")),
         desc=_as_str(batch.get("desc")),
         dtime_offset_hours=_as_offset(batch.get("dtime_offset_hours")),
@@ -158,6 +164,18 @@ def _as_bool(value: object) -> bool:
     if isinstance(value, str):
         return value.strip().casefold() not in ("", "false", "0", "no", "off")
     return bool(value)
+
+
+def _as_copyright(value: object) -> int:
+    """投稿类型只认 1 / 2，其余一律回落自制。
+
+    回落方向是刻意的：自制不要求填来源，不会让投稿当场失败；反过来
+    认不出就当转载的话，用户会撞上「缺 source」被服务端打回，却分不清
+    是自己没选还是程序弄错了。
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 1
+    return value if value in (1, 2) else 1
 
 
 def _as_group_mode(value: object, legacy: object = None) -> str:

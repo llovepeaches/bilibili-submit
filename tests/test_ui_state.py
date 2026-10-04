@@ -290,3 +290,40 @@ def test_switches_read_strings_as_off_when_they_say_off(tmp_path):
     assert state.dolby is False
     assert state.hires is False
     assert state.close_reply is False
+
+
+def test_older_state_file_defaults_to_self_made(tmp_path):
+    """旧文件没有 copyright 字段 → 自制。
+
+    不能因为缺这个字段就让整份偏好读不出来，也不能默认成转载——转载
+    缺来源会被拒稿，等于把一次升级变成一次投稿失败。
+    """
+    path = tmp_path / "ui-state.json"
+    path.write_text(
+        json.dumps(
+            {"schema_version": SCHEMA_VERSION, "batch": {"directory": "D:/v"}}
+        ),
+        encoding="utf-8",
+    )
+    state, problem = load_ui_state(path)
+    assert problem == ""
+    assert state.copyright == 1
+    assert state.source == ""
+
+
+def test_copyright_reads_only_one_or_two(tmp_path):
+    """偏好文件里写了个离谱的类型值，回落自制而不是原样收下。"""
+    state, _ = load_ui_state(_write(tmp_path, {"copyright": 9}))
+    assert state.copyright == 1
+    # 布尔是 int 的子类，别把 true 读成 1 蒙混过关
+    state2, _ = load_ui_state(_write(tmp_path, {"copyright": True}))
+    assert state2.copyright == 1
+
+
+def test_reprint_source_survives_roundtrip(tmp_path):
+    path = tmp_path / "ui-state.json"
+    save_ui_state(BatchUIState(copyright=2, source="https://example.com/origin"), path)
+    loaded, problem = load_ui_state(path)
+    assert problem == ""
+    assert loaded.copyright == 2
+    assert loaded.source == "https://example.com/origin"

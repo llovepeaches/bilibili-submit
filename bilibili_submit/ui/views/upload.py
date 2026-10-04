@@ -30,7 +30,14 @@ from ..widgets import (
 )
 from ..workers import Cancelled, Worker
 
-__all__ = ["UploadView", "parse_tid", "TID_OPTIONS"]
+__all__ = [
+    "UploadView",
+    "parse_tid",
+    "TID_OPTIONS",
+    "parse_copyright",
+    "copyright_option",
+    "COPYRIGHT_OPTIONS",
+]
 
 #: 标签上限，B 站硬性限制
 MAX_TAGS = 10
@@ -38,6 +45,15 @@ MAX_TAGS = 10
 #: 分区下拉的选项，格式 ``"21 - 日常"``。投稿页和批量任务页共用同一份，
 #: 免得两个页面的分区列表哪天不一样，用户要重新适应。
 TID_OPTIONS = [f"{tid} - {name}" for tid, name in sorted(COMMON_TIDS.items())]
+
+#: 投稿类型的下拉选项。中文给用户看，值是 B 站 ``copyright`` 字段
+#: （1=自制 2=转载）——两页共用这一份，术语不会各写各的。
+COPYRIGHT_OPTIONS = ["自制", "转载"]
+
+#: ``copyright`` 的默认值。自制不要求填来源，作为回落方向不会让投稿
+#: 直接失败；反之若认不出就当转载，用户会撞上「缺 source」被服务端
+#: 打回（21004），却看不出是自己没选还是程序弄错了。
+COPYRIGHT_SELF_MADE = 1
 
 
 def parse_tid(text: str, default: int = 21) -> int:
@@ -47,6 +63,16 @@ def parse_tid(text: str, default: int = 21) -> int:
         return int(head)
     except (ValueError, IndexError):
         return default
+
+
+def parse_copyright(text: str) -> int:
+    """界面文案 → ``copyright`` 值：「转载」是 2，其余一律自制（1）。"""
+    return 2 if (text or "").strip() == COPYRIGHT_OPTIONS[1] else COPYRIGHT_SELF_MADE
+
+
+def copyright_option(value: int) -> str:
+    """``copyright`` 值 → 下拉文案。只有 2 是转载，其余都按自制显示。"""
+    return COPYRIGHT_OPTIONS[1] if int(value) == 2 else COPYRIGHT_OPTIONS[0]
 
 
 class UploadView(ttk.Frame):
@@ -122,6 +148,31 @@ class UploadView(ttk.Frame):
         row.grid(row=4, column=0, sticky="ew", pady=theme.PAD_XS)
         row.add(ttk.Entry, textvariable=self._desc_var)
 
+        # 类型（自制/转载）。转载必须填来源，所以来源输入框跟着类型显隐：
+        # 一开始就摆一个灰着的「转载来源」在自制状态下，只会让人困惑。
+        self._copyright_var = tk.StringVar(value=copyright_option(COPYRIGHT_SELF_MADE))
+        row = FormRow(form, "类型", hint="转载需要填写来源，否则 B 站会拒稿")
+        row.grid(row=5, column=0, sticky="ew", pady=theme.PAD_XS)
+        self._copyright_combo = row.add(
+            ttk.Combobox,
+            textvariable=self._copyright_var,
+            values=COPYRIGHT_OPTIONS,
+            state="readonly",
+            width=10,
+        )
+        self._copyright_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._sync_source_row()
+        )
+
+        self._source_var = tk.StringVar()
+        self._source_row = FormRow(
+            form, "转载来源", hint="原视频链接或出处，选了转载就必须填"
+        )
+        self._source_row.grid(row=6, column=0, sticky="ew", pady=theme.PAD_XS)
+        self._source_row.add(ttk.Entry, textvariable=self._source_var)
+        # 建完立刻同步一次：默认自制，来源行应当是收起的
+        self._sync_source_row()
+
         # 定时发布
         self._dtime_var = tk.StringVar()
         row = FormRow(
@@ -129,7 +180,7 @@ class UploadView(ttk.Frame):
             "延时发布",
             hint="距今多少小时后发布，需大于 4；留空为立即发布",
         )
-        row.grid(row=5, column=0, sticky="ew", pady=theme.PAD_XS)
+        row.grid(row=7, column=0, sticky="ew", pady=theme.PAD_XS)
         row.add(ttk.Entry, textvariable=self._dtime_var)
 
         # 更多设置：与批量任务页共用同一组开关，术语和默认值都一致，
@@ -138,7 +189,7 @@ class UploadView(ttk.Frame):
             form, "更多设置", "互动设置、音质增强", opened=False,
             on_toggle=lambda _opened: self._update_more_hint(),
         )
-        self._more.grid(row=6, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+        self._more.grid(row=8, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
         self._option_switches = OptionSwitches(
             self._more.body, on_change=self._update_more_hint
         )
@@ -178,6 +229,17 @@ class UploadView(ttk.Frame):
         """收起时右侧列出已开启的项——不然设了什么全看不见。"""
         self._more.set_hint(self._option_switches.summary())
 
+    def _sync_source_row(self) -> None:
+        """「转载来源」只在选了转载时出现。
+
+        用 ``grid_remove()`` 而不是 ``grid_forget()``：后者会丢掉已有的
+        网格配置，再次显示时行位置就乱了。
+        """
+        if parse_copyright(self._copyright_var.get()) == 2:
+            self._source_row.grid()
+        else:
+            self._source_row.grid_remove()
+
     def _pick_file(self) -> None:
         path = filedialog.askopenfilename(
             title="选择视频文件",
@@ -213,6 +275,12 @@ class UploadView(ttk.Frame):
             except ValueError as exc:
                 raise BiliError(f"延时发布小时数不是数字: {offset_text}") from exc
 
+        # 转载缺来源，服务端只回一个干巴巴的 21004，不如当场拦住
+        copyright = parse_copyright(self._copyright_var.get())
+        source = self._source_var.get().strip()
+        if copyright == 2 and not source:
+            raise BiliError("选了「转载」就必须填转载来源（原视频链接或出处）")
+
         return TaskConfig(
             name=file.stem,
             type="single",
@@ -221,6 +289,8 @@ class UploadView(ttk.Frame):
             tid=tid,
             tag=self._tag_var.get().strip() or None,
             desc=self._desc_var.get().strip() or None,
+            copyright=copyright,
+            source=source or None,
             dtime_offset_hours=offset,
             # flags 用的是界面上的名字（close_reply），配置字段是
             # 接口名（up_close_reply）——这一处翻译别漏

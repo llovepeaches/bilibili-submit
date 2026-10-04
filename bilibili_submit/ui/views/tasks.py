@@ -49,7 +49,14 @@ from ..widgets import (
     SummaryBar,
 )
 from ..workers import Cancelled, Event, Worker
-from .upload import TID_OPTIONS, parse_tid
+from .upload import (
+    COPYRIGHT_OPTIONS,
+    COPYRIGHT_SELF_MADE,
+    TID_OPTIONS,
+    copyright_option,
+    parse_copyright,
+    parse_tid,
+)
 
 __all__ = ["TasksView"]
 
@@ -172,6 +179,10 @@ class SharedSubmitValues:
     """
 
     tid: int
+    #: 投稿类型：1=自制 2=转载（B 站 ``copyright`` 字段）
+    copyright: int = COPYRIGHT_SELF_MADE
+    #: 转载来源。``copyright=2`` 时必填——缺了会被服务端打回（21004）
+    source: str = ""
     tag: str = ""
     desc: str = ""
     dtime_offset_hours: float | None = None
@@ -187,6 +198,10 @@ class SharedSubmitValues:
         return replace(
             task,
             tid=self.tid,
+            copyright=self.copyright,
+            # 自制时不带来源：留着上次的转载地址，哪天切回转载就会把
+            # 一个早就不相关的出处投上去。空字符串一律归一成 None
+            source=self.source.strip() or None,
             tag=self.tag or None,
             desc=self.desc or None,
             dtime_offset_hours=self.dtime_offset_hours,
@@ -288,13 +303,37 @@ class TasksView(ttk.Frame):
         row.grid(row=2, column=0, sticky="ew", pady=(0, theme.PAD_SM))
         self._desc_entry = row.add(ttk.Entry, textvariable=self._desc_var)
 
+        # 类型（自制/转载）。转载要填来源，所以来源行跟着类型显隐——
+        # 一直摆着一个用不上的输入框，只会让人以为自己哪里没填。
+        self._copyright_var = tk.StringVar(value=copyright_option(COPYRIGHT_SELF_MADE))
+        row = FormRow(shared, "类型", hint="这一批共用；转载必须填来源，否则 B 站拒稿")
+        row.grid(row=3, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        self._copyright_combo = row.add(
+            ttk.Combobox,
+            textvariable=self._copyright_var,
+            values=COPYRIGHT_OPTIONS,
+            state="readonly",
+            width=10,
+        )
+        self._copyright_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._on_copyright_changed()
+        )
+
+        self._source_var = tk.StringVar()
+        self._source_row = FormRow(shared, "转载来源", hint="原视频链接或出处")
+        self._source_row.grid(row=4, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        self._source_entry = self._source_row.add(
+            ttk.Entry, textvariable=self._source_var
+        )
+        self._sync_source_row()
+
         self._dtime_var = tk.StringVar()
         row = FormRow(
             shared,
             "延时发布",
             hint="距今多少小时后统一发布，需大于 4；留空为立即发布",
         )
-        row.grid(row=3, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        row.grid(row=5, column=0, sticky="ew", pady=(0, theme.PAD_SM))
         self._dtime_entry = row.add(ttk.Entry, textvariable=self._dtime_var)
 
         # ② 更多设置。默认收起：这些都是「想起来才动一次」的开关，
@@ -513,6 +552,11 @@ class TasksView(ttk.Frame):
             "" if state.dtime_offset_hours is None else _fmt_offset(state.dtime_offset_hours)
         )
         self._tid_var.set(tid_option(state.tid))
+        self._copyright_var.set(copyright_option(state.copyright))
+        self._source_var.set(state.source)
+        # 显隐要跟着恢复的值走，否则上次选了转载、这次打开来源框是收起的，
+        # 用户会以为程序把出处弄丢了——而它其实还在，只是没显示
+        self._sync_source_row()
         self._group_var.set(GROUP_LABEL_BY_MODE.get(state.group_mode, GROUP_OFF))
         self._title_template_var.set(state.title_template)
         self._option_switches.set_flags(
@@ -549,6 +593,8 @@ class TasksView(ttk.Frame):
         return BatchUIState(
             directory=self._dir_var.get().strip(),
             tid=parse_tid(self._tid_var.get()),
+            copyright=parse_copyright(self._copyright_var.get()),
+            source=self._source_var.get().strip(),
             tag=self._tag_var.get().strip(),
             desc=self._desc_var.get().strip(),
             dtime_offset_hours=offset,
@@ -750,6 +796,10 @@ class TasksView(ttk.Frame):
         self._tag_entry.state(entry_state)
         self._desc_entry.state(entry_state)
         self._dtime_entry.state(entry_state)
+        # 类型同样属于统一参数：yaml 里每个任务的 copyright/source
+        # 可能各不相同，界面这一份不该盖上去
+        self._copyright_combo.configure(state="disabled" if yaml_mode else "readonly")
+        self._source_entry.state(entry_state)
         # 更多设置里的开关同样属于「统一参数」，yaml 模式下不生效
         self._option_switches.set_disabled(yaml_mode)
         if yaml_mode:
@@ -757,6 +807,22 @@ class TasksView(ttk.Frame):
         # 「套用到选中行」不跟着置灰：它改的是列表里那几行任务本身的
         # 标题，无论任务来自文件夹还是 yaml 都成立，跟「统一参数」不是
         # 一回事——那种才只在文件夹模式有意义。
+
+    def _sync_source_row(self) -> None:
+        """「转载来源」只在选了转载时出现。
+
+        ``grid_remove()`` 而不是 ``grid_forget()``：后者会把已有的网格
+        配置一起忘掉，再显示时行位置就乱了。
+        """
+        if parse_copyright(self._copyright_var.get()) == 2:
+            self._source_row.grid()
+        else:
+            self._source_row.grid_remove()
+
+    def _on_copyright_changed(self) -> None:
+        """切换类型：同步来源行的显隐，并记进偏好。"""
+        self._sync_source_row()
+        self._save_state()
 
     def _more_flags(self) -> dict[str, bool]:
         """更多设置里五个开关的当前值。"""
@@ -993,6 +1059,8 @@ class TasksView(ttk.Frame):
         offset = _parse_offset(self._dtime_var.get())
         return SharedSubmitValues(
             tid=parse_tid(self._tid_var.get()),
+            copyright=parse_copyright(self._copyright_var.get()),
+            source=self._source_var.get().strip(),
             tag=self._tag_var.get().strip(),
             desc=self._desc_var.get().strip(),
             dtime_offset_hours=offset,
@@ -1012,6 +1080,10 @@ class TasksView(ttk.Frame):
         cfg = replace(self._cfg) if self._source_mode == "yaml" else AppConfig()
         if self._source_mode == "folder":
             shared = self._collect_shared()
+            # 转载缺来源时，服务端对每个稿件都回一句 21004——与其让整批
+            # 逐个失败、列表一片红，不如在开始前就拦住
+            if shared.copyright == 2 and not shared.source.strip():
+                raise BiliError("选了「转载」就必须填转载来源（原视频链接或出处）")
             selected = [
                 (index, shared.apply(self._tasks[index])) for index in indexes
             ]
