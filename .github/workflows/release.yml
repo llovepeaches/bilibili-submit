@@ -35,7 +35,7 @@ jobs:
       - name: 打包主程序（轻量版）
         run: python -m PyInstaller bili_submit.spec --noconfirm --clean
 
-      # 内置版：ffmpeg 打进归档，单个 exe 开箱即用（约 69MB，解压后约 94MB）
+      # 内置版：ffmpeg 打进归档，单个 exe 开箱即用（约 73MB，解压后约 100MB）
       - name: 打包主程序（内置 ffmpeg 版）
         env:
           BUNDLE_FFMPEG: '1'
@@ -89,11 +89,11 @@ jobs:
           if (-not (Test-Path $gui)) { throw "GUI exe 未生成: $gui" }
 
           # 内嵌 ffmpeg 的 GUI 版应该明显大于只带 tkinter 的体积。
-          # 实测参考：只带 tkinter 约 13MB，内嵌 ffmpeg 后约 72MB
-          # （standalone 69.4MB - 轻量版 10MB = ffmpeg 贡献约 59MB）。
+          # 实测参考（v0.2.2）：只带 tkinter 约 13MB，内嵌 ffmpeg 后约 76MB
+          # （standalone 72.8MB - 轻量版 10.5MB = ffmpeg 贡献约 62MB）。
           # 不直接检查归档内容（onefile 是压缩包，探测 ffmpeg 很麻烦），
           # 用体积做下限断言，简单且能挡住"忘了带 ffmpeg"这种回归。
-          # 40MB 是刻意保守的中间值：远高于 13MB（漏带），远低于 72MB（带了）。
+          # 40MB 是刻意保守的中间值：远高于 13MB（漏带），远低于 76MB（带了）。
           $guiMB = [math]::Round((Get-Item $gui).Length / 1MB, 1)
           Write-Host "GUI exe 体积: $guiMB MB（预期约 72MB，>= 40MB）"
           if ($guiMB -lt 40) {
@@ -156,10 +156,10 @@ jobs:
 
           | 资产 | 大小 | 说明 |
           |---|---|---|
-          | `bilibili-submit-gui.exe` | ~72 MB | **图形界面版**，双击开窗口操作，ffmpeg 已内置 |
-          | `bilibili-submit-standalone.exe` | ~69 MB | 命令行单文件版，ffmpeg 已内置 |
-          | `bilibili-submit.exe` | ~10 MB | 命令行轻量 exe，需自备 ffmpeg |
-          | `bilibili-submit-full-windows.zip` | ~40 MB | 命令行 exe + 外置 ffmpeg.exe，启动最快 |
+          | `bilibili-submit-gui.exe` | ~76 MB | **图形界面版**，双击开窗口操作，ffmpeg 已内置 |
+          | `bilibili-submit-standalone.exe` | ~73 MB | 命令行单文件版，ffmpeg 已内置 |
+          | `bilibili-submit.exe` | ~11 MB | 命令行轻量 exe，需自备 ffmpeg |
+          | `bilibili-submit-full-windows.zip` | ~43 MB | 命令行 exe + 外置 ffmpeg.exe，启动最快 |
           | `bilibili-submit-mini-windows.zip` | ~10 MB | 命令行 exe + config，不含 ffmpeg |
 
           怎么选：
@@ -200,10 +200,10 @@ jobs:
           - 仅供管理自己的账号投稿使用。
           "@
           gh release create $tag `
-            "dist\bilibili-submit-gui.exe#图形界面版（内置 ffmpeg，约 72MB）" `
-            "dist\bilibili-submit-standalone.exe#单文件版（内置 ffmpeg，约 69MB）" `
-            "dist\bilibili-submit.exe#轻量 exe（不含 ffmpeg，约 10MB）" `
-            "dist\bilibili-submit-full-windows.zip#完整版（外置 ffmpeg，约 40MB）" `
+            "dist\bilibili-submit-gui.exe#图形界面版（内置 ffmpeg，约 76MB）" `
+            "dist\bilibili-submit-standalone.exe#单文件版（内置 ffmpeg，约 73MB）" `
+            "dist\bilibili-submit.exe#轻量 exe（不含 ffmpeg，约 11MB）" `
+            "dist\bilibili-submit-full-windows.zip#完整版（外置 ffmpeg，约 43MB）" `
             "dist\bilibili-submit-mini-windows.zip#轻量版（不含 ffmpeg，约 10MB）" `
             --repo ${{ github.repository }} `
             --title "bilibili-submit $tag" `
