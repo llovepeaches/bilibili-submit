@@ -8,7 +8,16 @@
 
 ## [未发布]
 
-暂无。
+### 修复
+
+- **Windows 构建 workflow 长期报红**：冒烟测试把 `check` 放在最后一条，
+  而它在 CI 上没有 cookie 时按设计返回 1，于是每次 push 到 main 都被判失败。
+  真正的打包问题（`--version` / `--help`）反而被淹没在噪音里。
+  现在区分致命与可容忍失败，与 `release.yml` 的处理保持一致。
+- **构建产物缺 config 目录**：`build-windows.yml` 上传 `dist/config/`，
+  但 spec 的 `datas` 只把 `config.example.yaml` 打进 exe 归档
+  （运行时解到 `sys._MEIPASS`），不会落到 `dist/` 下，
+  配合 `if-no-files-found: error` 必然报错。改为从仓库根复制。
 
 ## [0.2.2] - 2026-10-04
 

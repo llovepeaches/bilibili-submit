@@ -29,13 +29,40 @@ jobs:
       - name: 准备 ffmpeg（外置到 dist/）
         run: python tools/setup_ffmpeg.py --dest dist
 
-      - name: 冒烟测试
+      # config 和文档要从仓库根复制到 dist\，不能直接期待它们已经在 dist\ 下。
+      # spec 里的 datas 是把 config.example.yaml 打进 exe 归档（运行时解到
+      # sys._MEIPASS），并不会落到 dist\ 目录，所以下面的上传步骤写
+      # dist/config/ 时，少了这一步就会因为找不到目录而报错。
+      - name: 补齐分发文件
+        shell: pwsh
         run: |
-          .\dist\bilibili-submit.exe --version
-          .\dist\bilibili-submit.exe --help
-          .\dist\bilibili-submit.exe tid
-          # check 会同时报告登录态与 ffmpeg 就绪情况
-          .\dist\bilibili-submit.exe check
+          Copy-Item config dist\ -Recurse -Force
+          Copy-Item README.md dist\
+          Copy-Item CHANGELOG.md dist\
+
+      - name: 冒烟测试
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # 这三条挂了说明打包本身有问题，必须让构建变红
+          & .\dist\bilibili-submit.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "--version 失败 ($LASTEXITCODE)" }
+          & .\dist\bilibili-submit.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "--help 失败 ($LASTEXITCODE)" }
+
+          # tid 要访问网络，偶发失败不该牵连打包结果
+          & .\dist\bilibili-submit.exe tid
+          if ($LASTEXITCODE -ne 0) { Write-Host "警告: tid 返回 $LASTEXITCODE（网络问题，不阻断）" }
+
+          # check 同时报告登录态与 ffmpeg。CI 上没有 cookie，
+          # 未登录时它按设计返回 1，这里只看它能不能正常启动。
+          & .\dist\bilibili-submit.exe check
+          Write-Host "check 退出码 $LASTEXITCODE（未登录返回 1 属正常）"
+
+          # step 退出码取自最后一条原生命令，不显式归零的话
+          # check 的 1 会让整个构建判为失败
+          exit 0
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
@@ -46,5 +73,6 @@ jobs:
             dist/ffmpeg.exe
             dist/config/
             dist/README.md
+            dist/CHANGELOG.md
           retention-days: 30
           if-no-files-found: error
