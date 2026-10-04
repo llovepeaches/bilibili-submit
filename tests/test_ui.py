@@ -235,11 +235,19 @@ def test_safe_after_still_runs_callback():
 
 
 def test_worker_survives_dead_window():
-    """窗口销毁后 Worker 的上报不应让线程崩掉。
+    """窗口销毁后 Worker 的上报不得产生未捕获异常。
 
-    关窗口时正在跑的任务会继续往回发进度/结果，这些上报必须安全地
-    被丢弃，而不是把工作线程炸掉（那会留下一个永远转圈的假状态）。
+    关窗口时正在跑的任务会继续往回发进度/结果。如果 ``after`` 注册
+    抛出没人接的异常，工作线程就会带着异常死掉——``on_done`` 和
+    ``on_error`` 都收不到，界面永远卡在「执行中」。
+
+    .. important::
+       断言的是**没有未捕获异常**，而不是「线程退出了」。线程抛异常后
+       照样会退出，只看 ``is_alive()`` 的话新旧代码都通过，这条测试
+       等于没测。真正的信号是 ``threading.excepthook`` 有没有被触发。
     """
+    import threading
+
     import tkinter as tk
 
     from bilibili_submit.ui.workers import Worker
@@ -248,17 +256,23 @@ def test_worker_survives_dead_window():
         def after(self, *_a, **_k):
             raise tk.TclError("invalid command name 'after'")
 
-    errors = []
-    worker = Worker(_Dead())
-    worker.run(
-        lambda report, is_cancelled: report("进度"),
-        on_progress=lambda m: None,
-        on_done=lambda v: None,
-        on_error=errors.append,
-    )
-    if worker._thread is not None:
-        worker._thread.join(3)
-        assert not worker._thread.is_alive(), "线程应该正常退出，而不是崩掉"
+    uncaught: list[BaseException] = []
+    original = threading.excepthook
+    threading.excepthook = uncaught.append
+    try:
+        seen: list[object] = []
+        worker = Worker(_Dead())
+        worker.run(
+            lambda report, is_cancelled: report("进度"),
+            on_progress=seen.append,
+            on_error=lambda exc: seen.append(exc),
+        )
+        if worker._thread is not None:
+            worker._thread.join(3)
+    finally:
+        threading.excepthook = original
+
+    assert not uncaught, f"线程里有未捕获异常：{uncaught!r}"
 
 
 # ---------- 需要 Tk ----------
@@ -869,5 +883,72 @@ def test_login_error_shows_hint_in_log():
         assert "失败" in view._status.cget("text"), "状态标签也要提示失败"
         # BiliError._compose 已把 hint 拼进 str(exc)，别再重复打一遍
         assert text.count("换代理") == 1, f"hint 重复显示了：{text!r}"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_login_success_unlocks_buttons_even_if_save_fails(monkeypatch):
+    """cookie 写盘失败也不能把登录页锁死。
+
+    ``_on_done`` 是排进 Tk 事件循环执行的，抛出的异常没人接。原先
+    ``save_cookies()`` 排在 ``_set_busy(False)`` **之前**，路径不可写时
+    （设置页能把 cookie 路径指到任意位置）就会：开始按钮永久 disabled、
+    取消亮着但线程已死、状态标签还停在旧文案——用户看着像登录成功了，
+    却既不能重试也不能取消，只能重启进程。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.views import login as login_mod
+
+    root = tk.Tk()
+    try:
+        _app, view = _build_login_view(root)
+        view._set_busy(True)
+        view._log.clear()
+
+        def unwritable(*_a, **_k):
+            raise OSError("Read-only file system")
+
+        monkeypatch.setattr(login_mod, "save_cookies", unwritable)
+
+        view._on_done({"SESSDATA": "x"})
+        root.update_idletasks()
+
+        assert "disabled" not in view._start_button.state(), (
+            "写盘失败后开始按钮必须恢复，否则登录页永久锁死"
+        )
+        assert "disabled" in view._cancel_button.state(), "取消按钮应回到禁用"
+        text = view._log._text.get("1.0", "end")
+        assert "保存失败" in view._status.cget("text"), "状态要说明发生了什么"
+        assert "Read-only" in text or "写入" in text, f"日志要给出原因：{text!r}"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_login_status_refresh_failure_does_not_raise(monkeypatch):
+    """状态栏刷新失败不该把整个回调炸掉。
+
+    ``refresh_status`` 会读 cookie 文件，文件损坏时抛 ``BiliError``。
+    登录刚成功却因为读不了 cookie 而炸掉回调，用户会看到「登录成功」
+    但界面半推半就地卡住。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.exceptions import BiliError
+
+    root = tk.Tk()
+    try:
+        _app, view = _build_login_view(root)
+        view._log.clear()
+
+        def boom():
+            raise BiliError("cookie 文件损坏")
+
+        monkeypatch.setattr(view.app, "refresh_status", boom)
+        view._refresh_app_status()          # 不应抛出
+
+        assert "状态栏刷新失败" in view._log._text.get("1.0", "end")
     finally:
         root.destroy()

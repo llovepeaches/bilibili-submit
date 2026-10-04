@@ -346,13 +346,18 @@ class TasksView(ttk.Frame):
         其实跑的还是启动时那几个。
 
         .. important::
-           要同时看 :attr:`_busy` 和 :attr:`~..workers.Worker.running`，
-           两者不是一回事：工作线程已经退出、但 ``on_done`` 排队的
-           ``after`` 还没执行的那一小段时间里，``running`` 是 False 而
-           界面还是运行态。只看线程状态的话，这段时间里用户能改勾选，
-           还能直接启动第二轮，和刚结束的那次串在一起。
+           只看 :attr:`_busy`，不要掺 ``_worker.running``。两个信号
+           并不等价：``on_done`` / ``on_error`` 是排进 Tk 事件循环执行的，
+           那一刻工作线程**还没退出**（它只是排完队就返回了），
+           ``running`` 仍为 True。若拿它当条件，收尾时会把「重试失败项」
+           重新锁死，而之后没有任何东西再来刷新一次——
+           有失败项却点不了重试。
+
+           ``_busy`` 覆盖了「线程还活着」的整个窗口：``_run`` 开头置
+           True，``_on_done`` / ``_on_error`` / 启动失败三处归 False。
+           相比线程内部状态，界面态才是这里真正该依据的东西。
         """
-        return not (self._busy or self._worker.running)
+        return not self._busy
 
     def _apply_selection(self, predicate: "Any") -> None:
         """按谓词批量设置勾选，然后刷新首列与汇总。"""
@@ -405,14 +410,21 @@ class TasksView(ttk.Frame):
             return
 
         self._set_busy(True)
-        self._log.clear()
-        self._progress.reset()
-        self._worker.run(
-            lambda report, is_cancelled: self._do_run(report, is_cancelled, indexes),
-            on_progress=self._on_progress,
-            on_done=self._on_done,
-            on_error=self._on_error,
-        )
+        try:
+            self._log.clear()
+            self._progress.reset()
+            self._worker.run(
+                lambda report, is_cancelled: self._do_run(report, is_cancelled, indexes),
+                on_progress=self._on_progress,
+                on_done=self._on_done,
+                on_error=self._on_error,
+            )
+        except Exception as exc:  # noqa: BLE001 - 启动失败必须把界面解锁
+            # 线程没起来就不会有 _on_done/_on_error 来收尾，_busy 会永久
+            # 卡在 True——「开始投稿」灰着、取消点不动，只能重启进程。
+            # 这里与 _on_error 做同样的归位。
+            self._set_busy(False)
+            self._log.append(f"无法启动任务：{exc}")
 
     def _retry_failed(self) -> None:
         """只重试上一轮失败的项。

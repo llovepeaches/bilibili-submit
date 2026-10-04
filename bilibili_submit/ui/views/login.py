@@ -232,11 +232,34 @@ class LoginView(ttk.Frame):
         self._log.append("登录链接已复制到剪贴板")
 
     def _on_done(self, cookies: dict[str, str]) -> None:
-        path = save_cookies(cookies, self.app.ctx.cookie_file)
+        # **先解锁再干活**。save_cookies 会 makedirs/open/os.replace/os.chmod，
+        # 路径不可写时抛 OSError；这个回调是 Worker 排进 Tk 主循环的，
+        # 抛出去没人接——按钮就永久停在 disabled，用户看着「登录成功」
+        # 却既不能重试也不能取消，只能重启进程。
+        # _on_error 也是先 _set_busy(False) 同理，两边顺序必须一致。
         self._set_busy(False)
+        try:
+            path = save_cookies(cookies, self.app.ctx.cookie_file)
+        except OSError as exc:
+            self._status.configure(text="登录成功，但保存失败", foreground=theme.WARNING)
+            self._log.append(f"错误：cookie 写入 {self.app.ctx.cookie_file} 失败：{exc}")
+            self._log.append("登录态在本次进程内有效，但重启后需要重新扫码")
+            return
         self._status.configure(text="登录成功", foreground=theme.SUCCESS)
         self._log.append(f"Cookie 已保存到 {path}（权限 0600，请勿外传）")
-        self.app.refresh_status()
+        self._refresh_app_status()
+
+    def _refresh_app_status(self) -> None:
+        """刷新状态栏登录态。
+
+        ``refresh_status`` 会去读 cookie 文件，文件损坏时
+        ``AppContext.logged_in`` 会抛 ``BiliError``。登录刚成功时抛这个
+        就很荒唐了，所以这里兜住——登录态的显示更新不值得让整个回调炸掉。
+        """
+        try:
+            self.app.refresh_status()
+        except BiliError as exc:
+            self._log.append(f"状态栏刷新失败：{exc}")
 
     def _on_error(self, exc: BaseException) -> None:
         self._set_busy(False)

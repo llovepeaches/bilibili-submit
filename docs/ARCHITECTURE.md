@@ -276,15 +276,35 @@ ttk 的 Treeview 着色只能靠 tag，于是很自然会想「斑马纹一个 t
 | 加载/切换配置 | 整体换掉 `_tasks`/`_cfg`，而工作线程正逐项读这两个属性 |
 | 点「重试失败项」 | `_run` 会因「已有任务在运行」直接 return，成了假按钮 |
 
-判定统一走 `TasksView._editable()`。它同时看 `self._busy`（界面态，
-由 `_set_busy` 维护）和 `self._worker.running`（线程态）——这两个不是
-一回事：线程已经退出、但收尾回调还没执行的那一小段时间里，
-`running` 是 False 而界面仍锁着。只看线程状态的话，这段时间里用户能
-启动第二轮，和刚结束的那次串在一起。
+判定统一走 `TasksView._editable()`，它**只看 `self._busy`**（界面态，
+由 `_set_busy` 维护），不要掺 `self._worker.running`（线程态）。
+
+理由是两个信号并不等价，而且掺进来会引入一个真 bug：`on_done` /
+`on_error` 是排进 Tk 事件循环执行的，那时工作线程**只是排完队就返回、
+还没真正退出**，`running` 仍是 True。拿它当「是否解锁」的判据，
+收尾时会把「重试失败项」重新锁死，而之后没有任何东西会再来刷新一次——
+有失败项却点不了重试。
+
+`_busy` 覆盖了「线程还活着」的整个窗口：`_run` 开头置 True，
+`_on_done` / `_on_error` / 启动失败三处归 False。相比线程内部状态，
+界面态才是这里真正该依据的东西。
+
+由此推出一条纪律：**`_busy` 的置位与归位必须成对，且归位不能依赖
+「后续一定会有回调」**。`_run` 里 `_set_busy(True)` 之后的
+`_log.clear()` / `_progress.reset()` / `_worker.run()` 任一抛异常，
+就没有 `_on_done` / `_on_error` 来收尾，`_busy` 永久卡在 True——
+「开始投稿」灰着、取消点不动，只能重启进程。所以那段整体包在
+`try/except` 里。
 
 按钮的启用状态则要由**唯一**的收口函数决定。`_mark` 每完成一项都会触发
 `_update_summary`，如果汇总里直接写「有失败项就解锁重试」，运行途中
 出现的第一个失败项会把按钮解开——所以那里必须一并检查 `_editable()`。
+
+同样的道理适用于登录页和投稿页：`_on_done` / `_on_error` 都必须
+**先 `_set_busy(False)` 再做可能失败的活**。登录页曾把 `save_cookies()`
+（会 `makedirs/open/os.replace/os.chmod`）排在解锁之前，路径不可写时
+回调抛出、没人接，按钮就永久锁死——而用户看到的现象是「登录成功了」，
+比直接报错更难排查。
 
 ### 会话只能从 `new_session()` 来
 
@@ -375,17 +395,32 @@ pylama --max-complexity 20 bilibili_submit tests tools
 新加一条测试后，**把修复注回去看它是否变红**。这一步经常发现
 「测试自己就有盲点」。
 
-实际遇到过：验证「运行中不能改勾选」的测试写成
+实际遇到过两个例子：
 
-    before = view._selected_indexes()
-    view._select_failed()
-    view._select_none()
-    view._select_all()          # ← 恰好把状态恢复原样
-    assert view._selected_indexes() == before
+1. 验证「运行中不能改勾选」的测试写成
 
-注回 bug 后测试照样绿——因为最后那次「全选」正好抵消了前面的改动。
-改成每一步都断言才真正抓住。所以顺序：写测试 → 注回 bug → 确认红 →
-还原 → 确认绿。
+       before = view._selected_indexes()
+       view._select_failed()
+       view._select_none()
+       view._select_all()          # ← 恰好把状态恢复原样
+       assert view._selected_indexes() == before
+
+   注回 bug 后测试照样绿——因为最后那次「全选」正好抵消了前面的改动。
+   改成每一步都断言才真正抓住。
+
+2. `test_worker_survives_dead_window` 断言「线程退出了」
+
+       assert not worker._thread.is_alive()
+
+   但线程抛未捕获异常后**照样退出**，新旧代码都通过，等于没测。
+   真正的信号是 `threading.excepthook` 有没有被触发——接管它，
+   断言「无未捕获异常」才有效。
+
+顺带一条：**模拟并发/竞态要造出真的那个前提**。测「线程还活着时
+不该锁按钮」时，只调 `_set_busy(False)` 是不够的——那一刻压根没有
+线程，竞态根本没被复现。要起一个真线程卡在那里，才能测到。
+
+所以顺序：写测试 → 注回 bug → 确认红 →（必要时修正测试）→ 还原 → 确认绿。
 
 ## 复杂度豁免
 

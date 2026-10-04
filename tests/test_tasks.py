@@ -635,6 +635,101 @@ def test_load_blocked_while_running(tmp_path):
 
 
 @needs_display
+def test_summary_unlocks_retry_while_thread_alive(tmp_path, monkeypatch):
+    """收尾时线程还没退出，「重试失败项」也必须解锁。
+
+    ``on_done`` / ``on_error`` 是排进 Tk 事件循环执行的，那时工作线程
+    只是排完队就返回、**还没真正退出**。所以 ``_worker.running`` 在
+    收尾瞬间仍是 True——拿它当「是否解锁」的判据，有失败项也点不了
+    重试，而且之后没有任何东西会再来刷新一次。
+
+    这里用真线程卡住来复现那个瞬间：线程 ``join`` 之前就调用收尾。
+    """
+    import tkinter as tk
+    import threading
+
+    real = _make_video(tmp_path, "real.mp4")
+    cfg = _write_config(tmp_path, [("A", real), ("B", real)])
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root)
+        view._path_var.set(cfg)
+        view._load()
+        view._mark(0, "失败：x", "error")
+        view._set_busy(True)
+
+        # 起一个真线程，只为让 running 在收尾时为 True
+        release = threading.Event()
+        started = threading.Event()
+
+        def _hold():
+            started.set()
+            release.wait(3)
+
+        holder = threading.Thread(target=_hold, daemon=True)
+        holder.start()
+        started.wait(2)
+        monkeypatch.setattr(view._worker, "_thread", holder)
+        assert view._worker.running is True, "本用例前提：线程仍活着"
+
+        # 收尾：界面解锁，但线程还活着
+        view._set_busy(False)
+        view._update_summary()
+
+        assert "disabled" not in view._retry_button.state(), (
+            "线程还活着就不让重试，收尾后再没人刷新，有失败项也点不了"
+        )
+        release.set()
+        holder.join(2)
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_run_failure_unlocks_buttons(tmp_path, monkeypatch):
+    """线程启动失败也要把界面解锁。
+
+    ``_busy`` 是执行锁的唯一真相来源，只在 ``_on_done`` / ``_on_error``
+    里归位。启动阶段就抛异常的话这两个都不会来，按钮会永久灰着、
+    取消也点不动，只能重启进程。
+    """
+    import tkinter as tk
+
+    real = _make_video(tmp_path, "real.mp4")
+    cfg = _write_config(tmp_path, [("A", real)])
+
+    root = tk.Tk()
+    try:
+        app, view = _build(root)
+        view._path_var.set(cfg)
+        view._load()
+        view._log.clear()
+
+        class _Ctx:
+            logged_in = True
+
+            def client(self, need_login=True):
+                return object()
+
+        app.ctx = _Ctx()
+
+        def boom(*_a, **_k):
+            raise RuntimeError("模拟启动失败")
+
+        monkeypatch.setattr(view._worker, "run", boom)
+        view._run()
+
+        assert "disabled" not in view._run_button.state(), "启动失败后按钮应恢复"
+        # 取消按钮反倒该是禁用的——压根没有任务在跑
+        assert "disabled" in view._cancel_button.state()
+        assert view._editable(), "_busy 必须归位，否则再也点不动"
+        assert "无法启动任务" in view._log._text.get("1.0", "end")
+    finally:
+        root.destroy()
+
+
+@needs_display
 def test_error_reverts_busy_rows(tmp_path):
     """非取消的异常也要收尾，否则行永远停在「进行中」。
 
