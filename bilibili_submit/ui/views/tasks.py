@@ -106,11 +106,16 @@ UNPICKED = ""
 GROUP_OFF = "不合并"
 GROUP_PREFIX = "按文件名前缀分组"
 GROUP_FOLDER = "按文件夹分组"
-GROUP_OPTIONS = (GROUP_OFF, GROUP_PREFIX, GROUP_FOLDER)
+GROUP_WHOLE_DIR = "整个目录合并"
+GROUP_OPTIONS = (GROUP_OFF, GROUP_PREFIX, GROUP_FOLDER, GROUP_WHOLE_DIR)
 
 #: 下拉框显示值 → 内部模式名。UI 说人话，配置和 :mod:`.multipart` 说机器话，
 #: 两边都不委屈，映射只在这一处维护。
-GROUP_MODE_BY_LABEL = {GROUP_PREFIX: "prefix", GROUP_FOLDER: "folder"}
+GROUP_MODE_BY_LABEL = {
+    GROUP_PREFIX: "prefix",
+    GROUP_FOLDER: "folder",
+    GROUP_WHOLE_DIR: "whole_dir",
+}
 GROUP_LABEL_BY_MODE = {mode: label for label, mode in GROUP_MODE_BY_LABEL.items()}
 
 #: 状态列最多显示多少字。超出的部分存起来，双击看全文
@@ -413,8 +418,8 @@ class TasksView(ttk.Frame):
         row = FormRow(
             picker,
             "分P合并",
-            hint="按文件名前缀或文件夹把同一套视频合成一个稿件的 P1/P2/P3"
-            "（只钻一层子目录）；双击列表行可改各分P标题",
+            hint="把同一套视频合成一个稿件的 P1/P2/P3：按文件名前缀、按子文件夹，"
+            "或把整个目录直接合并；双击列表行可改各分P标题",
         )
         row.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_XS, 0))
         self._group_combo = row.add(

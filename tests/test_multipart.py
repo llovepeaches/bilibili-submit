@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bilibili_submit.multipart import (  # noqa: E402
     group_by_folder,
     group_by_prefix,
+    group_by_whole_dir,
     group_files,
     natural_key,
     strip_part_marker,
@@ -282,6 +283,35 @@ def test_group_files_dispatches_by_mode():
     assert len(group_files(files, "folder", root)) == 1
     # 前缀模式下这两个名字没有共同前缀可剥，应各自成组
     assert len(group_files(files, "prefix", root)) == 2
+    # 整个目录合并：散落到根目录的两个文件也合成一个稿件
+    assert len(group_files(files, "whole_dir", root)) == 1
+
+
+def test_whole_dir_merges_root_level_files():
+    """根目录下的散落文件可以直接合成一个稿件。"""
+    root = Path("/v/苏扶")
+    files = [root / "01.mp4", root / "02.mp4", root / "03.mp4"]
+    groups = group_by_whole_dir(files, root)
+    assert len(groups) == 1
+    assert groups[0].name == "苏扶"
+    assert len(groups[0].files) == 3
+
+
+def test_whole_dir_without_root_uses_parent_name():
+    files = [Path("/v/苏扶/a.mp4")]
+    groups = group_by_whole_dir(files)
+    assert groups[0].name == "苏扶"
+
+
+def test_whole_dir_keeps_natural_order():
+    root = Path("/v/苏扶")
+    files = [root / "第10集.mp4", root / "第2集.mp4", root / "第1集.mp4"]
+    groups = group_by_whole_dir(files, root)
+    assert [p.name for p in groups[0].files] == ["第1集.mp4", "第2集.mp4", "第10集.mp4"]
+
+
+def test_whole_dir_empty_returns_empty():
+    assert group_by_whole_dir([]) == []
 
 
 def test_group_files_unknown_mode_falls_back_to_no_grouping():

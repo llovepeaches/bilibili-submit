@@ -5,10 +5,11 @@ B 站的多 P 是一个 av/bv 号下面挂 P1、P2、P3……，播放器里可�
 ``filename`` 和 ``title``。所以多 P 的关键不在接口，而在**决定哪些文件
 算同一组**——本模块只解决这一件事，上传和投递交给 :mod:`.scheduler`。
 
-分组有两种依据，按 :data:`GROUP_MODES` 里指定的模式选一种：
+分组有三种依据，按 :data:`GROUP_MODES` 里指定的模式选一种：
 
 - ``prefix``——文件名前缀（``旅行_01.mp4`` / ``旅行_02.mp4`` 是一套）；
-- ``folder``——所在文件夹（``旅行/`` 底下的都是一套）。
+- ``folder``——所在文件夹（``旅行/`` 底下的都是一套）；
+- ``whole_dir``——整个目录下的所有文件合成一个稿件。
 
 前缀模式的规则刻意做得**保守且可预测**：
 
@@ -38,6 +39,7 @@ __all__ = [
     "PartGroup",
     "group_by_folder",
     "group_by_prefix",
+    "group_by_whole_dir",
     "group_files",
     "natural_key",
     "strip_part_marker",
@@ -45,7 +47,7 @@ __all__ = [
 
 #: 可用的分组依据。UI 下拉框与配置校验共用这一份，
 #: 免得两边各写一套字符串、改一处漏一处。
-GROUP_MODES = ("prefix", "folder")
+GROUP_MODES = ("prefix", "folder", "whole_dir")
 
 #: 文件名里常见的分隔符（含全角括号，中文用户粘贴的文件名里很常见）
 _SEP = r"[\s_\-\.()\[\]（）【】]*"
@@ -240,10 +242,26 @@ def group_by_folder(files: list[Path], root: Path | None = None) -> list[PartGro
     return groups
 
 
+def group_by_whole_dir(files: list[Path], root: Path | None = None) -> list[PartGroup]:
+    """把整个目录下的所有文件合成一个分 P 稿件。
+
+    组名取根目录名（用户选的那个文件夹名），没有 root 时取第一个文件
+    的父目录名。组内按自然序排。
+
+    这适合用户已经把一套视频整整齐齐放在一个文件夹里的场景——
+    不需要再建一层子文件夹，直接按当前目录合并。
+    """
+    if not files:
+        return []
+    ordered = sorted(files, key=lambda path: natural_key(path.name))
+    name = root.name if root is not None else ordered[0].parent.name
+    return [PartGroup(name=name or "分P稿件", files=tuple(ordered))]
+
+
 def group_files(
     files: list[Path], mode: str, root: Path | None = None
 ) -> list[PartGroup]:
-    """按给定模式分组，是两种模式的统一入口。
+    """按给定模式分组，是三种模式的统一入口。
 
     ``mode`` 取 :data:`GROUP_MODES` 之一；不认识的模式返回"每个文件
     自成一组"（等价于不合并），而不是抛异常——分组只是猜用户意图，
@@ -253,4 +271,6 @@ def group_files(
         return group_by_folder(files, root)
     if mode == "prefix":
         return group_by_prefix(files)
+    if mode == "whole_dir":
+        return group_by_whole_dir(files, root)
     return [PartGroup(name=path.stem, files=(path,)) for path in files]
