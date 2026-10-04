@@ -238,6 +238,10 @@ def _make_video(directory: Path, name: str) -> Path:
     return video
 
 
+class _StubClient:
+    """只为满足 ``run_task`` 的签名——真正的网络调用都在测试里被打桩。"""
+
+
 def _load_folder(root, view, directory, monkeypatch=None) -> None:
     """走文件夹来源加载，等真实结果落地。"""
     if monkeypatch is not None:
@@ -1418,8 +1422,10 @@ def test_grouped_task_shows_part_count_in_tree(tmp_path, monkeypatch):
         view._group_var.set("按文件名前缀分组")
         _load_folder(root, view, tmp_path, monkeypatch)
 
+        # 按列名取，别按位置——列一多（这次加了「标题」）位置就错了，
+        # 而位置错了的断言会指向错误的列，读起来莫名其妙
         rows = {
-            view._tree.item(iid, "values")[1]: view._tree.item(iid, "values")[3]
+            view._tree.set(iid, "name"): view._tree.set(iid, "parts")
             for iid in view._tree.get_children()
         }
         assert rows["旅行"] == "2"
@@ -1451,14 +1457,14 @@ def test_missing_file_marks_whole_multipart_task(tmp_path, monkeypatch):
 
         children = view._tree.get_children()
         assert len(view._missing) == 1, "缺一个分P，整行就该算缺失"
-        assert "缺 1/2" in view._tree.item(children[0], "values")[2]
+        assert "缺 1/2" in view._tree.set(children[0], "file")
     finally:
         root.destroy()
 
 
 @needs_display
-def test_edit_parts_writes_titles_back(tmp_path, monkeypatch):
-    """改完分 P 标题要落回任务对象，执行时才会带上。"""
+def test_edit_titles_writes_both_levels_back(tmp_path, monkeypatch):
+    """改完稿件标题和分 P 标题都要落回任务对象，执行时才会带上。"""
     import tkinter as tk
 
     _make_video(tmp_path, "旅行_01.mp4")
@@ -1472,25 +1478,33 @@ def test_edit_parts_writes_titles_back(tmp_path, monkeypatch):
 
         seen: dict[str, object] = {}
 
-        def fake_ask(archive, files, current):
+        def fake_ask(archive, files, current, archive_title):
             seen["archive"] = archive
             seen["current"] = current
-            return ["出发", "到达"]
+            seen["archive_title"] = archive_title
+            return "旅行日记", ["出发", "到达"]
 
-        monkeypatch.setattr(view, "_ask_part_titles", fake_ask)
-        view._edit_parts("0")
+        monkeypatch.setattr(view, "_ask_titles", fake_ask)
+        view._edit_titles("0")
 
-        assert seen["current"] == ["旅行_01", "旅行_02"], "默认标题取文件名"
+        assert seen["current"] == ["旅行_01", "旅行_02"], "分P标题默认取文件名"
+        assert seen["archive_title"] == "旅行", "稿件标题默认取组名"
         task = view._tasks[0]
+        assert task.title == "旅行日记"
         assert task.part_titles == ["出发", "到达"]
         assert task.files and len(task.files) == 2, "文件列表不该被动过"
+        assert view._tree.set("0", "title") == "旅行日记", "列表要立刻反映改动"
     finally:
         root.destroy()
 
 
 @needs_display
-def test_edit_parts_ignores_single_file_task(tmp_path, monkeypatch):
-    """单 P 任务双击不该弹窗——没什么可改的。"""
+def test_single_file_task_can_change_its_title(tmp_path, monkeypatch):
+    """单 P 任务双击也要能改标题。
+
+    之前它双击没反应，想改标题只能去改文件名——那个绕路太远了。
+    但它没有分 P 可言，所以不能写 part_titles（写了是用不上的脏数据）。
+    """
     import tkinter as tk
 
     _make_video(tmp_path, "教程.mp4")
@@ -1500,11 +1514,54 @@ def test_edit_parts_ignores_single_file_task(tmp_path, monkeypatch):
         _app, view = _build(root, tmp_path, monkeypatch)
         _load_folder(root, view, tmp_path, monkeypatch)
 
-        def boom(*_a, **_k):
-            raise AssertionError("单P任务不该弹分P标题对话框")
+        monkeypatch.setattr(
+            view, "_ask_titles", lambda *a, **k: ("零基础学Python", ["不该被写入"])
+        )
+        view._edit_titles("0")
 
-        monkeypatch.setattr(view, "_ask_part_titles", boom)
-        view._edit_parts("0")  # 不抛即通过
+        task = view._tasks[0]
+        assert task.title == "零基础学Python"
+        assert task.part_titles == [], (
+            "单P任务不该留下 part_titles——它只有一个分P，写了也用不上，"
+            "只会变成一份误导人的脏数据"
+        )
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_title_column_shows_default_title(tmp_path, monkeypatch):
+    """「标题」列默认显示稿件标题（扫目录时即文件名/文件夹名）。"""
+    import tkinter as tk
+
+    _make_video(tmp_path, "教程.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+        assert view._tree.set("0", "title") == "教程"
+        assert view._tree.heading("title", "text") == "标题"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_cancelled_title_edit_leaves_task_alone(tmp_path, monkeypatch):
+    """取消对话框不该把标题改成空——用户的稿件会变成无名稿。"""
+    import tkinter as tk
+
+    _make_video(tmp_path, "教程.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        monkeypatch.setattr(view, "_ask_titles", lambda *a, **k: None)
+        view._edit_titles("0")
+
+        assert view._tasks[0].title == "教程"
     finally:
         root.destroy()
 
@@ -1645,9 +1702,6 @@ def test_folder_mode_end_to_end_submits_once_per_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "upload_video", fake_upload)
     monkeypatch.setattr(scheduler, "submit_archive", fake_submit)
 
-    class _FakeClient:
-        """只为满足 run_task 的签名——真正的网络调用都在上面被打桩了。"""
-
     cfg = AppConfig()
     cfg.defaults.tid = 21
 
@@ -1658,12 +1712,195 @@ def test_folder_mode_end_to_end_submits_once_per_folder(tmp_path, monkeypatch):
         _load_folder(root, view, video_root, monkeypatch)
 
         for task in view._tasks:
-            scheduler.run_task(_FakeClient(), task, cfg)
+            scheduler.run_task(_StubClient(), task, cfg)
 
         assert len(uploaded) == 5, f"5 个视频应上传 5 次，实际 {uploaded}"
         assert len(submitted) == 3, f"3 个稿件应投递 3 次，实际 {submitted}"
         assert sorted(len(parts) for parts in submitted) == [1, 1, 3], (
             f"分 P 数应为 1/1/3，实际 {submitted}"
         )
+    finally:
+        root.destroy()
+
+
+# ---------- 标题对话框（真实弹窗） ----------
+
+
+@needs_display
+def test_title_dialog_returns_both_levels(tmp_path):
+    """真实对话框：稿件标题和各分 P 标题都要能取回来。
+
+    前面的测试打桩了对话框，只覆盖写入逻辑；这里真的把它构造出来，
+    能抓到 grid 行号算错、变量名改了这类打桩测不出的问题。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.views.tasks import PartTitlesDialog
+
+    root = tk.Tk()
+    try:
+        files = [
+            _make_video(tmp_path, "旅行_01.mp4"),
+            _make_video(tmp_path, "旅行_02.mp4"),
+        ]
+        dialog = PartTitlesDialog(root, "旅行", files, ["旅行_01", "旅行_02"], "旅行")
+        dialog._archive_var.set("旅行日记")
+        dialog._vars[0].set("出发")
+        dialog._vars[1].set("到达")
+        dialog._ok()
+        assert dialog._result == ("旅行日记", ["出发", "到达"])
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_title_dialog_hides_part_rows_for_single_file(tmp_path):
+    """单文件稿件不该列「P1」——它只有一个分 P，标题就是稿件标题。"""
+    import tkinter as tk
+
+    from bilibili_submit.ui.views.tasks import PartTitlesDialog
+
+    root = tk.Tk()
+    try:
+        files = [_make_video(tmp_path, "教程.mp4")]
+        dialog = PartTitlesDialog(root, "教程", files, ["教程"], "教程")
+        assert dialog._vars == [], "单文件不该有分P输入框"
+        dialog._archive_var.set("零基础学Python")
+        dialog._ok()
+        assert dialog._result == ("零基础学Python", [])
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_title_dialog_reset_strips_trailing_number(tmp_path):
+    """「用文件名」：稿件标题去掉尾部序号，分 P 标题用完整文件名。
+
+    ``旅行_01`` 当整个稿件的标题太机器味，去掉序号成「旅行」才像标题；
+    而分 P 标题保留 ``旅行_01`` 反而是对的——它对应那一个文件。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.views.tasks import PartTitlesDialog
+
+    root = tk.Tk()
+    try:
+        files = [
+            _make_video(tmp_path, "旅行_01.mp4"),
+            _make_video(tmp_path, "旅行_02.mp4"),
+        ]
+        dialog = PartTitlesDialog(root, "旅行", files, ["", ""], "")
+        dialog._reset()
+        assert dialog._archive_var.get() == "旅行"
+        assert [v.get() for v in dialog._vars] == ["旅行_01", "旅行_02"]
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_title_dialog_cancel_returns_none(tmp_path):
+    """取消必须返回 None——返回空串会把稿件标题清成无名稿。"""
+    import tkinter as tk
+
+    from bilibili_submit.ui.views.tasks import PartTitlesDialog
+
+    root = tk.Tk()
+    try:
+        files = [_make_video(tmp_path, "教程.mp4")]
+        dialog = PartTitlesDialog(root, "教程", files, ["教程"], "教程")
+        dialog._cancel()
+        assert dialog._result is None
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_title_column_follows_edited_title_after_refill(tmp_path, monkeypatch):
+    """重新填充列表时「标题」列跟着改后的标题走，「任务」列不动。
+
+    这正是把 name 和 title 分成两列的意义：默认两者一样，改过之后
+    「我改过哪些」一眼可见。若「标题」列填的是 name，改完再刷新
+    就变回去了——看起来像没改成。
+    """
+    import tkinter as tk
+
+    _make_video(tmp_path, "旅行_01.mp4")
+    _make_video(tmp_path, "旅行_02.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._group_var.set("按文件名前缀分组")
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        monkeypatch.setattr(view, "_ask_titles", lambda *a, **k: ("旅行日记", []))
+        view._edit_titles("0")
+        view._fill_tree(view._tasks)
+
+        assert view._tree.set("0", "title") == "旅行日记"
+        assert view._tree.set("0", "name") == "旅行", "任务名是标识，不跟着标题变"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_edited_title_reaches_the_submitted_archive(tmp_path, monkeypatch):
+    """改过的标题要真的投出去——改了却没生效比不能改更让人困惑。
+
+    列表里显示的和真正提交的是两条路径，所以这里跑完整链路：
+    改标题 → 走 scheduler → 看投递的 ArchiveMeta 用的是不是新标题。
+    """
+    import tkinter as tk
+
+    from bilibili_submit import scheduler
+    from bilibili_submit.config import AppConfig
+    from bilibili_submit.submit import SubmitResult
+
+    _make_video(tmp_path, "旅行_01.mp4")
+    _make_video(tmp_path, "旅行_02.mp4")
+    _make_video(tmp_path, "教程.mp4")
+
+    submitted: list[str] = []
+
+    def fake_upload(_client, video, **_kw):
+        class _Result:
+            filename = f"upos-{Path(video).stem}"
+
+        return _Result()
+
+    def fake_submit(_client, meta, **_kw):
+        submitted.append(meta.title)
+        return SubmitResult(aid=1, bvid="BV1xx")
+
+    monkeypatch.setattr(scheduler, "upload_video", fake_upload)
+    monkeypatch.setattr(scheduler, "submit_archive", fake_submit)
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        view._group_var.set("按文件名前缀分组")
+        _load_folder(root, view, tmp_path, monkeypatch)
+
+        trip_index = next(
+            i for i, t in enumerate(view._tasks) if t.name == "旅行"
+        )
+        course_index = next(
+            i for i, t in enumerate(view._tasks) if t.name == "教程"
+        )
+
+        # 多 P 改稿件标题，单 P 也改——两层都要走到
+        monkeypatch.setattr(view, "_ask_titles", lambda *a, **k: ("旅行日记", []))
+        view._edit_titles(str(trip_index))
+        monkeypatch.setattr(view, "_ask_titles", lambda *a, **k: ("零基础学Python", []))
+        view._edit_titles(str(course_index))
+
+        cfg = AppConfig()
+        cfg.defaults.tid = 21
+        for task in view._tasks:
+            scheduler.run_task(_StubClient(), task, cfg)
+
+        assert "旅行日记" in submitted, f"改过的标题没投出去：{submitted}"
+        assert "零基础学Python" in submitted, f"单P改的标题没投出去：{submitted}"
+        assert "旅行" not in submitted, f"旧标题还在：{submitted}"
     finally:
         root.destroy()

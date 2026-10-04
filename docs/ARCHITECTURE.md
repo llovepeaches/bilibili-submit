@@ -528,7 +528,7 @@ pylama --max-complexity 20 bilibili_submit tests tools
 - UI 测试在无显示环境时自动跳过。**本地验证请用 `xvfb-run`**，
   否则被跳过的几十项等于没跑::
 
-      xvfb-run -a python -m pytest          # 327 passed / 2 skipped
+      xvfb-run -a python -m pytest          # 335 passed / 2 skipped
       python -m pytest                     # 无显示时约 160 passed / 60+ skipped
 
 ### 异步 UI 测试必须跑真实事件循环

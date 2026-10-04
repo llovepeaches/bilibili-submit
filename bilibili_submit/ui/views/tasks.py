@@ -29,7 +29,7 @@ from typing import Any, Literal
 from ...config import AppConfig, TaskConfig, expand_tasks, load_config, scan_video_files
 from ...config import task_files, task_part_titles
 from ...exceptions import BiliError, ConfigError, NotLoggedInError
-from ...multipart import PartGroup, group_files
+from ...multipart import PartGroup, group_files, strip_part_marker
 from ...scheduler import RunOptions, TaskOutcome, run_task
 from ...submit import get_backend
 from .. import theme
@@ -51,17 +51,30 @@ from .upload import TID_OPTIONS, parse_tid
 
 __all__ = ["TasksView"]
 
-#: 勾选列 + 原来的五列
-COLUMNS = ("pick", "name", "file", "parts", "tid", "status")
+#: 勾选列 + 原来的六列
+#:
+#: ``name`` 是任务的标识（扫目录时是文件名/文件夹名），``title`` 是真正
+#: 投出去的稿件标题。两者默认一致，但改过之后就不一样了——分开两列正是
+#: 为了让"我改过哪些"一眼可见，否则改完跟没改看起来一样。
+COLUMNS = ("pick", "name", "title", "file", "parts", "tid", "status")
 _HEADINGS = {
     "pick": "✓",
     "name": "任务",
+    "title": "标题",
     "file": "文件",
     "parts": "分P",
     "tid": "分区",
     "status": "状态",
 }
-_WIDTHS = {"pick": 34, "name": 150, "file": 240, "parts": 42, "tid": 56, "status": 130}
+_WIDTHS = {
+    "pick": 34,
+    "name": 120,
+    "title": 180,
+    "file": 200,
+    "parts": 42,
+    "tid": 56,
+    "status": 130,
+}
 
 PICKED = "✓"
 UNPICKED = ""
@@ -660,6 +673,7 @@ class TasksView(ttk.Frame):
                 values=(
                     PICKED if self._picked[iid] else UNPICKED,
                     task.name,
+                    task.title or task.name,
                     file_text,
                     str(len(files)) if len(files) > 1 else "—",
                     shared_tid if self._source_mode == "folder" else (task.tid or ""),
@@ -1047,10 +1061,10 @@ class TasksView(ttk.Frame):
         self._update_summary()
 
     def _on_double_click(self, event: tk.Event) -> None:
-        """双击某一行：失败了看完整原因，否则多 P 任务可改分 P 标题。
+        """双击某一行：失败了看完整原因，否则改这个稿件的标题。
 
         「看错误」优先：这一行刚投失败时，用户双击想看的一定是失败原因，
-        而不是去改一个已经投出去的稿件的分 P 标题。
+        而不是去改一个已经投出去的稿件的标题。
         """
         if self._tree.identify_region(event.x, event.y) != "cell":
             return
@@ -1067,39 +1081,62 @@ class TasksView(ttk.Frame):
 
         if not self._editable():
             return
-        self._edit_parts(iid)
+        self._edit_titles(iid)
 
-    def _edit_parts(self, iid: str) -> None:
-        """改某个多 P 稿件的分 P 标题。
+    def _edit_titles(self, iid: str) -> None:
+        """改某个稿件的标题（多 P 时连同各分 P 标题一起改）。
 
-        自动分组给出的标题就是文件名，多数时候够用；但「旅行_01」
-        这种机器味的名字在播放器里不好看，所以留个口子让人改。
-        单 P 任务双击不弹窗——没什么可改的，弹出来纯属打扰。
+        自动分组给出的标题就是文件名/文件夹名，多数时候够用；但
+        ``旅行_01`` 这种机器味的名字在播放器里不好看，所以留个口子让人改。
+        单 P 任务也弹——它同样需要一个像样的标题，之前双击它没反应，
+        想改标题只能去改文件名，那个绕路太远了。
         """
         index = int(iid)
         if index >= len(self._tasks):
             return
         task = self._tasks[index]
         files = task_files(task)
-        if len(files) < 2:
+        if not files:
             return
 
-        current = task_part_titles(task, files)
-        answer = self._ask_part_titles(task.name or files[0].stem, files, current)
+        answer = self._ask_titles(
+            task.name or files[0].stem,
+            files,
+            task_part_titles(task, files),
+            task.title or task.name or "",
+        )
         if answer is None:
             return
-        self._tasks[index] = replace(task, part_titles=answer)
-        self._log.append(f"已更新「{task.name}」的 {len(files)} 个分P标题")
 
-    def _ask_part_titles(
-        self, archive: str, files: list[Path], current: list[str]
-    ) -> list[str] | None:
-        """弹对话框要分 P 标题，取消返回 None。
+        archive_title, part_titles = answer
+        updated = replace(task, title=archive_title)
+        if len(files) > 1:
+            # 单 P 任务写 part_titles 没有意义：它只有一个分 P，
+            # 标题就是稿件标题，写进去只是留下一份用不上的脏数据
+            updated = replace(updated, part_titles=part_titles)
+
+        self._tasks[index] = updated
+        self._tree.set(iid, "title", archive_title or task.name)
+        if len(files) > 1:
+            self._log.append(
+                f"已更新「{task.name}」的标题与 {len(files)} 个分P标题"
+            )
+        else:
+            self._log.append(f"已更新「{task.name}」的标题")
+
+    def _ask_titles(
+        self,
+        archive: str,
+        files: list[Path],
+        current: list[str],
+        archive_title: str,
+    ) -> tuple[str, list[str]] | None:
+        """弹对话框要标题，取消返回 None。
 
         单独抽出来是因为对话框要跑模态事件循环，测试里替换掉这个
-        方法就能验证 :meth:`_edit_parts` 的写入逻辑本身。
+        方法就能验证 :meth:`_edit_titles` 的写入逻辑本身。
         """
-        return PartTitlesDialog(self, archive, files, current).show()
+        return PartTitlesDialog(self, archive, files, current, archive_title).show()
 
     def _set_busy(self, busy: bool) -> None:
         """切换运行态下的按钮可用性。
@@ -1198,10 +1235,15 @@ def _group_to_task(group: PartGroup) -> TaskConfig:
 
 
 class PartTitlesDialog:
-    """改一个多 P 稿件各分 P 标题的模态对话框。
+    """改一个稿件的**标题**（多 P 时连同各分 P 标题一起改）。
 
-    每行一个输入框，右边标出对应的文件名——只给 P1/P2 序号的话，
-    用户看不出自己在改哪一个，而分 P 顺序错了是很难补救的。
+    稿件标题放在最上面单独一行：它是播放器里显示的那一行字，也是用户
+    最想改的东西。分 P 标题每行一个输入框，右边标出对应的文件名——
+    只给 P1/P2 序号的话，用户看不出自己在改哪一个，而分 P 顺序错了
+    是很难补救的。
+
+    单文件稿件不显示分 P 区：它只有一个分 P，标题就是稿件标题，
+    再列一行「P1」纯属重复。
     """
 
     def __init__(
@@ -1210,13 +1252,15 @@ class PartTitlesDialog:
         archive: str,
         files: list[Path],
         titles: list[str],
+        archive_title: str = "",
     ) -> None:
         self._files = list(files)
         self._vars: list[tk.StringVar] = []
-        self._result: list[str] | None = None
+        self._result: tuple[str, list[str]] | None = None
+        self._archive_var = tk.StringVar(value=archive_title)
 
         self._top = tk.Toplevel(master)
-        self._top.title(f"分P标题 · {archive}")
+        self._top.title(f"标题 · {archive}")
         self._top.transient(master)
         self._top.minsize(440, 220)
         self._top.columnconfigure(0, weight=1)
@@ -1226,32 +1270,50 @@ class PartTitlesDialog:
         frame.grid(row=0, column=0, sticky="nsew")
         frame.columnconfigure(1, weight=1)
 
-        ttk.Label(
-            frame,
-            text=f"共 {len(self._files)} 个分P，按此顺序发布；留空则用文件名",
-            style="Card.Secondary.TLabel",
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, theme.PAD_SM))
+        row = 0
 
-        for index, path in enumerate(self._files):
-            var = tk.StringVar(value=titles[index] if index < len(titles) else "")
-            self._vars.append(var)
-            ttk.Label(frame, text=f"P{index + 1}").grid(
-                row=index + 1, column=0, sticky="w", padx=(0, theme.PAD_SM)
+        # 稿件标题：单独一区，视觉上和下面的分 P 分开
+        ttk.Label(frame, text="稿件标题").grid(
+            row=row, column=0, sticky="w", padx=(0, theme.PAD_SM)
+        )
+        ttk.Entry(frame, textvariable=self._archive_var).grid(
+            row=row, column=1, columnspan=2, sticky="ew", pady=theme.PAD_XS
+        )
+        row += 1
+
+        if len(self._files) > 1:
+            ttk.Label(
+                frame,
+                text=f"共 {len(self._files)} 个分P，按此顺序发布；留空则用文件名",
+                style="Card.Secondary.TLabel",
+            ).grid(
+                row=row,
+                column=0,
+                columnspan=3,
+                sticky="w",
+                pady=(theme.PAD_SM, theme.PAD_XS),
             )
-            ttk.Entry(frame, textvariable=var).grid(
-                row=index + 1, column=1, sticky="ew", pady=theme.PAD_XS
-            )
-            ttk.Label(frame, text=path.name, style="Card.Secondary.TLabel").grid(
-                row=index + 1, column=2, sticky="w", padx=(theme.PAD_SM, 0)
-            )
+            row += 1
+
+            for index, path in enumerate(self._files):
+                var = tk.StringVar(
+                    value=titles[index] if index < len(titles) else ""
+                )
+                self._vars.append(var)
+                ttk.Label(frame, text=f"P{index + 1}").grid(
+                    row=row, column=0, sticky="w", padx=(0, theme.PAD_SM)
+                )
+                ttk.Entry(frame, textvariable=var).grid(
+                    row=row, column=1, sticky="ew", pady=theme.PAD_XS
+                )
+                ttk.Label(frame, text=path.name, style="Card.Secondary.TLabel").grid(
+                    row=row, column=2, sticky="w", padx=(theme.PAD_SM, 0)
+                )
+                row += 1
 
         buttons = ttk.Frame(frame)
         buttons.grid(
-            row=len(self._files) + 1,
-            column=0,
-            columnspan=3,
-            sticky="e",
-            pady=(theme.PAD_MD, 0),
+            row=row, column=0, columnspan=3, sticky="e", pady=(theme.PAD_MD, 0)
         )
         SecondaryButton(buttons, "用文件名", self._reset).pack(
             side="left", padx=(0, theme.PAD_SM)
@@ -1262,20 +1324,30 @@ class PartTitlesDialog:
         PrimaryButton(buttons, "确定", self._ok).pack(side="left")
 
     def _reset(self) -> None:
-        """「用文件名」：把每行填回文件名，用户能直接看到将要用的值。"""
+        """「用文件名」：把每行填回文件名，用户能直接看到将要用的值。
+
+        稿件标题回落到第一个文件的文件名——单文件稿件就是它自己的名字，
+        多文件稿件则去掉尾部序号（``旅行_01`` → ``旅行``）更合适。
+        """
         for var, path in zip(self._vars, self._files):
             var.set(path.stem)
+        if self._files:
+            base, _ = strip_part_marker(self._files[0].stem)
+            self._archive_var.set(base or self._files[0].stem)
 
     def _ok(self) -> None:
-        self._result = [var.get().strip() for var in self._vars]
+        self._result = (
+            self._archive_var.get().strip(),
+            [var.get().strip() for var in self._vars],
+        )
         self._top.destroy()
 
     def _cancel(self) -> None:
         self._result = None
         self._top.destroy()
 
-    def show(self) -> list[str] | None:
-        """模态显示，返回各分 P 标题；取消返回 ``None``。"""
+    def show(self) -> tuple[str, list[str]] | None:
+        """模态显示，返回 ``(稿件标题, 各分P标题)``；取消返回 ``None``。"""
         self._top.grab_set()
         self._top.wait_window()
         return self._result
