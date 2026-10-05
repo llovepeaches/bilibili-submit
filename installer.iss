@@ -24,7 +24,7 @@
 
 #define AppName "哔哩哔哩自动投稿程序"
 #define AppShortName "bilibili-submit"
-#define AppVersion "0.2.5"
+#define AppVersion "0.2.6"
 #define AppExeName "bilibili-submit-gui.exe"
 ; PyInstaller onedir 输出的目录名，必须与 EXE_NAME 一致
 #define BuildDir "dist\bilibili-submit-gui"

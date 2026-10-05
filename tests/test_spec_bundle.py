@@ -73,6 +73,28 @@ def test_windows_version_resource_matches_package():
         )
 
 
+def test_installer_version_matches_package():
+    """``installer.iss`` 的 AppVersion 也要跟着走。
+
+    它决定安装向导标题栏、以及「设置 → 应用」里显示的版本，和
+    ``--version`` 完全不是同一条路径——漏改时安装器照样编译通过、
+    照样能装，只是版本号和程序里对不上，得用户自己发现。
+
+    补这条的直接原因：发 v0.2.6 时手动同步了五处版本，唯独这里
+    改错了也不会有任何测试变红（README 当时还写成了「四处」）。
+    """
+    from bilibili_submit import __version__
+
+    # installer.iss 是 UTF-8 with BOM，用 utf-8-sig 读才不会带出 BOM 字符
+    text = (ROOT / "installer.iss").read_text(encoding="utf-8-sig")
+    match = re.search(r'#define\s+AppVersion\s+"([^"]+)"', text)
+    assert match, "installer.iss 里找不到 #define AppVersion"
+    assert match.group(1) == __version__, (
+        f"installer.iss AppVersion={match.group(1)!r} "
+        f"与 __version__={__version__!r} 不一致"
+    )
+
+
 def test_changelog_has_an_entry_for_current_version():
     """CHANGELOG 里要真有当前版本的段，否则发版说明无从谈起。
 

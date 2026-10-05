@@ -6,7 +6,7 @@
 所有值得记录的变更都会写进这里。格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [未发布]
+## [0.2.6] - 2026-10-05
 
 图形界面版改成 **Windows 安装版**：双击 `bilibili-submit-setup.exe` 走标准
 安装向导，开始菜单有入口，能从「设置 → 应用」里干净卸载。

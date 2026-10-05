@@ -307,11 +307,11 @@ jobs:
 
           | 资产 | 大小 | 说明 |
           |---|---|---|
-          | `bilibili-submit-setup.exe` | ~40 MB | **图形界面安装版**，推荐。双击安装，开始菜单有入口，能干净卸载 |
-          | `bilibili-submit-gui-portable.exe` | ~76 MB | 图形界面单文件便携版，拷走即用，无需安装 |
-          | `bilibili-submit-standalone.exe` | ~73 MB | 命令行单文件版，ffmpeg 已内置 |
+          | `bilibili-submit-setup.exe` | ~33 MB | **图形界面安装版**，推荐。双击安装，开始菜单有入口，能干净卸载 |
+          | `bilibili-submit-gui-portable.exe` | ~72 MB | 图形界面单文件便携版，拷走即用，无需安装 |
+          | `bilibili-submit-standalone.exe` | ~70 MB | 命令行单文件版，ffmpeg 已内置 |
           | `bilibili-submit.exe` | ~11 MB | 命令行轻量 exe，需自备 ffmpeg |
-          | `bilibili-submit-full-windows.zip` | ~43 MB | 命令行 exe + 外置 ffmpeg.exe，启动最快 |
+          | `bilibili-submit-full-windows.zip` | ~41 MB | 命令行 exe + 外置 ffmpeg.exe，启动最快 |
           | `bilibili-submit-mini-windows.zip` | ~10 MB | 命令行 exe + config，不含 ffmpeg |
 
           ## 怎么选
@@ -373,11 +373,11 @@ jobs:
           - 仅供管理自己的账号投稿使用。
           "@
           gh release create $tag `
-            "dist\bilibili-submit-setup.exe#图形界面安装版（推荐，约 40MB）" `
-            "dist\bilibili-submit-gui-portable.exe#图形界面便携版（免安装，约 76MB）" `
-            "dist\bilibili-submit-standalone.exe#命令行单文件版（内置 ffmpeg，约 73MB）" `
+            "dist\bilibili-submit-setup.exe#图形界面安装版（推荐，约 33MB）" `
+            "dist\bilibili-submit-gui-portable.exe#图形界面便携版（免安装，约 72MB）" `
+            "dist\bilibili-submit-standalone.exe#命令行单文件版（内置 ffmpeg，约 70MB）" `
             "dist\bilibili-submit.exe#命令行轻量 exe（不含 ffmpeg，约 11MB）" `
-            "dist\bilibili-submit-full-windows.zip#命令行完整版（外置 ffmpeg，约 43MB）" `
+            "dist\bilibili-submit-full-windows.zip#命令行完整版（外置 ffmpeg，约 41MB）" `
             "dist\bilibili-submit-mini-windows.zip#命令行轻量版（不含 ffmpeg，约 10MB）" `
             --repo ${{ github.repository }} `
             --title "bilibili-submit $tag" `
