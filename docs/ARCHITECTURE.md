@@ -780,6 +780,36 @@ onedir 把 ffmpeg 放 exe 同目录，`ffmpeg.py` 本来就优先找那个位置
 **不会报错**——它照抄 `[Files]` 的通配路径，装出一个缺文件的安装器，
 用户双击闪退才发现。
 
+### 查段不能靠 `text.split("[Files]")`
+
+解析 `installer.iss` 时有个反复踩的坑：**段名会出现在注释里**。
+
+本项目 `[Code]` 段的注释写了一句「照抄 `[Files]` 的写法」，于是
+`text.split("[Files]")[-1]` 取到的是**文件最后一段**（`[Code]`）的
+内容——`recursesubdirs` 检查跑去 Pascal 代码里找，报出一个和真实
+原因毫无关系的失败（"[Files] 缺 recursesubdirs"，而它明明在）。
+
+正确做法是只认**独占一行**的段名：
+
+```python
+match = re.search(rf"^\[{re.escape(name)}\][ \t]*$", text, re.MULTILINE)
+```
+
+`tools/check_installer.py` 和 `tests/test_packaging.py` 里各有一份
+`_section()`，都这么写。注释里**保留**段名是可以的（甚至刻意留着
+——`[UninstallDelete]` 那条断言要靠注释里的「刻意不删」），只要不
+拿它当定位依据。
+
+同理，断言某条指令在不在时要看**指令行**，别整段文本搜索：
+`[Files]` 的注释里把「recursesubdirs 一定要开」写了一遍，删掉真正的
+指令测试照样绿——注释替它作证。
+
+### 别写 `[Components]`，除非真给每条 `[Files]` 加了 `Types:`
+
+定义了组件选择页却没给 `[Files]` 加 `Types:` 限定时，用户勾来勾去
+对文件毫无影响——一个假装能选、其实不能选的选项比没有更糟。GUI 版
+只有一个 exe 加一个 ffmpeg，没有可拆的部分，索性不设。
+
 ### 验证要装一遍，不能只编译
 
 CI 里安装器的验证是「编译 → 静默安装 → 启动 → 卸载」全跑一遍，

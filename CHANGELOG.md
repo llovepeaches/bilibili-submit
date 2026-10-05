@@ -43,6 +43,10 @@
   （段名拼错、`#define` 未定义、缺 `recursesubdirs`、BOM 缺失）。
   顺带发现 Inno Setup 6 靠 BOM 识别 UTF-8——存成不带 BOM 或 GBK 会让
   中文在安装向导里变乱码，**且不报错**。
+- **不设 `[Components]`**：原先定义了「完整安装 / 精简安装」选择页，
+  但 `[Files]` 那行没有 `Types:` 限定——用户勾来勾去对文件毫无影响。
+  一个假装能选、其实不能选的选项比没有更糟。GUI 版只有一个 exe 加一个
+  ffmpeg，没有可拆的部分。
 
 ### 修复
 
@@ -54,17 +58,32 @@
 
 ### 测试
 
-- **新增 `tests/test_packaging.py`（12 项）**：把「构建脚本 ↔ spec ↔
+- **新增 `tests/test_packaging.py`（13 项）**：把「构建脚本 ↔ spec ↔
   installer.iss ↔ 代码」之间的约定钉死——`INSTALLER` 开关真的生效、
   onefile/onedir 共用同一份 EXE 配置（防止改样式只改一处导致行为分叉）、
   冲突组合被拒绝、ffmpeg 在 onedir 下命中 exe 同目录且优先于系统 PATH、
   ffmpeg 不该出现在 `_internal`（那里用户改不了）、`BuildDir` 与
   `EXE_NAME` 同名、缺 `recursesubdirs` 会报错、卸载不删用户数据、
   CI 真的上传并测试了安装器。
+- 14 条变异测试全部 KILL，过程中修掉了**三处防线自身的缺陷**——
+  它们比没写更危险，因为看起来是有效的：
+  · 查 `recursesubdirs` 时搜的是整段文本，而 `[Files]` 的注释里恰好把
+    「recursesubdirs 一定要开」写了一遍：**删掉真指令测试仍然绿**，
+    注释替它作证。改成统一只取指令行。
+  · 段定位用 `text.split("[Files]")`，而 `[Code]` 段的注释里写了句
+    「照抄 `[Files]` 的写法」——切出来是**文件最后一段**的内容，
+    `recursesubdirs` 检查跑进 Pascal 代码里找，报出一个和真实原因
+    无关的失败（「[Files] 缺 recursesubdirs」，而它明明在）。
+    改成只认独占一行的段名，并用真实 `installer.iss` 做反例固定住。
+  · `[Code]` 里把产物路径**写死**成 `dist\bilibili-submit-gui\...`：
+    ISCC 不检查文件是否存在，改了 `BuildDir` 也照样编译通过，只是装出
+    一个缺文件的安装器。改成由 `{#BuildDir}` / `{#AppExeName}` 拼，
+    并加检查（写死判 fail 不判 warn——它在编译期完全合法，只在改名
+    那天静默失效）。
 - 顺带确认了一件事：**用户数据本来就在 `~/.config/`，不在程序目录**——
   这正是安装版能成立的前提（Program Files 是只读的）。这条现在有测试
   守着，免得哪天有人「顺手」改成 exe 同目录。
-- 全部测试 **439 passed / 2 skipped**，`pylama` 0 告警。
+- 全部测试 **440 passed / 2 skipped**，`pylama` 0 告警。
 
 ### 设计决策
 

@@ -130,6 +130,25 @@ def _check_directives(lines: list[str]) -> None:
             )
 
 
+def _section(text: str, name: str) -> str:
+    """按 ``[Name]`` **独占一行**切出段内容。
+
+    不能用 ``text.split(name)[-1].split("\\n[")[0]``：注释里随手写一句
+    「忘了 [Files] 就会装坏」就会把段名混进搜索结果，切出来的却是
+    文件最后一段。本项目真踩过——[Code] 段的注释里提了一句 [Files]，
+    于是 recursesubdirs 检查跑去 [Code] 里找，必然报「缺 recursesubdirs」。
+    """
+    pattern = re.compile(
+        rf"^\[{re.escape(name)}\][ \t]*$", re.MULTILINE
+    )
+    match = pattern.search(text)
+    if not match:
+        return ""
+    rest = text[match.end():]
+    nxt = re.search(r"^\[[^\]]+\][ \t]*$", rest, re.MULTILINE)
+    return rest[: nxt.start()] if nxt else rest
+
+
 def _check_build_layout(text: str, defines: dict[str, str]) -> None:
     """``BuildDir`` / ``AppExeName`` 与 spec 的输出对不对得上。
 
@@ -150,20 +169,47 @@ def _check_build_layout(text: str, defines: dict[str, str]) -> None:
         )
     print(f"  产物目录: dist\\{dir_name}\\")
     print(f"  主程序  : {exe_name}")
-    if f"{dir_name}\\{exe_name}" not in text:
-        warn(f"脚本里没有出现 {dir_name}\\{exe_name}，确认路径拼接正确")
+
+    # [Code] 里的路径校验必须由 #define 拼出来，不能写死——写死的话
+    # 改了 BuildDir 只有真编译失败才看得出问题（ISCC 不检查文件存在，
+    # 它照抄 [Files] 的通配路径，装出一个缺文件的安装器）。
+    # 这条是 fail 不是 warn：写死的路径在编译期完全合法，只有等到
+    # 产物目录改名那天才会静默失效。
+    code = _section(text, "Code")
+    if code and "ExpandConstant" in code:
+        # 逐行看，而不是整段一起搜——ffmpeg 那行只该要 BuildDir，
+        # 拿整段搜的话它会替 exe 那行「作证」，等于没查。
+        for line in code.splitlines():
+            if "ExpandConstant" not in line:
+                continue
+            if "{#BuildDir}" not in line:
+                fail(
+                    f"[Code] 里的路径写死了目录名：{line.strip()[:60]}——"
+                    "改用 {#BuildDir}，否则改了产物目录不会被发现"
+                )
+            if exe_name in line and "{#AppExeName}" not in line:
+                fail(
+                    f"[Code] 里的路径写死了 exe 名：{line.strip()[:60]}——"
+                    "改用 {#AppExeName}，否则改了主程序名不会被发现"
+                )
 
 
 def _check_files_section(text: str) -> None:
     """``recursesubdirs`` 缺失与 AppId 缺失。"""
-    if "[Files]" in text:
-        files_section = text.split("[Files]")[-1].split("\n[")[0]
-        if "recursesubdirs" not in files_section:
+    files_section = _section(text, "Files")
+    if files_section:
+        # 只看指令行：注释里把「recursesubdirs 一定要开」写了一遍，
+        # 在整段文本里搜索的话，删掉真指令也照样搜得到。
+        directives = [
+            line for line in files_section.splitlines()
+            if line.strip() and not line.strip().startswith(";")
+        ]
+        if not any("recursesubdirs" in line for line in directives):
             fail(
                 "[Files] 缺 recursesubdirs——_internal\\ 下的 Python 运行时"
                 "装不进去，程序会双击闪退"
             )
-    if "AppId" not in text:
+    if not re.search(r"^AppId\s*=", text, re.MULTILINE):
         fail("缺 AppId：没有它 Inno Setup 认不出是同一个程序，升级会变成装两份")
 
 

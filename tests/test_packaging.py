@@ -209,6 +209,23 @@ def test_installer_iss_matches_the_build_output_name():
         )
 
 
+def _section(text: str, name: str) -> str:
+    """按 ``[Name]`` **独占一行**切出段内容。
+
+    不能用 ``text.split(name)[-1].split("\\n[")[0]``：注释里随手写一句
+    「忘了 [Files] 就会装坏」就会把段名混进搜索结果，切出来的却是
+    文件最后一段。本项目真踩过——``[Code]`` 段的注释里提了一句
+    ``[Files]``，于是断言跑去 ``[Code]`` 里找 ``recursesubdirs``，
+    报出一个和真实原因毫无关系的失败。
+    """
+    match = re.search(rf"^\[{re.escape(name)}\][ \t]*$", text, re.MULTILINE)
+    if not match:
+        return ""
+    rest = text[match.end():]
+    nxt = re.search(r"^\[[^\]]+\][ \t]*$", rest, re.MULTILINE)
+    return rest[: nxt.start()] if nxt else rest
+
+
 def _directives(text: str, section: str) -> str:
     """取出某个段的**指令行**，丢掉注释和空行。
 
@@ -217,12 +234,51 @@ def _directives(text: str, section: str) -> str:
     ``in`` 搜索的话，把真正的指令删了测试还是绿的：注释替它
     作证。这是个真踩过的坑，所以两条段相关的断言都走这里。
     """
-    if section not in text:
-        return ""
-    body = text.split(section)[-1].split("\n[")[0]
     return "\n".join(
-        line for line in body.splitlines()
+        line for line in _section(text, section).splitlines()
         if line.strip() and not line.strip().startswith(";")
+    )
+
+
+def test_section_parsing_ignores_section_names_inside_comments():
+    """``_section`` 只认独占一行的段名，注释里提到段名不算数。
+
+    这条不是假设出来的——``[Code]`` 段的注释里就写了句「照抄
+    ``[Files]`` 的写法」，用 ``text.split("[Files]")[-1]`` 切出来
+    成了 ``[Code]`` 的内容，于是 ``recursesubdirs`` 检查跑去
+    Pascal 代码里找，报出一个和真实原因无关的失败。
+    """
+    text = "\n".join([
+        "[Setup]",
+        "AppId={{X}",
+        "[Files]",
+        "; 记得开 recursesubdirs",
+        "Source: \"x\"",
+        "[Code]",
+        "; 这里提到了 [Files] 但它不算段名",
+        "procedure Foo;",
+    ])
+    files = _section(text, "Files")
+    assert "Source" in files, "该切出 [Files] 的内容"
+    # 注释要保留（UninstallDelete 那条断言就靠它），但**不能**因为
+    # 注释里的 [Files] 字样而把段定位到别处去
+    assert "procedure" not in files, (
+        "注释里的 [Files] 把段定位带偏了——切出来是 [Code] 的内容"
+    )
+    assert "procedure" in _section(text, "Code")
+
+    # 光有内联样本不够，还得拿**真实的 installer.iss** 跑一遍：
+    # 内联样本证明不了真实文件里没有别的干扰项。
+    real = ISS.read_text(encoding="utf-8-sig")
+    assert "[Files]" in _section(real, "Code"), (
+        "真实 installer.iss 的 [Code] 段注释里应当提到 [Files]——"
+        "这条断言拿它当反例，改注释时留意"
+    )
+    assert "recursesubdirs" in _directives(real, "Files"), (
+        "段切分在真实文件上失效：没从 [Files] 段取到 recursesubdirs"
+    )
+    assert "function InitializeSetup" not in _section(real, "Files"), (
+        "段切分被注释里的段名带偏：[Files] 段里混进了 [Code] 的内容"
     )
 
 
@@ -233,7 +289,7 @@ def test_installer_copies_the_whole_directory_recursively():
     的 tcl/tk 数据）。漏了这个 flag 时安装器只装顶层 exe，界面能
     出现、点一下就闪退——因为 ``import tkinter`` 找不到。
     """
-    files = _directives(ISS.read_text(encoding="utf-8-sig"), "[Files]")
+    files = _directives(ISS.read_text(encoding="utf-8-sig"), "Files")
     assert "recursesubdirs" in files, (
         "[Files] 缺 recursesubdirs：_internal\\ 装不进去，程序会双击闪退"
     )
@@ -261,7 +317,7 @@ def test_installer_does_not_delete_user_data_on_uninstall():
     那才是真 bug。
     """
     text = ISS.read_text(encoding="utf-8-sig")
-    body = _directives(text, "[UninstallDelete]")
+    body = _directives(text, "UninstallDelete")
 
     assert body, "[UninstallDelete] 段应该有实际指令（删 _internal 残留）"
     for danger in (".config", "bilibili_submit", "cookie", "USERPROFILE", "AppData"):
@@ -273,7 +329,7 @@ def test_installer_does_not_delete_user_data_on_uninstall():
         "[UninstallDelete] 应该清理程序目录里的 _internal 残留"
     )
     # 注释里要写明「刻意不删」，否则后人会当成漏了而补上
-    section = text.split("[UninstallDelete]")[-1]
+    section = _section(text, "UninstallDelete")
     assert "刻意" in section and "不删" in section, (
         "[UninstallDelete] 的注释里应写明「刻意不删用户数据」，"
         "免得后人以为漏了而补上——那才是真 bug"

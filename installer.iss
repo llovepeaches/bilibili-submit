@@ -8,16 +8,16 @@
 ;  装出来是什么：
 ;      C:\Program Files\bilibili-submit\
 ;          bilibili-submit-gui.exe     ← 程序
-;          ffmpeg.exe← 封面抽帧用，可自行替换
+;          ffmpeg.exe             ← 封面抽帧用，可自行替换
 ;          _internal\                 ← Python 运行时，别手动改
 ;          config\                     ← 配置样例
 ;          README.md
 ;
 ;  装到 Program Files 需要管理员权限。Inno Setup 会自动申请 UAC 提权，
 ;  用户看到的是标准 Windows 安装向导，不需要管理员的选项也做了
-;  （见 PrivilegesRequiredAllowedOverrides）。
+;  （见 PrivilegesRequiredOverridesAllowed）。
 ;
-;  ⚠️ 本文件用 UTF-8 带BOM 编码。Inno Setup 6 能正确识别；
+;  ⚠️ 本文件用 UTF-8 带 BOM 编码。Inno Setup 6 能正确识别；
 ;     存成不带 BOM 的 UTF-8 或 GBK 都会让中文变成乱码，
 ;     而且不会报错——只在安装向导里显示出来。
 ; ============================================================
@@ -45,7 +45,7 @@ AppUpdatesURL={#AppURL}/releases
 DefaultDirName={autopf}\{#AppShortName}
 DefaultGroupName={#AppName}
 
-;输出文件名。GUI 版安装器固定叫这个，README 与 Release 说明都引用它。
+; 输出文件名。GUI 版安装器固定叫这个，README 与 Release 说明都引用它。
 OutputBaseFilename=bilibili-submit-setup
 OutputDir=dist
 SetupIconFile=assets\bilibili-submit.ico
@@ -71,11 +71,11 @@ SolidCompression=yes
 [Languages]
 Name: "chinese"; MessagesFile: "compiler:Default.isl"
 
-; 不需要 .NET / 不用管理员就能装的路径（VCL 组件一个都不引）
-[Components]
-Name: "full"; Description: "完整安装"; Types: full compact custom
-Name: "desktopicon"; Description: "创建桌面快捷方式"; Types: full compact custom; Flags: unchecked
-
+; 不需要 .NET / 不用管理员就能装的路径（VCL 组件一个都不引）。
+; 这里刻意**不设** [Components]：装了组件选择页就得给每条 [Files] 写
+; Types: 限定，否则用户勾来勾去对文件毫无影响——一个假装能选、
+; 其实不能选的选项比没有更糟。GUI 版就一个 exe + 一个 ffmpeg，
+; 没有可拆的部分。
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: unchecked
 
@@ -91,7 +91,7 @@ Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 [License]
 LicenseText=哔哩哔哩自动投稿程序
 
-本程序用于管理**你自己账号**的视频投稿。
+本程序用于管理你自己账号的视频投稿。
 
 使用须知：
 · 请遵守哔哩哔哩平台的社区规范与相关法律法规。
@@ -118,16 +118,24 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 ; 注意刻意**不删**用户数据（cookie、偏好、投稿历史）——那些在
 ;   %USERPROFILE%\.config\bilibili_submit\
 ; 删掉等于让人重新扫码登录，一次痛苦的误操作。不删残留只多占
-; 几十 KB，比让人丢cookie 好得多。
+; 几十 KB，比让人丢 cookie 好得多。
 Type: filesandordirs; Name: "{app}\_internal"
 
 [Code]
 // 校验装进去的 exe 真的存在。
 // 少了这一步，「安装成功但双击闪退」要等到用户手动去找日志才发现。
+//
+// 路径必须由 {#BuildDir} / {#AppExeName} 拼出来，**不要写死**
+// "dist\bilibili-submit-gui\..."：改了 BuildDir 这里会跟着变，
+// 而写死的话只有真正编译失败才看得出问题——ISCC 不检查文件是否存在，
+// 它照抄 [Files] 的通配路径，装出一个缺文件的安装器。
 function InitializeSetup(): Boolean;
+var
+  BuiltExe: String;
 begin
   Result := True;
-  if not FileExists(ExpandConstant('{src}\dist\bilibili-submit-gui\bilibili-submit-gui.exe')) then
+  BuiltExe := ExpandConstant('{src}\' + '{#BuildDir}\{#AppExeName}');
+  if not FileExists(BuiltExe) then
   begin
     MsgBox('找不到打包产物：' + '{#BuildDir}\{#AppExeName}' + #13#10 +
            '请先运行 build_windows.bat（或 CI）打包，再编译安装器。' + #13#10#13#10 +
@@ -143,7 +151,7 @@ var
   FFmpegPath: String;
 begin
   Result := True;
-  FFmpegPath := ExpandConstant('{src}\dist\bilibili-submit-gui\ffmpeg.exe');
+  FFmpegPath := ExpandConstant('{src}\' + '{#BuildDir}\ffmpeg.exe');
   if not FileExists(FFmpegPath) then
     Log('提示：产物里没有 ffmpeg.exe，自动抽帧将不可用（不影响其他功能）');
 end;
