@@ -106,8 +106,13 @@ jobs:
           if ($mb -lt 20) { throw "安装器只有 $mb MB，ffmpeg 或 _internal 很可能没打进去" }
 
           # /VERYSILENT /SUPPRESSMSGBOXES /NORESTART 无人值守安装
-          & $setup /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
-          if ($LASTEXITCODE -ne 0) { throw "静默安装失败 ($LASTEXITCODE)" }
+          # 必须 Start-Process -Wait：安装器是 GUI 程序，用 `& $setup`
+          # 调用时 PowerShell 立即返回、$LASTEXITCODE 从不被赋值
+          # （"静默安装失败 ()"——CI 上真卡过这一下），等不到结果。
+          $setupProc = Start-Process -FilePath $setup \
+            -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" \
+            -Wait -PassThru
+          if ($setupProc.ExitCode -ne 0) { throw "静默安装失败 ($($setupProc.ExitCode))" }
           Start-Sleep -Seconds 3
 
           $app = "${env:ProgramFiles}\bilibili-submit"

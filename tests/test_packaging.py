@@ -305,6 +305,37 @@ def test_installer_uses_a_stable_app_id():
     assert "AppId=" in text, "installer.iss 缺 AppId，升级会装出两份"
 
 
+def test_ci_waits_for_the_installer_process():
+    """静默安装必须 **等** 安装器结束，不能靠 ``$LASTEXITCODE``。
+
+    安装器是 GUI 程序。PowerShell 里 ``& $setup /VERYSILENT`` 会立即
+    返回、``$LASTEXITCODE`` **从不被赋值**，于是下一行
+    ``if ($LASTEXITCODE -ne 0)`` 判成失败——CI 上真卡过，报错是
+    ``静默安装失败 ()``（括号里空着，就是这个原因）。
+
+    正确写法是 ``Start-Process -Wait -PassThru`` 再读 ``.ExitCode``。
+
+    注意只查 PowerShell 的**注释外**代码——说明这段坑的注释里就得写
+    ``& $setup`` 长什么样（不然后人看不懂），不能因为它出现在文件里
+    就判失败。段名那个坑也栽在这儿，见 ``_section`` 的注释。
+    """
+    for path in (INSTALLER_YML, RELEASE_YML):
+        lines = [
+            line for line in path.read_text(encoding="utf-8").splitlines()
+            # PowerShell 注释是 # 开头；YAML 的也是
+            if not line.strip().startswith("#")
+        ]
+        code = "\n".join(lines)
+        assert "& $setup" not in code, (
+            f"{path.name} 用 & $setup 调安装器：GUI 程序不会等待，"
+            "$LASTEXITCODE 拿不到值。改用 Start-Process -Wait -PassThru"
+        )
+        if "bilibili-submit-setup.exe" in code and "/VERYSILENT" in code:
+            assert "Start-Process" in code and "-Wait" in code, (
+                f"{path.name} 静默安装没有等安装器结束——退出码判断会失效"
+            )
+
+
 def test_installer_uses_correct_event_prototypes():
     """``[Code]`` 段里事件函数的原型必须写对。
 
