@@ -344,6 +344,14 @@ def test_ci_waits_for_the_installer_process():
                 f"{path.name} 的安装/卸载没有超时保护：卡在 UAC 上会让 "
                 "job 挂死，而挂死比失败难查得多"
             )
+            # CI 上必须绕开 UAC：installer.iss 是 PrivilegesRequired=admin，
+            # 静默安装时安装器会 fork 自己去提权，父进程立即退出、子进程
+            # 等 UAC 确认——无人值守环境下就是永久挂起（真挂过 8 分钟）。
+            assert "/CURRENTUSER" in code, (
+                f"{path.name} 静默安装没有 /CURRENTUSER："
+                "PrivilegesRequired=admin + /VERYSILENT 会让安装器 fork 自己"
+                "去提权，CI 上永久挂起"
+            )
         # 卸载器不能用 -Wait：卡在 UAC 或残留进程上会永远不返回。
         # CI 上真挂过 8 分钟，只能手动取消。要轮询 + 超时。
         assert '"/VERYSILENT" -Wait' not in code, (

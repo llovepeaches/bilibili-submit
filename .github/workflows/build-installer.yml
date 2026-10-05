@@ -116,10 +116,15 @@ jobs:
           # 参数先存数组，免得写多行——PowerShell 的续行符是反引号 `
           # 不是反斜杠 \，写成 \ 的话每行会被当成独立命令（CI 上真报过
           # "The term '-ArgumentList' is not recognized"）。
-          # 安装也用轮询而不是 -Wait：Inno Setup 在 /VERYSILENT 下若卡在
-          # UAC 提权上会一直不返回（CI 上挂死过 8 分钟，只能手动取消）。
-          # 轮询 + 超时，超时就杀掉并报明确错误——挂死比失败难查得多。
-          $setupArgs = @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-")
+          # /CURRENTUSER：装到 %LOCALAPPDATA%\Programs 而不是 Program Files。
+          # 这里刻意**不走** UAC——installer.iss 里 PrivilegesRequired=admin，
+          # 静默安装时安装器会 fork 自己去提权，父进程立即退出、子进程等
+          # UAC 确认，在无人值守的 CI 上就是永久挂起（真挂过 8 分钟）。
+          #
+          # 换来的代价是测不到 Program Files 那条路径，但那条路径真正
+          # 要防的是「往只读目录写用户数据」——由 test_user_data_lives_
+          # outside_the_program_directory 单独守着，不靠这里覆盖。
+          $setupArgs = @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/CURRENTUSER")
           Write-Host "开始静默安装..."
           $setupProc = Start-Process -FilePath $setup -ArgumentList $setupArgs -PassThru
           $waited = 0
@@ -136,7 +141,7 @@ jobs:
           if ($setupProc.ExitCode -ne 0) { throw "静默安装失败 ($($setupProc.ExitCode))" }
           Start-Sleep -Seconds 3
 
-          $app = "${env:ProgramFiles}\bilibili-submit"
+          $app = "$env:LOCALAPPDATA\Programs\bilibili-submit"
           $exe = "$app\bilibili-submit-gui.exe"
           if (-not (Test-Path $exe)) {
             throw "安装后找不到 $exe（实际目录：$(Test-Path $app)）"

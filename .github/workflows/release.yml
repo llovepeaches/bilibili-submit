@@ -197,7 +197,10 @@ jobs:
           # 安装也用轮询而不是 -Wait：Inno Setup 在 /VERYSILENT 下若卡在
           # UAC 提权上会一直不返回（CI 上挂死过 8 分钟，只能手动取消）。
           # 轮询 + 超时，超时就杀掉并报明确错误——挂死比失败难查得多。
-          $setupArgs = @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-")
+          # /CURRENTUSER 同样是为了绕开 UAC：静默安装 + PrivilegesRequired=admin
+          # 会让安装器 fork 自己去提权，父进程立即退出、子进程等 UAC 确认，
+          # 无人值守的 CI 上就是永久挂起（详见 build-installer.yml 的注释）。
+          $setupArgs = @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/CURRENTUSER")
           Write-Host "开始静默安装..."
           $setupProc = Start-Process -FilePath $setup -ArgumentList $setupArgs -PassThru
           $waited = 0
@@ -214,7 +217,7 @@ jobs:
           if ($setupProc.ExitCode -ne 0) { throw "静默安装失败 ($($setupProc.ExitCode))" }
           Start-Sleep -Seconds 3
 
-          $installed = "${env:ProgramFiles}\bilibili-submit"
+          $installed = "$env:LOCALAPPDATA\Programs\bilibili-submit"
           if (-not (Test-Path "$installed\bilibili-submit-gui.exe")) {
             throw "安装后找不到主程序（目录：$installed）"
           }
