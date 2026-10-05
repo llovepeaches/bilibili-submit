@@ -109,9 +109,11 @@ jobs:
           # 必须 Start-Process -Wait：安装器是 GUI 程序，用 `& $setup`
           # 调用时 PowerShell 立即返回、$LASTEXITCODE 从不被赋值
           # （"静默安装失败 ()"——CI 上真卡过这一下），等不到结果。
-          $setupProc = Start-Process -FilePath $setup \
-            -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" \
-            -Wait -PassThru
+          # 参数先存数组，免得写多行——PowerShell 的续行符是反引号 `
+          # 不是反斜杠 \，写成 \ 的话每行会被当成独立命令（CI 上真报过
+          # "The term '-ArgumentList' is not recognized"）。
+          $setupArgs = @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-")
+          $setupProc = Start-Process -FilePath $setup -ArgumentList $setupArgs -Wait -PassThru
           if ($setupProc.ExitCode -ne 0) { throw "静默安装失败 ($($setupProc.ExitCode))" }
           Start-Sleep -Seconds 3
 
