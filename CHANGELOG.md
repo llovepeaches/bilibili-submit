@@ -30,8 +30,8 @@
     目录版把 ffmpeg 放在 **exe 同目录**，启动即用；
   - 顺带一个好处：ffmpeg 放在程序目录里，用户能自己替换版本
     （`ffmpeg.py` 本来就优先找这个位置）；
-  - 安装包因此小很多（约 40MB vs 单文件 72MB），因为 ffmpeg 在安装时
-    单独压缩。
+  - 安装包实测 **33 MB**（原单文件版约 72 MB），因为 ffmpeg 在安装时
+    单独压缩，不进 PyInstaller 的单层压缩包；
 - **便携版保留并改名** `bilibili-submit-gui-portable.exe`：U 盘、别人的
   机器、「不想装东西」都是真实需求，不该被安装版取代。
 - **`INSTALLER=1` 与 `BUNDLE_FFMPEG=1` 同时给会直接报错**——那等于
@@ -55,17 +55,36 @@
   现在 ffmpeg 决策在打印前就完成。
 - **`installer.iss` 检查器不误报 `{{GUID}` 写法**：Inno Setup 里
   `AppId={{...}` 是转义（字面 `{`），正则当成不配对花括号。
+- **`tools/check_installer.py` 在 Windows 上不再崩**：它打印中文，而
+  Windows 控制台默认 cp1252（PowerShell）/ cp936（cmd.exe），一句
+  `print` 就抛 `UnicodeEncodeError`。现在脚本启动即强制 UTF-8 输出。
+- **CI 的静默安装真的会等安装器结束**，且安装、卸载两步都带超时。
+  之前它要么立即返回误判失败，要么卡住耗满 8 分钟被 job 超时杀掉。
+- **CI 的静默安装改走 `/CURRENTUSER`**：Inno Setup 提权时会 fork 自己
+  ——父进程立即退出、子进程等 UAC，无人值守的 runner 上没人点那个框。
+  装到 `%LOCALAPPDATA%\Programs` 整条链不需要提权（顺带也更贴近
+  「仅为我安装」这个真实选项）。
+- **`[Code]` 里的产物路径不再拼成 `dist\dist\...`**：`{src}` 是安装器
+  exe 所在目录，`{#BuildDir}` 相对 `.iss` 所在目录，基准不同。改用
+  `ExtractFileName('{#BuildDir}')` 取末段。
 
 ### 测试
 
-- **新增 `tests/test_packaging.py`（13 项）**：把「构建脚本 ↔ spec ↔
+- **新增 `tests/test_packaging.py`（17 项）**：把「构建脚本 ↔ spec ↔
   installer.iss ↔ 代码」之间的约定钉死——`INSTALLER` 开关真的生效、
   onefile/onedir 共用同一份 EXE 配置（防止改样式只改一处导致行为分叉）、
   冲突组合被拒绝、ffmpeg 在 onedir 下命中 exe 同目录且优先于系统 PATH、
   ffmpeg 不该出现在 `_internal`（那里用户改不了）、`BuildDir` 与
   `EXE_NAME` 同名、缺 `recursesubdirs` 会报错、卸载不删用户数据、
   CI 真的上传并测试了安装器。
-- 14 条变异测试全部 KILL，过程中修掉了**三处防线自身的缺陷**——
+  后半程又补了 4 项，专盯**只能在 Windows 上炸**的东西：
+  · `InitializeSetup` / `InitializeWizard` 的原型（写反是编译期错误）；
+  · `[Code]` 里的路径不能把 `{src}` 和 `{#BuildDir}` 直接拼（基准不同）；
+  · CI 的 PowerShell 步骤必须等安装器结束、必须有超时、
+    不能用反斜杠续行；
+  · `tools/check_installer.py` 在 cp1252 / cp936 控制台下不能崩
+    （用子进程 + `PYTHONIOENCODING` 模拟）。
+- 21 条变异测试全部 KILL，过程中修掉了**三处防线自身的缺陷**——
   它们比没写更危险，因为看起来是有效的：
   · 查 `recursesubdirs` 时搜的是整段文本，而 `[Files]` 的注释里恰好把
     「recursesubdirs 一定要开」写了一遍：**删掉真指令测试仍然绿**，
@@ -83,7 +102,34 @@
 - 顺带确认了一件事：**用户数据本来就在 `~/.config/`，不在程序目录**——
   这正是安装版能成立的前提（Program Files 是只读的）。这条现在有测试
   守着，免得哪天有人「顺手」改成 exe 同目录。
-- 全部测试 **440 passed / 2 skipped**，`pylama` 0 告警。
+- 全部测试 **444 passed / 2 skipped**，`pylama` 0 告警。
+
+### CI 实测：六轮才跑通
+
+静态检查全绿之后，`Build Windows installer` 在 Windows runner 上**连着
+失败了 6 轮**。每一轮都不是测试写得不对，而是本地（Linux）根本测不到
+的东西：
+
+| # | 现象 | 真因 |
+|---|---|---|
+| 1 | ISCC `Invalid prototype for 'InitializeWizard'` | 写成了 `function ... : Boolean`，它其实是 `procedure` |
+| 2 | `静默安装失败 ()`——退出码是空的 | GUI 程序用 `& $setup` 会立即返回，`$LASTEXITCODE` 从不被赋值 |
+| 3 | `The term '-ArgumentList' is not recognized` | PowerShell 续行符是反引号 `` ` ``，写成了 `\` |
+| 4-6 | **job 挂死 8 分钟然后被超时杀掉** | 先是误判成 UAC 弹窗（加了 `/CURRENTUSER` 仍挂）；真因是 `{src}` 与 `{#BuildDir}` 基准不同，拼成 `dist\dist\...` → `InitializeSetup` 返回 False 中止安装，而 `/SUPPRESSMSGBOXES` 把提示框压掉了 —— **无声挂起** |
+
+第 4-6 轮最耗时间：**失败有日志，挂死只有空白**。它也不在本地能挡住
+的范围内，所以修完之后补了测试（CI 步骤必须有 `/CURRENTUSER` 和超时）
+和检查器（`[Code]` 里 `{src}` + `{#BuildDir}` 同时出现且没取末段判
+fail）。
+
+最终结果：
+
+```
+安装器体积: 33 MB
+安装结束，退出码 0，耗时 9s
+安装目录: _internal / config / bilibili-submit-gui.exe / ffmpeg.exe / unins000.exe
+安装版启动正常；卸载正常（3s）
+```
 
 ### 设计决策
 

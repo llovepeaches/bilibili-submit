@@ -760,14 +760,28 @@ onedir 把 ffmpeg 放 exe 同目录，`ffmpeg.py` 本来就优先找那个位置
 这是最容易被「清理干净」这个念头害到的地方。`tests/test_packaging.py`
 把这条钉死了。
 
-### 安装器脚本的三个坑
+### 安装器脚本的坑（都是在 CI 上真踩出来的）
 
-`installer.iss`（Inno Setup 6）有三个坑，都在
-`tools/check_installer.py` 或 `tests/test_packaging.py` 里挡住了：
+`installer.iss`（Inno Setup 6）有以下坑，能静态挡的都在
+`tools/check_installer.py` 或 `tests/test_packaging.py` 里；挡不住的
+在注释里写明了成因。
+
+**编译期（ISCC 才报，本地查不出）**
 
 - **必须存成 UTF-8 with BOM**。Inno Setup 6 靠 BOM 识别编码；存成
   不带 BOM 的 UTF-8 或 GBK 都会让中文在安装向导里变乱码，**且不报错**
   ——只在用户眼前发生；
+- **事件函数原型不能写错**。最容易混的是这两个：
+  `InitializeSetup` 是 `function ... : Boolean`（返回 False 能拒绝
+  安装），`InitializeWizard` 是 **`procedure`**（只做初始化）。名字像，
+  写法不一样，写反了 ISCC 报 `Invalid prototype for 'InitializeWizard'`；
+- **`[Code]` 里 `{src}` 和 `{#BuildDir}` 不能直接拼**。两者基准不同：
+  `{src}` 是安装器 exe 所在目录（`dist\`），`{#BuildDir}` 是相对于
+  `.iss` 所在目录（仓库根）。直接拼 = `dist\dist\...`，文件不存在。
+  用 `ExtractFileName('{#BuildDir}')` 取末段。
+
+**运行期（ISCC 不报，装出来才炸）**
+
 - **`[Files]` 必须 `recursesubdirs`**。onedir 的绝大部分内容在
   `_internal\`（Python 运行时、tkinter 的 tcl/tk 数据）。漏了这个
   flag 时安装器只装顶层 exe，界面能出现、点一下就闪退——因为
@@ -779,6 +793,31 @@ onedir 把 ffmpeg 放 exe 同目录，`ffmpeg.py` 本来就优先找那个位置
 `EXE_NAME` 对得上**（`BuildDir` 末段 = `EXE_NAME`）。对不上时 ISCC
 **不会报错**——它照抄 `[Files]` 的通配路径，装出一个缺文件的安装器，
 用户双击闪退才发现。
+
+### CI 上验证安装器的坑（PowerShell 侧）
+
+这一组是 Windows runner 上真实踩出来的，本地（Linux）一个都测不到：
+
+- **静默安装不能靠 `$LASTEXITCODE`**。安装器是 GUI 程序，
+  `& $setup /VERYSILENT` 会立即返回，`$LASTEXITCODE` **从不被赋值**，
+  下一行判空就当成失败。要用 `Start-Process -Wait -PassThru` 读
+  `.ExitCode`。不过 **Inno Setup 提权时会 fork 自己**，父进程立即退出、
+  子进程等 UAC —— 无人值守的 CI 上没人点那个框，就是永久挂起。所以
+  最终方案是加 `/CURRENTUSER` 装到 `%LOCALAPPDATA%\Programs`，整条链
+  不需要提权；
+- **PowerShell 的续行符是反引号 `` ` `` 不是反斜杠**。写成 `\` 的话
+  每行被当成独立命令，报错是
+  `The term '-ArgumentList' is not recognized`；
+- **卸载不能用 `-Wait`**。卸载器若卡住会永远不返回。改成轮询 + 超时，
+  超时就杀掉并报错；
+- **`Stop-Process` 要按进程名杀，不只是那个 PID**。PyInstaller 可能
+  留子进程，残留会让卸载器一直等着程序关闭；
+- **`tools/check_installer.py` 自己会崩在 Windows 编码上**。它打印
+  中文，而 Windows 控制台默认 cp1252（PowerShell）/ cp936（cmd.exe），
+  一句 `print` 就抛 `UnicodeEncodeError`。已在脚本里强制 UTF-8 输出。
+
+这些坑的共同点是**失败方式恶劣**：不是报错，而是挂死或误判。所以
+每一条都配了测试或检查器断言。
 
 ### 查段不能靠 `text.split("[Files]")`
 
