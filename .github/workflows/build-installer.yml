@@ -11,6 +11,10 @@ on:
       - .github/workflows/build-installer.yml
       - main_gui.py
       - bilibili_submit/**
+      # 检查器本身也要验：它是安装流程的第一道关，自己崩掉的话
+      # 后面全跳过了（CI 上真发生过——见 check_installer.py 的注释）
+      - tools/check_installer.py
+      - tests/test_packaging.py
   pull_request:
     branches: [main, master]
     paths:
@@ -19,6 +23,10 @@ on:
       - .github/workflows/build-installer.yml
       - main_gui.py
       - bilibili_submit/**
+      # 检查器本身也要验：它是安装流程的第一道关，自己崩掉的话
+      # 后面全跳过了（CI 上真发生过——见 check_installer.py 的注释）
+      - tools/check_installer.py
+      - tests/test_packaging.py
   workflow_dispatch:
 
 jobs:
