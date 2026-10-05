@@ -40,8 +40,8 @@ def draw_qr(
     canvas: tk.Canvas,
     url: str,
     size: int = theme.QR_SIZE,
-    dark: str = theme.TEXT,
-    light: str = theme.SURFACE,
+    dark: str = theme.INK,
+    light: str = theme.PAPER,
 ) -> None:
     """把登录链接画到 Canvas 上（居中，带 quiet zone）。
 
@@ -77,8 +77,8 @@ def draw_placeholder(
     canvas: tk.Canvas,
     text: str,
     size: int = theme.QR_SIZE,
-    background: str = theme.SURFACE_ALT,
-    foreground: str = theme.TEXT_MUTED,
+    background: str = theme.PAPER_ALT,
+    foreground: str = theme.INK_MUTED,
 ) -> None:
     """二维码还没拿到时的占位画面（不是空白，用户才知道这里会有东西）。"""
     canvas.delete("all")
@@ -88,6 +88,6 @@ def draw_placeholder(
         size // 2,
         text=text,
         fill=foreground,
-        font=theme.FONT_SMALL,
+        font=theme.font("caption"),
         justify="center",
     )

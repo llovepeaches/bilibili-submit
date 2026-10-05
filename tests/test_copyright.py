@@ -228,17 +228,20 @@ def test_batch_page_hides_source_until_reprint(tmp_path):
     try:
         _app, view = _tasks_view(root, tmp_path)
         root.update_idletasks()
-        assert not view._source_row.winfo_ismapped()
+        # 用 grid_info 而不是 winfo_ismapped：批量页的来源行在收起的
+        # 折叠区里，无论显隐与否 ismapped 都是 0。要测的是
+        # 「这一行有没有被挂到网格上」，那才是显隐逻辑本身
+        assert not view._source_row.grid_info()
 
         view._copyright_var.set(REPRINT)
         view._sync_source_row()
         root.update_idletasks()
-        assert view._source_row.winfo_ismapped()
+        assert view._source_row.grid_info(), "选了转载就该能填来源"
 
         view._copyright_var.set(SELF_MADE)
         view._sync_source_row()
         root.update_idletasks()
-        assert not view._source_row.winfo_ismapped()
+        assert not view._source_row.grid_info(), "切回自制要把来源行收起来"
     finally:
         root.destroy()
 
@@ -305,6 +308,6 @@ def test_batch_page_restores_reprint_from_state(tmp_path):
         assert view._copyright_var.get() == REPRINT
         assert view._source_var.get() == "https://example.com/origin"
         # 只恢复变量不恢复显隐的话，值在、框却看不见，用户会以为出处丢了
-        assert view._source_row.winfo_ismapped()
+        assert view._source_row.grid_info(), "恢复转载时必须同时恢复来源行"
     finally:
         root.destroy()

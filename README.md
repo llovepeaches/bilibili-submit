@@ -236,35 +236,43 @@ defaults:
 <details>
 <summary><b>界面截图</b>（点击展开）</summary>
 
-登录（扫码）：
+投稿页。底部是**固定操作条**：左边实时显示「将要投什么」，条件没齐时
+按钮就地灰掉并写明原因（不用滚回列表底部找按钮，也不用点了才知道错）：
 
-![登录页](docs/images/01-login.png)
+![投稿页](docs/images/light-07-upload-ready.png)
 
-已获取二维码（v0.1.6 修复后）：
+条件没齐时——按钮灰，旁边写清楚差什么：
 
-![登录页二维码](docs/images/09-login-qr.png)
+![投稿页 · 条件没齐](docs/images/light-06-upload-blocked.png)
 
-投稿（表单 + 进度）：
+运行中主按钮就地变成「取消」，而不是一个点不动的「开始投稿」：
 
-![投稿页](docs/images/02-upload.png)
+![投稿页 · 运行中](docs/images/light-08-upload-busy.png)
 
-批量任务（勾选 + 文件预检 + 状态着色）：
+批量任务（勾选 + 文件预检 + 状态着色 + 状态字形）：
 
-![批量任务页](docs/images/03-tasks.png)
+![批量任务页](docs/images/light-03-tasks.png)
 
-历史与设置：
+登录（扫码）与设置：
 
-![历史页](docs/images/04-history.png)
+![登录页](docs/images/light-01-login.png)
 
-![设置页](docs/images/05-settings.png)
+![设置页](docs/images/light-05-settings.png)
 
-历史文件损坏时会明确告诉你出了什么事，而不是假装「暂无历史」：
+历史页：
 
-![历史页错误提示](docs/images/08-history-broken.png)
+![历史页](docs/images/light-04-history.png)
 
-窗口压到最小（880x600）时内容可滚动，按钮不会点不到：
+深色主题。**不是浅色的反转**——卡片比底色亮，而操作条比卡片更亮，
+用「更亮的表面」表达深度，从不用纯黑：
 
-![最小尺寸](docs/images/06b-min-size-bottom.png)
+![深色 · 批量任务](docs/images/dark-03-tasks.png)
+
+![深色 · 投稿页](docs/images/dark-07-upload-ready.png)
+
+窗口压到最小（1000x660）时内容可滚动，**底部操作条始终可见**：
+
+![最小尺寸](docs/images/light-09-min-size.png)
 
 </details>
 
@@ -463,9 +471,9 @@ bilibili_submit/
 └── ui/             图形界面（tkinter，不含业务逻辑）
     ├── app.py      主窗口：导航、状态栏
     ├── views/      登录 / 投稿 / 批量任务 / 历史 / 设置
-    ├── widgets.py  可复用组件（含自绘圆角按钮 FluentButton）
+    ├── widgets.py  可复用组件（FluentButton 自绘圆角按钮、ActionBar 底部操作条）
     ├── workers.py  后台线程与线程间消息
-    ├── theme.py    颜色、字体、间距（Fluent Design 规范，浅/深两套色板）
+    ├── theme.py    语义色板、命名字体、间距（浅/深两套，见 .impeccable.md）
     ├── state.py    界面偏好（目录、参数、主题模式）
     ├── win_effects.py  Windows 11 系统效果（深色标题栏、窗口圆角）
     └── qr.py       二维码绘制（不依赖 Pillow）
@@ -478,7 +486,10 @@ build_windows.bat      Windows 一键打包
 publish.bat            一键发布
 assets/                图标与 Windows 版本资源
 CHANGELOG.md           更新日志
+.impeccable.md界面设计上下文（改界面前先读）
 docs/                  部署、FAQ、架构、截图
+tests/test_theme_contrast.py  配色对比度与色相的守门测试
+tests/test_action_bar.py      底部操作条的行为测试
 tools/make_icon.py         图标生成（仅开发时用）
 tools/setup_ffmpeg.py      复制 ffmpeg 到指定目录（--dest vendor 供内嵌打包）
 tools/make_source_zip.py   打包源码 zip

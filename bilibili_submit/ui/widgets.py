@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import sys
 import tkinter as tk
-from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Callable, Iterable, Sequence
 
@@ -29,6 +28,7 @@ __all__ = [
     "SecondaryButton",
     "BrandMark",
     "StatusPill",
+    "ActionBar",
     "ProgressBar",
     "LogConsole",
     "Placeholder",
@@ -69,7 +69,7 @@ class ScrollArea(ttk.Frame):
         self.columnconfigure(0, weight=1)
 
         self._canvas = tk.Canvas(
-            self, highlightthickness=0, borderwidth=0, background=theme.SURFACE
+            self, highlightthickness=0, borderwidth=0, background=theme.PAPER
         )
         self._scrollbar = ttk.Scrollbar(
             self, orient="vertical", command=self._canvas.yview
@@ -186,8 +186,8 @@ class Collapsible(ttk.Frame):
             self._header,
             text="",
             bg=theme.COLLAPSE_BG,
-            fg=theme.TEXT_SECONDARY,
-            font=theme.FONT_SMALL,
+            fg=theme.INK_MUTED,
+            font=theme.font("caption"),
             width=2,
             anchor="w",
         )
@@ -197,16 +197,18 @@ class Collapsible(ttk.Frame):
             self._header,
             text=title,
             bg=theme.COLLAPSE_BG,
-            fg=theme.PRIMARY_DARK,
-            font=theme.FONT_MEDIUM,
+            # 折叠标题是「可点的东西」，用深梅而不是纯墨色——
+            # 一点点色差就在说「这里能展开」，比加下划线克制
+            fg=theme.PINK_DEEP,
+            font=theme.font("body-strong"),
         ).grid(row=0, column=1, sticky="w")
 
         self._hint = tk.Label(
             self._header,
             text="",
             bg=theme.COLLAPSE_BG,
-            fg=theme.TEXT_MUTED,
-            font=theme.FONT_SMALL,
+            fg=theme.INK_MUTED,
+            font=theme.font("caption"),
         )
         self._hint.grid(row=0, column=2, sticky="e", padx=(theme.PAD_SM, 0))
 
@@ -218,8 +220,8 @@ class Collapsible(ttk.Frame):
                 self._header,
                 text=subtitle,
                 bg=theme.COLLAPSE_BG,
-                fg=theme.TEXT_MUTED,
-                font=theme.FONT_SMALL,
+                fg=theme.INK_MUTED,
+                font=theme.font("caption"),
             ).grid(row=1, column=1, columnspan=2, sticky="w")
 
         # Tk 的事件不冒泡，标题栏里每个子控件都得单独绑一次，
@@ -390,13 +392,18 @@ class FormRow(ttk.Frame):
         label: str,
         hint: str = "",
         label_width: int = 12,
+        required: bool = False,
     ) -> None:
         super().__init__(master, style="Card.TFrame")
         self.columnconfigure(1, weight=1)
 
-        text = f"{label}：" if label else ""
+        # 必填项在标签上打星号。这是「填之前就知道」比「提交后报缺」
+        # 好得多的例子：星号不需要解释，而「缺少必填项」要用户回去
+        # 自己找哪个空着。用深梅而不是红——红在这个界面里是「失败」，
+        # 必填只是「注意」，不该占用那么重的颜色。
+        text = f"{label} *" if required else f"{label}："
         ttk.Label(
-            self, text=text, style="Card.TLabel", width=label_width, anchor="e"
+            self, text=text, style="Field.TLabel", width=label_width, anchor="e"
         ).grid(row=0, column=0, sticky="e", padx=(0, theme.PAD_SM))
 
         #: 控件容器。复合控件（输入框 + 按钮）往这里放。
@@ -533,7 +540,10 @@ class FluentButton(tk.Canvas):
         self._focused = False
         self._explicit_width = width
 
-        self._measure = tkfont.Font(family=theme.FAMILY, size=theme.FONT_NORMAL[1])
+        # 测量字体和实际绘制字体必须是同一个，否则中文按钮宽度会算错。
+        self._measure = theme.measure_font(
+            "body-strong" if self._variant == self.ACCENT else "body"
+        )
         wanted = self._preferred_width()
         super().__init__(
             master,
@@ -541,7 +551,7 @@ class FluentButton(tk.Canvas):
             height=self._height + self._RING * 2,
             highlightthickness=0,
             borderwidth=0,
-            background=background or theme.SURFACE,
+            background=background or theme.PAPER,
             takefocus=1,
         )
         self._paint()
@@ -674,17 +684,27 @@ class FluentButton(tk.Canvas):
         if self._disabled:
             return theme.DISABLED_BG, theme.DISABLED_FG
         if self._variant == self.ACCENT:
+            # 粉底一律配墨字：粉+白只有 2.64:1，AA 不达标
             if self._pressed:
-                return theme.PRIMARY_PRESSED, theme.TEXT_ON_PRIMARY
+                return theme.PINK_PRESSED, theme.INK_ON_PINK
             if self._hovered:
-                return theme.PRIMARY_HOVER, theme.TEXT_ON_PRIMARY
-            return theme.PRIMARY, theme.TEXT_ON_PRIMARY
+                return theme.PINK_HOVER, theme.INK_ON_PINK
+            return theme.PINK, theme.INK_ON_PINK
         # 标准型：底色极浅，靠边框表达「这是个按钮」
         if self._pressed:
-            return theme.PRESSED, theme.TEXT
+            return theme.PRESSED, theme.INK
         if self._hovered:
-            return theme.HOVER, theme.TEXT
-        return theme.SURFACE, theme.TEXT
+            return theme.HOVER, theme.INK
+        return theme.PAPER, theme.INK
+
+    def _font_name(self) -> str:
+        """按钮文字用 body/ body-strong，深度只差一档字重。
+
+        主操作加粗是为了让它在视觉上先被看到；但两档都只比正文大0px，
+        靠「位置 + 底色」而不是靠字号把主次拉开——放大了会在中文短
+        按钮里撑出空荡感。
+        """
+        return theme.font("body-strong" if self._variant == self.ACCENT else "body")
 
     def _paint(self) -> None:
         width = int(float(self["width"]))
@@ -695,16 +715,17 @@ class FluentButton(tk.Canvas):
         fill, text_color = self._fill_and_text()
 
         if self._focused and not self._disabled:
+            # 聚焦环用深梅不用粉：粉在纸白上只有 2.64:1，等于没有
             self.create_polygon(
                 _round_rect_points(0, 0, width - 1, height - 1, theme.RADIUS_CONTROL + ring),
                 smooth=True,
-                fill=theme.PRIMARY_RING,
-                outline=theme.PRIMARY_RING,
+                fill=theme.FOCUS_RING,
+                outline=theme.FOCUS_RING,
             )
 
-        outline = theme.CARD_BORDER if self._disabled else (
-            theme.PRIMARY if self._variant == self.ACCENT
-            else (theme.BORDER_STRONG if self._hovered else theme.BORDER)
+        outline = theme.LINE if self._disabled else (
+            theme.PINK if self._variant == self.ACCENT
+            else (theme.LINE_STRONG if self._hovered else theme.LINE)
         )
         self.create_polygon(
             _round_rect_points(
@@ -720,7 +741,7 @@ class FluentButton(tk.Canvas):
             height / 2,
             text=self._text,
             fill=text_color,
-            font=theme.FONT_NORMAL,
+            font=self._font_name(),
         )
 
 
@@ -772,15 +793,15 @@ class BrandMark(tk.Canvas):
         self.create_polygon(
             _round_rect_points(0, 0, self.SIZE - 1, self.SIZE - 1, theme.RADIUS_CARD),
             smooth=True,
-            fill=theme.PRIMARY,
-            outline=theme.PRIMARY,
+            fill=theme.PINK,
+            outline=theme.PINK,
         )
         self.create_text(
             self.SIZE / 2,
             self.SIZE / 2,
             text=text,
-            fill=theme.TEXT_ON_PRIMARY,
-            font=theme.FONT_MEDIUM,
+            fill=theme.INK_ON_PINK,   # 粉底配墨字
+            font=theme.font("subtitle"),
         )
 
 
@@ -790,28 +811,39 @@ def _tone_colors(tone: str) -> tuple[str, str]:
 
 
 class StatusPill(tk.Label):
-    """状态标签：一个小圆点 + 文字，用来表达「就绪/未就绪/进行中」。
+    """状态标签：形状记号 + 文字，表达「就绪/未就绪/进行中」。
 
     用 ``tk.Label`` 而非 ``ttk``：ttk 的 Label 改前景色要绕 style，
     而状态色是动态变化的，直接 tk.Label 更省事。
+
+    文字前带一个 glyph（``✓✕!◐`` 等）。**这不是装饰**——状态如果只靠
+    颜色传达，色盲用户看到的是一排不同底色的色块，读不出哪个是失败。
+    颜色和形状双通道编码，才真的可访问。记号见
+    :data:`~.theme.TONE_GLYPHS`。
     """
 
     def __init__(self, master: tk.Misc, text: str = "", tone: str = "idle") -> None:
-        fg, bg = _tone_colors(tone)
         super().__init__(
             master,
-            text=text,
-            font=theme.FONT_SMALL,
-            background=bg,
-            foreground=fg,
+            text="",
+            font=theme.font("caption"),
+            background=theme.PAPER_ALT,
+            foreground=theme.INK,
             padx=theme.PAD_SM,
             pady=2,
         )
+        self.set(text, tone)
 
     def set(self, text: str, tone: str = "idle") -> None:
         """更新文字与配色。``tone`` 见 :data:`~.theme.TONES`。"""
         fg, bg = _tone_colors(tone)
-        self.configure(text=text, foreground=fg, background=bg)
+        glyph = theme.tone_glyph(tone)
+        # glyph 始终占位，空文案时也不会让文字左右跳
+        self.configure(
+            text=f"{glyph} {text}" if text else glyph,
+            foreground=fg,
+            background=bg,
+        )
 
 
 class NavItem(tk.Frame):
@@ -866,14 +898,14 @@ class NavItem(tk.Frame):
         body.pack(side="left", fill="both", expand=True)
 
         self._icon = tk.Label(
-            body, text=icon, font=theme.FONT_MEDIUM,
-            background=theme.NAV_BG, foreground=theme.TEXT_MUTED,
+            body, text=icon, font=theme.font("subtitle"),
+            background=theme.NAV_BG, foreground=theme.INK_MUTED,
             width=2, anchor="center",
         )
         self._icon.pack(side="left", padx=(theme.PAD_MD, theme.PAD_XS))
 
         self._text = tk.Label(
-            body, text=text, font=theme.FONT_MEDIUM,
+            body, text=text, font=theme.font("body"),
             background=theme.NAV_BG, foreground=theme.NAV_FG,
             anchor="w",
         )
@@ -930,8 +962,8 @@ class NavItem(tk.Frame):
                 0, top, width - 1, top + theme.NAV_BAR_HEIGHT - 1, width / 2
             ),
             smooth=True,
-            fill=theme.PRIMARY,
-            outline=theme.PRIMARY,
+            fill=theme.PINK,
+            outline=theme.PINK,
         )
 
     def _render(self) -> None:
@@ -941,7 +973,7 @@ class NavItem(tk.Frame):
             self._text.configure(foreground=theme.NAV_ACTIVE_FG)
         else:
             self._paint(theme.NAV_BG)
-            self._icon.configure(foreground=theme.TEXT_MUTED)
+            self._icon.configure(foreground=theme.INK_MUTED)
             self._text.configure(foreground=theme.NAV_FG)
         self._render_bar()
 
@@ -966,8 +998,8 @@ class SummaryBar(ttk.Frame):
         self.columnconfigure(0, weight=1)
 
         self._stats = tk.Label(
-            self, text="", font=theme.FONT_SMALL, anchor="w",
-            background=theme.SURFACE, foreground=theme.TEXT_SECONDARY,
+            self, text="", font=theme.font("caption"), anchor="w",
+            background=theme.PAPER, foreground=theme.INK_SECOND,
         )
         self._stats.grid(row=0, column=0, sticky="w")
 
@@ -995,6 +1027,203 @@ class SummaryBar(ttk.Frame):
         state = ["!disabled"] if enabled else ["disabled"]
         for button in self._buttons:
             button.state(state)
+
+
+class ActionBar(tk.Frame):
+    """底部固定操作条：左边说「将要发生什么」，右边放主操作。
+
+    这个组件解决的是**「主操作不该需要找」**。之前「开始投稿」按钮
+    混在表单中间：表单一长它就被推到屏幕外，折叠区一展开它就换位置，
+    窗口一缩它就消失。用户的真实体验是「每次都要先扫一遍界面找按钮」。
+
+    有了它：
+
+    - 主按钮**永远在同一个位置**，不随内容滚动、不随折叠开合移动；
+    - 左边实时显示**将要发生什么**（几个稿件 / 几个分P / 自制还是转载），
+      提交前不用回头核对表单；
+    - 条件不满足时**就地禁用并说明原因**（「先在「投稿」页登录」），
+      而不是让人点下去、再在日志里报错——那是「死后告知」。
+
+    配色用墨色实心块（:style:`Ink.TFrame` 的思路）：界面其余部分都是
+    纸白，只有这一条是深色的，视线自然落到这里。深色下这条反而比卡片
+    **更亮**——深色模式里「更深」等于「更少内容」。
+
+    用法::
+
+        bar = ActionBar(parent)
+        bar.set_summary("将投稿 3 个稿件 · 5 个分P组 · 自制")
+        bar.set_primary("开始投稿", on_submit)
+        bar.block("先在「投稿」页扫码登录")
+        bar.pack(fill="x", side="bottom")
+    """
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master, background=theme.INK_SURFACE)
+        self.columnconfigure(0, weight=1)
+
+        # 快捷键绑在 **master**（整个视图）而不是 self：Tk 的事件不冒泡，
+        # 焦点在标题输入框里时，绑在操作条上的 Ctrl+Enter 根本收不到。
+        # 而「填完标题直接回车投稿」恰恰是最常见的用法。
+        self._on_submit = lambda: None
+        self._on_cancel = lambda: None
+        #: 空闲时主按钮的文案。运行中会变成「取消」，收尾时靠它改回来
+        self._idle_text = "开始"
+        master.bind("<Control-Return>", self._fire_submit, add="+")
+        master.bind("<Escape>", self._fire_cancel, add="+")
+
+        # 左侧：标题 + 实时摘要。标题固定不变，摘要随表单变——
+        # 固定的部分提供锚点，变化的部分提供反馈。
+        text_box = tk.Frame(self, background=theme.INK_SURFACE)
+        text_box.grid(row=0, column=0, sticky="w", padx=(theme.PAD_LG, theme.PAD_SM))
+        self._title = tk.Label(
+            text_box, text="", font=theme.font("caption"),
+            background=theme.INK_SURFACE, foreground=theme.INK_SURFACE_MUTED,
+            anchor="w",
+        )
+        self._title.pack(anchor="w")
+
+        self._summary = tk.Label(
+            text_box, text="", font=theme.font("body-strong"),
+            background=theme.INK_SURFACE, foreground=theme.INK_SURFACE_FG,
+            anchor="w",
+        )
+        self._summary.pack(anchor="w")
+
+        # 右侧：原因提示 + 次按钮 + 主按钮。三者**各占一列**。
+        #
+        # 曾经把次按钮也grid 到主按钮那一列（靠 sticky 区分），结果两者
+        # 完全重叠——粉底主按钮被压在下面看不见。所以列分配必须是
+        # 独占的，调用方不许自己往里塞控件。
+        self._reason = tk.Label(
+            self, text="", font=theme.font("caption"),
+            background=theme.INK_SURFACE, foreground=theme.INK_SURFACE_MUTED,
+            anchor="e", justify="right",
+        )
+        self._reason.grid(row=0, column=1, sticky="e", padx=(0, theme.PAD_MD))
+
+        self._secondary: SecondaryButton | None = None
+        self._primary: PrimaryButton | None = None
+
+    def set_primary(
+        self,
+        text: str,
+        command: Callable[[], None],
+        secondary_text: str = "",
+        secondary_command: Callable[[], None] | None = None,
+    ) -> None:
+        """装上主操作按钮（以及可选的次操作）。重复调用会替换。
+
+        「取消」是**特殊**的次操作：它只在运行中出现，且会顶掉普通次
+        操作（比如「仅预览」）——运行中用户只可能想停止，不该还能预览。
+        """
+        for button in (self._primary, self._secondary):
+            if button is not None:
+                button.destroy()
+        self._primary, self._secondary = None, None
+        self._reason.grid_remove()
+
+        self._on_submit = command
+        self._idle_text = text
+        self._primary = PrimaryButton(self, text, command)
+        self._primary.grid(row=0, column=3, padx=(theme.PAD_XS, theme.PAD_LG))
+
+        if secondary_text and secondary_command:
+            self._on_cancel = secondary_command
+            self._secondary = SecondaryButton(self, secondary_text, secondary_command)
+            self._secondary.grid(row=0, column=2, padx=(theme.PAD_XS, theme.PAD_XS))
+
+    @property
+    def secondary(self) -> "SecondaryButton | None":
+        """次操作按钮。调用方要控制它的启用状态时用这个拿。"""
+        return self._secondary
+
+    def _fire_submit(self, _event: "object" = None) -> str:
+        """Ctrl+Enter。禁用时不响应——快捷键不能绕过禁用状态。"""
+        if self._primary is not None and "disabled" not in self._primary.state():
+            self._on_submit()
+        return "break"
+
+    def _fire_cancel(self, _event: "object" = None) -> str:
+        self._on_cancel()
+        return "break"
+
+    def set_summary(self, title: str, summary: str = "") -> None:
+        """更新说明。``summary`` 是「将要发生什么」那句话。"""
+        self._title.configure(text=title)
+        self._summary.configure(text=summary)
+
+    def block(self, reason: str = "") -> None:
+        """禁用主操作并就地说明原因。
+
+        ``reason`` 为空时只禁用不解释——**只应该在调用方已经用别的方式
+        说明了原因时用**，否则用户面对一个灰按钮却不知道为什么。
+
+        无论有没有 ``reason``，都会先把上一条原因擦掉：控件状态变了、
+        文案还停在「尚未登录」是最糟的一种错，比什么都不说更误导。
+        """
+        if self._primary is not None:
+            self._primary.state(["disabled"])
+        if reason:
+            self._reason.configure(text=self._ellipsize(reason))
+            self._reason.grid()
+        else:
+            self._reason.configure(text="")
+            self._reason.grid_remove()
+
+    def _ellipsize(self, text: str, limit: int = 24) -> str:
+        """原因太长时截断加省略号。
+
+        操作条是**固定高度**的一行，写长了会把按钮挤出可视区——而按钮
+        比原因重要。所以宁可少说几个字，也不能让「开始投稿」消失。
+        真要解释清楚，位置应该是日志区，不是这一行。
+        """
+        return text if len(text) <= limit else text[: limit - 1] + "…"
+
+    def unblock(self) -> None:
+        """解除禁用，隐藏原因。"""
+        if self._primary is not None:
+            self._primary.state(["!disabled"])
+        self._reason.grid_remove()
+
+    def set_busy(
+        self,
+        busy: bool,
+        cancel: Callable[[], None] | None = None,
+        cancel_text: str = "",
+        busy_title: str = "",
+    ) -> None:
+        """切到「运行中」形态：主按钮变成取消。
+
+        「运行中」时用户唯一想做的事就是**停下来**，所以这个位置上
+        出现的应该是取消而不是一个禁用的「开始投稿」——禁用按钮不给
+        用户任何出路。
+
+        ``cancel_text`` / ``busy_title`` 用来把「正在做什么」说准：
+        投稿时叫「取消 / 正在投稿」就够，但扫描目录时也叫「取消」
+        会让人以为要放弃整批投稿。调用方按实际在做的事传。
+
+        ``Ctrl+Enter`` 跟着一起变：空闲时是「开始」，运行中是「取消」，
+        和按钮保持一致，不给用户两个含义不同的入口。
+
+        次操作**不动**（不隐藏、不禁用）：它多半是「仅预览」这类
+        无害操作，运行中依然有意义。要不要锁由调用方决定——组件
+        不知道那个按钮是干什么的。
+        """
+        if self._primary is None:
+            return
+        if busy:
+            self._title.configure(text=busy_title or "正在投稿")
+            if cancel is not None:
+                self._on_cancel = cancel
+                self._primary.configure(command=cancel)
+        else:
+            self._primary.configure(command=self._on_submit)
+        # 文案记在 _idle_text 上，不硬编码「开始投稿」：批量页的主按钮
+        # 可能叫别的，硬编码回去就把它改名了
+        self._primary.configure(
+            text=(cancel_text or "取消") if busy else self._idle_text
+        )
+        self._primary.state(["!disabled"])
 
 
 class ProgressBar(ttk.Frame):
@@ -1038,9 +1267,10 @@ class ProgressBar(ttk.Frame):
 class LogConsole(tk.Frame):
     """日志区。
 
-    上传进度、接口返回、报错都往这里追加。用等宽字体对齐；
-    底色与主区刻意拉开（浅色主题下用略深的灰、深色主题下用更深的黑），
-    用户一眼能看出「这是输出不是输入」——**不抢眼**，所以不用语义色。
+    上传进度、接口返回、报错都往这里追加。用等宽字体对齐——
+    等宽在这里是**有职责的**：时间戳和进度百分比要能上下对齐成列，
+    扫一眼就知道卡在哪一步。
+    底色用次级面而不是纯色块，用户一眼能看出「这是输出不是输入」。
     """
 
     def __init__(self, master: tk.Misc, height: int = 10) -> None:
@@ -1048,6 +1278,7 @@ class LogConsole(tk.Frame):
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 
+        theme.register_fonts()
         self._text = tk.Text(
             self,
             height=height,
@@ -1055,7 +1286,7 @@ class LogConsole(tk.Frame):
             background=theme.LOG_BG,
             foreground=theme.LOG_TEXT,
             insertbackground=theme.LOG_TEXT,
-            font=theme.FONT_MONO,
+            font=theme.font("mono"),
             relief="flat",
             padx=theme.PAD_MD,
             pady=theme.PAD_SM,
@@ -1081,12 +1312,24 @@ class LogConsole(tk.Frame):
 
 
 class Placeholder(ttk.Frame):
-    """空状态占位：列表没数据、未登录时用它，避免界面看起来像坏了。"""
+    """空状态：说明**这里将来会出现什么**，而不是「暂无数据」。
+
+    「暂无数据」只陈述了现在的空，没告诉用户下一步做什么。而空状态是
+    用户第一次看到这块区域时唯一的引导，浪费它很可惜。所以结构固定为：
+
+    1. **标题**——这块区域是干什么的（永远有）
+    2. **说明**——具体会出现什么、怎么用（永远有）
+    3. **操作**——一个能立刻填上内容的按钮（可选）
+
+    没有第2 步的「空状态」等于没说：用户看到「暂无数据」既不知道该做什么，
+    也不知道填了之后会得到什么。
+    """
 
     def __init__(
         self,
         master: tk.Misc,
         text: str,
+        hint: str = "",
         action_text: str = "",
         on_action: Callable[[], None] | None = None,
     ) -> None:
@@ -1094,10 +1337,17 @@ class Placeholder(ttk.Frame):
         self.columnconfigure(0, weight=1)
 
         ttk.Label(
-            self, text=text, style="Card.Secondary.TLabel", justify="center"
-        ).grid(row=0, column=0, pady=(theme.PAD_XL, theme.PAD_SM))
+            self, text=text, style="Heading.TLabel", justify="center"
+        ).grid(row=0, column=0, pady=(theme.PAD_XL, theme.PAD_XS))
+        if hint:
+            ttk.Label(
+                self, text=hint, style="Card.Secondary.TLabel", justify="center",
+                wraplength=360,
+            ).grid(row=1, column=0, pady=(0, theme.PAD_SM))
         if action_text and on_action:
-            SecondaryButton(self, action_text, on_action).grid(row=1, column=0)
+            SecondaryButton(self, action_text, on_action).grid(
+                row=2, column=0, pady=(theme.PAD_SM, theme.PAD_XL)
+            )
 
 
 class KeyValueList(ttk.Frame):
@@ -1137,8 +1387,8 @@ class KeyValueList(ttk.Frame):
             value_label = tk.Label(
                 self,
                 text=value,
-                font=theme.FONT_SMALL,
-                background=theme.SURFACE,
+                font=theme.font("mono"),
+                background=theme.PAPER,
                 foreground=_tone_colors(tone)[0],
                 anchor="w",
                 justify="left",

@@ -550,22 +550,36 @@ def test_submit_button_reachable_at_min_size():
         find_areas(view, areas)
         assert areas, (
             f"投稿页内容比最小窗口高（{view.winfo_reqheight()} > {theme.MIN_HEIGHT}），"
-            "必须放进 ScrollArea，否则底部按钮不可达"
+            "必须放进 ScrollArea，否则日志区被挤没"
         )
 
+        # 主操作**必须在滚动区之外**。放进 ScrollArea 的话，内容一长
+        # 按钮就被推出屏幕，用户每次都得先滚到底才能开始投稿——
+        # 这正是 ActionBar 要解决的问题。
         area = areas[0]
-        # 滚到底后再量：此时按钮应当完整落在可视区内
+        bar = view._action_bar
+        assert bar not in area._canvas.winfo_children(), (
+            "操作条不能放进 ScrollArea：内容一长「开始投稿」就会被推出可视范围"
+        )
+        bar_bottom = bar.winfo_rooty() + bar.winfo_height()
+        window_bottom = root.winfo_rooty() + root.winfo_height()
+        assert bar_bottom <= window_bottom, (
+            f"最小窗口下操作条被截断：{bar_bottom} > 窗口底 {window_bottom}"
+        )
+
+        # 滚到底后主按钮依然完整可见——它本来就没动过，
+        # 这条断言是为了防止将来有人「顺手」把操作条塞回滚动区。
         area._canvas.yview_moveto(1.0)
         root.update_idletasks()
 
-        button = view._submit_button
+        button = bar._primary
+        assert button is not None, "操作条没装上主按钮"
         canvas_top = area._canvas.winfo_rooty()
         canvas_bottom = canvas_top + area._canvas.winfo_height()
         button_top = button.winfo_rooty()
         button_bottom = button_top + button.winfo_height()
-        assert button_top >= canvas_top and button_bottom <= canvas_bottom, (
-            f"滚到底后「开始投稿」仍不在可视区内："
-            f"按钮 {button_top}~{button_bottom} vs 可视区 {canvas_top}~{canvas_bottom}"
+        assert button_bottom > canvas_bottom, (
+            "主按钮应当位于滚动区之下（贴底），现在却在滚动区里面"
         )
     finally:
         root.destroy()

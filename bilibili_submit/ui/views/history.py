@@ -64,7 +64,12 @@ class HistoryView(ttk.Frame):
         self._tree.configure(yscrollcommand=scroll.set)
         scroll.grid(row=0, column=1, sticky="ns")
 
-        self._placeholder = Placeholder(card, "暂无投稿历史")
+        self._placeholder = Placeholder(
+            card,
+            "还没有投稿记录",
+            "每次投稿成功或失败都会写进这里：稿件号、标题、投稿时间、"
+            "失败原因。可以直接复制链接发到动态里。",
+        )
         self._placeholder.grid(row=1, column=0, sticky="nsew")
 
         self._log = LogConsole(card, height=4)

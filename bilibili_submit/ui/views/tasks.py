@@ -35,6 +35,7 @@ from ...submit import get_backend
 from .. import theme
 from ..state import BatchUIState, DEFAULT_TID, load_ui_state, save_ui_state
 from ..widgets import (
+    ActionBar,
     Card,
     Collapsible,
     FormRow,
@@ -275,11 +276,21 @@ class TasksView(ttk.Frame):
         card = Card(self)
         card.grid(row=1, column=0, sticky="nsew")
         card.columnconfigure(0, weight=1)
-        card.rowconfigure(6, weight=1)
+        # 空状态 + 列表共用 row 6。空状态里带一个「选择文件夹」按钮，
+        # 所以这一行至少要够放标题 + 说明 + 按钮，否则按钮会被裁掉一半
+        card.rowconfigure(6, weight=1, minsize=theme.PAD_2XL * 5)
 
-        # ① 顶部统一投稿参数。默认展开：分区/标签每次都要看一眼。
+        # ① 顶部统一投稿参数。**默认收起**——「填一次」的东西不该
+        # 每次进来都占掉半屏。收起时标题栏右侧会列出已改过的项，
+        # 用户瞄一眼就知道参数还在（见 _update_shared_hint）。
+        # 任务列表才是这一页的主体，表单不该抢它的位置。
         self._shared_section = Collapsible(
-            card, "投稿设置", "这一批任务共用", opened=True
+            card,
+            "投稿设置",
+            "这一批任务共用",
+            opened=False,
+            # 展开时不需要摘要——参数就在眼前
+            on_toggle=lambda opened: None if opened else self._update_shared_hint(),
         )
         self._shared_section.grid(row=0, column=0, sticky="ew")
         shared = self._shared_section.body
@@ -491,33 +502,46 @@ class TasksView(ttk.Frame):
         self._tree.bind("<Double-1>", self._on_double_click)
 
         self._placeholder = Placeholder(
-            card, "尚未选择视频文件夹", "选择文件夹…", self._pick_dir
+            card,
+            "还没有任务",
+            "这里会列出文件夹里的每个视频：文件名、标题、状态。"
+            "整个文件夹的每个视频都算一条任务。",
+            "选择视频文件夹…",
+            self._pick_dir,
         )
         self._placeholder.grid(row=6, column=0, sticky="nsew")
 
-        actions = ttk.Frame(card, style="Card.TFrame")
-        actions.grid(row=7, column=0, sticky="ew")
+        self._progress = ProgressBar(card)
+        self._progress.grid(row=7, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
 
-        self._run_button = PrimaryButton(actions, "开始投稿", self._run)
-        self._run_button.pack(side="left", padx=(0, theme.PAD_SM))
-        self._run_button.state(["disabled"])
+        self._log = LogConsole(card, height=theme.LOG_HEIGHT)
+        self._log.grid(row=8, column=0, sticky="nsew", pady=(theme.PAD_SM, 0))
+        card.rowconfigure(8, weight=1)
 
-        self._retry_button = SecondaryButton(actions, "重试失败项", self._retry_failed)
-        self._retry_button.pack(side="left", padx=(0, theme.PAD_SM))
+        # 操作条放在卡片**外面**，钉在页面底部。和投稿页同一个位置、
+        # 同一套交互：底部深色条 + 左边说「将要发生什么」+ 右边主按钮。
+        # 两页的主操作在同一处，切换页面时不用重新找按钮。
+        self._action_bar = ActionBar(self)
+        self._action_bar.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_MD, 0))
+        self._action_bar.set_primary(
+            "开始投稿", self._run,
+            secondary_text="重试失败项", secondary_command=self._retry_failed,
+        )
+        self._retry_button = self._action_bar.secondary
         self._retry_button.state(["disabled"])
 
-        self._cancel_button = SecondaryButton(actions, "取消", self._cancel)
-        self._cancel_button.pack(side="left")
-        self._cancel_button.state(["disabled"])
-
-        self._progress = ProgressBar(card)
-        self._progress.grid(row=8, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
-
-        self._log = LogConsole(card, height=7)
-        self._log.grid(row=9, column=0, sticky="nsew", pady=(theme.PAD_SM, 0))
-        card.rowconfigure(9, weight=1)
-
         self._apply_source_mode()
+        # 初始就给一句「先选文件夹」——否则操作条空白一片，
+        # 用户不知道那儿本来应该有东西
+        self._refresh_action_bar()
+        # 统一参数一改就同步折叠区摘要。挂在建完之后：变量本身是在
+        # Collapsible 之后创建的，构造期挂不上
+        for variable in (
+            self._tid_var, self._tag_var, self._desc_var,
+            self._copyright_var, self._dtime_var,
+        ):
+            variable.trace_add("write", lambda *_: self._update_shared_hint())
+        self._update_shared_hint()
 
     # ---------- 行为 ----------
 
@@ -608,6 +632,28 @@ class TasksView(ttk.Frame):
             advanced_opened=self._more_section.opened,
             **self._more_flags(),
         )
+
+    def _update_shared_hint(self) -> None:
+        """折叠区收起时，标题栏右侧显示当前设置摘要。
+
+        **必需**：收起 = 参数看不见。不同步显示的话用户会以为设置
+        丢了，得重新展开翻一遍。只列「偏离默认」的那些——分区这种
+        天天都一样的不占位置。
+        """
+        parts: list[str] = []
+        tid = self._tid_var.get().strip()
+        if tid and tid != tid_option(DEFAULT_TID):
+            parts.append(tid)
+        if self._tag_var.get().strip():
+            parts.append(f"标签 {self._tag_var.get().strip()}")
+        if self._desc_var.get().strip():
+            parts.append("有简介")
+        if parse_copyright(self._copyright_var.get()) == 2:
+            parts.append("转载")
+        offset = self._dtime_var.get().strip()
+        if offset:
+            parts.append(f"延时 {offset} 小时")
+        self._shared_section.set_hint(" · ".join(parts))
 
     def _save_state(self) -> None:
         """异步保存偏好。失败只在日志里说一次，不弹窗打断用户。"""
@@ -718,7 +764,7 @@ class TasksView(ttk.Frame):
         用户看到的是新列表，执行的却是旧内容。
         """
         self._source_pill.set(pending_text, "busy")
-        self._set_busy(True)
+        self._set_loading(True)
         try:
             worker = self._load_worker
             self._active_worker = worker
@@ -728,7 +774,7 @@ class TasksView(ttk.Frame):
                 on_error=self._on_load_error,
             )
         except Exception as exc:  # noqa: BLE001 - 启动失败必须把界面解锁
-            self._set_busy(False)
+            self._set_loading(False)
             self._active_worker = None
             self._source_pill.set("加载失败", "error")
             self._log.append(f"无法启动加载：{exc}")
@@ -736,7 +782,7 @@ class TasksView(ttk.Frame):
     def _on_loaded(
         self, result: tuple[AppConfig, list[TaskConfig]], mode: SourceMode, label: str
     ) -> None:
-        self._set_busy(False)
+        self._set_loading(False)
         self._active_worker = None
         cfg, tasks = result
         if not tasks:
@@ -750,7 +796,7 @@ class TasksView(ttk.Frame):
         self._apply_source_mode()
         self._reset_state()
         self._fill_tree(tasks)
-        self._run_button.state(["!disabled"])
+        self._refresh_action_bar()
 
         source = label if label else self._dir_var.get().strip()
         self._source_pill.set(f"{source} · {len(tasks)} 个任务", "ok")
@@ -771,7 +817,7 @@ class TasksView(ttk.Frame):
             self._save_state()
 
     def _on_load_error(self, exc: BaseException) -> None:
-        self._set_busy(False)
+        self._set_loading(False)
         self._active_worker = None
         if isinstance(exc, Cancelled):
             self._source_pill.set("已取消", "idle")
@@ -1404,23 +1450,114 @@ class TasksView(ttk.Frame):
         """
         return PartTitlesDialog(self, archive, files, current, archive_title).show()
 
-    def _set_busy(self, busy: bool) -> None:
+    def _set_busy(
+        self, busy: bool, busy_title: str = "正在投稿", cancel_text: str = "取消"
+    ) -> None:
         """切换运行态下的按钮可用性。
 
         汇总条里的「全选 / 只选失败项」也要一起锁——它们最终都落到
         :meth:`_apply_selection`，锁按钮和锁逻辑双保险，界面上不会
         出现「按了没反应」的按钮。
+
+        运行中主按钮就地变成「取消」：此刻用户唯一想做的就是停下来，
+        给一个灰掉的「开始投稿」等于不给出路。
+
+        .. important::
+           ``_start_loading`` 复用本方法但**不能**让主按钮变成「取消」——
+           加载目录时用户想取消的是「扫描」，不是「投稿」，而那个
+           操作由日志区的取消入口负责。所以加载走 ``_set_loading``，
+           只锁按钮、只换文案，不接管取消。
         """
         self._busy = busy
-        self._run_button.state(["disabled"] if busy else ["!disabled"])
+        if busy:
+            self._action_bar.set_busy(
+                True, cancel=self._cancel,
+                cancel_text=cancel_text, busy_title=busy_title,
+            )
+        else:
+            self._action_bar.set_busy(False)
+            self._refresh_action_bar()
         self._retry_button.state(["disabled"] if busy else ["!disabled"])
-        self._cancel_button.state(["!disabled"] if busy else ["disabled"])
         self._pick_button.state(["disabled"] if busy else ["!disabled"])
         self._load_button.state(["disabled"] if busy else ["!disabled"])
         self._config_button.state(["disabled"] if busy else ["!disabled"])
         self._summary.set_actions_enabled(not busy)
 
+    def _set_loading(self, loading: bool) -> None:
+        """目录扫描/加载期间的界面状态。
+
+        刻意**不碰**主按钮的「取消」语义：加载时点主按钮没有意义
+        （任务列表还是上一批），但让它保持禁用 + 说明原因才对。
+        """
+        self._busy = loading
+        if loading:
+            self._action_bar.block("正在扫描文件夹…")
+        else:
+            # 走 _refresh_action_bar 而不是直接解禁用：加载失败时
+            # 列表里可能还是上一批任务，那批能投——判断依据在那边
+            self._refresh_action_bar()
+        self._retry_button.state(["disabled"])
+        self._pick_button.state(["disabled"] if loading else ["!disabled"])
+        self._load_button.state(["disabled"] if loading else ["!disabled"])
+        self._config_button.state(["disabled"] if loading else ["!disabled"])
+        self._summary.set_actions_enabled(not loading)
+
     # ---------- 汇总 ----------
+
+    def _refresh_action_bar(self) -> None:
+        """刷新底部操作条：将要投多少条、能不能点、为什么不能点。
+
+        「已选 N条 / 失败 M 条」这类数字已经在汇总条里了，这里不再
+        重复——底部只回答一个问题：**点下去会发生什么**。所以摘要给
+        的是「N个稿件 · M 个分P组 · 自制」这种结论，不是清单。
+        """
+        if self._busy:
+            return
+        picked = [
+            iid for iid in self._tree.get_children() if self._picked.get(iid)
+        ]
+        if not self._tree.get_children():
+            self._action_bar.set_summary(
+                "批量投稿", "选一个视频文件夹，这里会列出全部任务"
+            )
+            self._action_bar.block("先选一个视频文件夹")
+            return
+        if not picked:
+            self._action_bar.set_summary(
+                f"共 {len(self._tree.get_children())} 个任务",
+                "勾选要投稿的稿件，或用上方「全选」",
+            )
+            self._action_bar.block("还没有勾选任何任务")
+            return
+
+        # 一行 = 一个稿件（多 P 稿件在列表里也只占一行），
+        # 所以「稿件数」就是勾选行数，「分P 组数」要单独数。
+        parts = [f"投稿 {len(picked)} 个稿件"]
+        groups = sum(1 for iid in picked if len(self._files_of(iid)) > 1)
+        if groups:
+            parts.append(f"其中 {groups} 个是分P 组")
+        parts.append(self._copyright_text())
+        missing = sum(1 for iid in picked if iid in self._missing)
+        if missing:
+            self._action_bar.set_summary("将要投稿", " · ".join(parts))
+            self._action_bar.block(f"有 {missing} 个文件已丢失，请先删除这些行")
+            return
+        self._action_bar.set_summary("将要投稿", " · ".join(parts))
+        self._action_bar.unblock()
+
+    def _files_of(self, iid: str) -> list:
+        """该行对应的文件列表。索引越界或任务已被换掉时返回空列表。"""
+        try:
+            return task_files(self._tasks[int(iid)])
+        except (ValueError, IndexError, AttributeError):
+            return []
+
+    def _copyright_text(self) -> str:
+        """底部摘要里的投稿类型。批量页的类型由顶部统一参数决定。"""
+        try:
+            return self._copyright_var.get().strip() or COPYRIGHT_OPTIONS[0]
+        except AttributeError:  # 控件还没建（初始化早期）
+            return COPYRIGHT_OPTIONS[0]
 
     def _update_summary(self) -> None:
         """刷新汇总条：共多少、选了多少、成败各多少。"""
@@ -1428,6 +1565,7 @@ class TasksView(ttk.Frame):
         if not total:
             self._summary.set_stats("")
             self._retry_button.state(["disabled"])
+            self._refresh_action_bar()
             return
 
         picked = sum(1 for iid in self._tree.get_children() if self._picked.get(iid))
@@ -1449,6 +1587,7 @@ class TasksView(ttk.Frame):
             self._retry_button.state(["!disabled"])
         else:
             self._retry_button.state(["disabled"])
+        self._refresh_action_bar()
 
 
 # ---------- 模块级辅助 ----------

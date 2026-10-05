@@ -18,11 +18,11 @@ from ...scheduler import RunOptions, run_task
 from ...submit import get_backend
 from .. import theme
 from ..widgets import (
+    ActionBar,
     Collapsible,
     FormRow,
     OptionSwitches,
     LogConsole,
-    PrimaryButton,
     ProgressBar,
     ScrollArea,
     SecondaryButton,
@@ -91,11 +91,11 @@ class UploadView(ttk.Frame):
 
     def _build(self) -> None:
         SectionTitle(
-            self, "投稿", "选择一个视频文件，填写标题和分区后提交。"
+            self, "投稿", "选一个视频文件，填好标题和分区，底部会实时显示将要提交什么。"
         ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
 
         # 窗口压到最小尺寸时表单装不下，用滚动区兜住，
-        # 否则「开始投稿」会被挤出可视范围。
+        # 否则日志区会被挤出可视范围。
         area = ScrollArea(self)
         area.grid(row=1, column=0, sticky="nsew")
         card = area.body
@@ -107,7 +107,9 @@ class UploadView(ttk.Frame):
 
         # 视频文件：输入框 + 「选择文件…」按钮
         self._file_var = tk.StringVar()
-        row = FormRow(form, "视频文件", hint="支持 mp4 / flv / mov / mkv 等常见格式")
+        row = FormRow(
+            form, "视频文件", hint="支持 mp4 / flv / mov / mkv 等常见格式", required=True
+        )
         row.grid(row=0, column=0, sticky="ew", pady=theme.PAD_XS)
         row.add(ttk.Entry, textvariable=self._file_var, padx=(0, theme.PAD_SM))
         row.add(
@@ -148,8 +150,8 @@ class UploadView(ttk.Frame):
         row.grid(row=4, column=0, sticky="ew", pady=theme.PAD_XS)
         row.add(ttk.Entry, textvariable=self._desc_var)
 
-        # 类型（自制/转载）。转载必须填来源，所以来源输入框跟着类型显隐：
-        # 一开始就摆一个灰着的「转载来源」在自制状态下，只会让人困惑。
+        # 转载来源跟着类型显隐：自制状态下摆一个灰着的「转载来源」
+        # 只会让人困惑。
         self._copyright_var = tk.StringVar(value=copyright_option(COPYRIGHT_SELF_MADE))
         row = FormRow(form, "类型", hint="转载需要填写来源，否则 B 站会拒稿")
         row.grid(row=5, column=0, sticky="ew", pady=theme.PAD_XS)
@@ -166,7 +168,7 @@ class UploadView(ttk.Frame):
 
         self._source_var = tk.StringVar()
         self._source_row = FormRow(
-            form, "转载来源", hint="原视频链接或出处，选了转载就必须填"
+            form, "转载来源", hint="原视频链接或出处，选了转载就必须填", required=True
         )
         self._source_row.grid(row=6, column=0, sticky="ew", pady=theme.PAD_XS)
         self._source_row.add(ttk.Entry, textvariable=self._source_var)
@@ -195,35 +197,100 @@ class UploadView(ttk.Frame):
         )
         self._option_switches.grid(row=0, column=0, sticky="ew")
 
-        # 操作区
-        actions = ttk.Frame(card, style="Card.TFrame")
-        actions.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_MD, theme.PAD_SM))
-
-        self._submit_button = PrimaryButton(actions, "开始投稿", self._submit)
-        self._submit_button.pack(side="left", padx=(0, theme.PAD_SM))
-
-        self._preview_button = SecondaryButton(actions, "预览（不实际投稿）", self._dry_run)
-        self._preview_button.pack(side="left")
-
-        # 「取消」放最后：跟批量任务页一致， destructive 类操作不该
-        # 夹在常用按钮中间被误点
-        self._cancel_button = SecondaryButton(actions, "取消", self._cancel)
-        self._cancel_button.pack(side="left", padx=(theme.PAD_SM, 0))
-        self._cancel_button.state(["disabled"])
-
         self._progress = ProgressBar(card)
-        self._progress.grid(row=2, column=0, sticky="ew")
+        self._progress.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_MD, theme.PAD_SM))
 
         # 滚动容器里不能用 weight=1 让日志区「吃掉剩余空间」——
-        # 父容器高度就是内容高度，权重不会带来额外空间，反而会压缩按钮。
+        # 父容器高度就是内容高度，权重不会带来额外空间，反而会压缩内容。
         # 固定高度 + 内容超出时日志自己滚。
-        self._log = LogConsole(card, height=7)
-        self._log.grid(row=3, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+        self._log = LogConsole(card, height=theme.LOG_HEIGHT)
+        self._log.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+
+        # 操作条**在滚动区之外**，钉在页面底部。这是本次流程优化的核心：
+        # 「开始投稿」不再混在表单中间——表单一长它就被推出屏幕，
+        # 折叠区一开它就跳位置。用户不必每次都扫一遍界面找按钮。
+        self._action_bar = ActionBar(self)
+        self._action_bar.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_MD, 0))
+        self._action_bar.set_primary(
+            "开始投稿", self._submit,
+            secondary_text="仅预览", secondary_command=self._dry_run,
+        )
+        self._preview_button = self._action_bar.secondary
+
+        # 表单一改就刷新摘要：用户边填边看到「将要发生什么」，
+        # 不需要提交前再回头核对一遍。
+        for variable in (
+            self._file_var, self._title_var, self._tid_var,
+            self._copyright_var, self._dtime_var,
+        ):
+            variable.trace_add("write", lambda *_: self._refresh_action_bar())
+        self._refresh_action_bar()
 
     # ---------- 行为 ----------
 
     def refresh(self) -> None:
-        """切到本页时不需要额外加载，留空实现保持接口一致。"""
+        """切到本页时不需要额外加载，但登录态可能变了，要重算按钮可用性。"""
+        self._refresh_action_bar()
+
+    def _describe_pending(self) -> str:
+        """一句话说清「点下去会发生什么」。
+
+        提交前用户最想确认的不是「我填对了吗」（那要逐项核对），
+        而是「这一下会发出什么」。所以这里给结论而不是清单：
+        文件名 + 分区 + 类型 + 是否延时，四个信息点，多了没人读。
+        """
+        raw = self._file_var.get().strip()
+        if not raw:
+            return ""
+        name = Path(raw).name
+        tid = self._tid_var.get().strip() or "21 - 日常"
+        kind = self._copyright_var.get().strip() or COPYRIGHT_OPTIONS[0]
+        parts = [f"投稿「{name}」", f"分区 {tid}", kind]
+        offset = self._dtime_var.get().strip()
+        if offset:
+            parts.append(f"延时 {offset} 小时发布")
+        else:
+            parts.append("立即发布")
+        return " · ".join(parts)
+
+    def _logged_in(self) -> bool:
+        """当前是否已登录。
+
+        对缺 ``ctx`` 的宿主对象返回 True：视图不该假设 app 一定带登录
+        上下文（测试里的假 app就没有），把「查不到」当成「已登录」是
+        更安全的默认——顶多让投稿在服务端失败，而不是让按钮永远点不动。
+        """
+        ctx = getattr(self.app, "ctx", None)
+        return bool(getattr(ctx, "logged_in", True))
+
+    def _refresh_action_bar(self) -> None:
+        """刷新底部摘要与按钮可用性。
+
+        未登录时**就地禁用并说明原因**，而不是让人点下去、再在日志里
+        看到「尚未登录，请先到登录页扫码」——那是事后通知，用户已经
+        白点了一次，还可能以为自己哪里填错了。
+
+        两个按钮的门槛**不一样**：预览不需要登录（``_run(dry_run=True)``
+        拿的是 ``need_login=False`` 的 client），但同样得有文件。所以登录
+        状态只挡主按钮，文件缺失两个都挡——一个亮着的「仅预览」在空表单
+        状态下点下去只会报错，是最容易误导人的那种亮。
+        """
+        if self._worker.running:
+            return  # 运行中由 _set_busy 接管，别抢状态
+        summary = self._describe_pending()
+        self._action_bar.set_summary(
+            "将要投稿" if summary else "填完上面几项就能投稿", summary or "先选一个视频文件"
+        )
+        has_file = bool(self._file_var.get().strip())
+        preview = self._action_bar.secondary
+        if preview is not None:
+            preview.state(["!disabled"] if has_file else ["disabled"])
+        if not self._logged_in():
+            self._action_bar.block("尚未登录 · 请先到「登录」页扫码")
+        elif not has_file:
+            self._action_bar.block("还差一个视频文件")
+        else:
+            self._action_bar.unblock()
 
     def _update_more_hint(self) -> None:
         """收起时右侧列出已开启的项——不然设了什么全看不见。"""
@@ -239,6 +306,9 @@ class UploadView(ttk.Frame):
             self._source_row.grid()
         else:
             self._source_row.grid_remove()
+        # 切换类型会改变「将发生什么」（自制/转载），但操作条可能还没建
+        if hasattr(self, "_action_bar"):
+            self._refresh_action_bar()
 
     def _pick_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -324,7 +394,10 @@ class UploadView(ttk.Frame):
         )
 
     def _submit(self) -> None:
-        if not self.app.ctx.logged_in:
+        # 未登录时按钮已经是禁用态，正常点不到。这里仍然兜一道：
+        # 快捷键 Ctrl+Enter 走的是同一条路径，禁用判断在 ActionBar 里，
+        # 但登录态可能在按下和执行之间过期。
+        if not self._logged_in():
             self._log.append("尚未登录，请先到「登录」页扫码")
             return
         self._run(dry_run=False)
@@ -387,7 +460,15 @@ class UploadView(ttk.Frame):
         self._log.append(f"错误：{exc}")
 
     def _set_busy(self, busy: bool) -> None:
-        state = ["disabled"] if busy else ["!disabled"]
-        self._submit_button.state(state)
-        self._preview_button.state(state)
-        self._cancel_button.state(["!disabled"] if busy else ["disabled"])
+        """运行态切换。
+
+        运行中主按钮变成「取消」而不是灰掉的「开始投稿」——用户此刻
+        唯一想做的就是停下来，禁用按钮不给任何出路。
+        """
+        if busy:
+            self._action_bar.set_busy(True, cancel=self._cancel)
+            self._preview_button.state(["disabled"])
+        else:
+            self._action_bar.set_busy(False)
+            self._preview_button.state(["!disabled"])
+            self._refresh_action_bar()

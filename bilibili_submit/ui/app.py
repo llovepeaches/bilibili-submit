@@ -173,12 +173,12 @@ class App(ttk.Frame):
         text_box = ttk.Frame(brand, style="Nav.TFrame")
         text_box.grid(row=0, column=1, sticky="w")
         tk.Label(
-            text_box, text="哔哩投稿", font=theme.FONT_MEDIUM,
+            text_box, text="哔哩投稿", font=theme.font("body-strong"),
             background=theme.NAV_BG, foreground=theme.NAV_FG,
         ).pack(anchor="w")
         tk.Label(
-            text_box, text="自动投稿工具", font=theme.FONT_SMALL,
-            background=theme.NAV_BG, foreground=theme.TEXT_MUTED,
+            text_box, text="自动投稿工具", font=theme.font("caption"),
+            background=theme.NAV_BG, foreground=theme.INK_MUTED,
         ).pack(anchor="w")
 
     def _build_content(self) -> None:
@@ -196,7 +196,10 @@ class App(ttk.Frame):
         self.show("登录")
 
     def _build_statusbar(self) -> None:
-        bar = ttk.Frame(self, style="Surface.TFrame")
+        # 墨色条：和底部 ActionBar 同一套配色。状态栏和操作条一深一浅地
+        # 夹住内容区，视线自然被上下两条边「收」住——这是用底色分层
+        # 代替阴影的又一处应用。
+        bar = ttk.Frame(self, style="Ink.TFrame")
         bar.grid(row=1, column=0, columnspan=2, sticky="ew")
         bar.columnconfigure(0, weight=1)
 
@@ -205,26 +208,26 @@ class App(ttk.Frame):
             row=0, column=0, columnspan=3, sticky="ew"
         )
 
-        cells = ttk.Frame(bar, style="Surface.TFrame")
+        cells = ttk.Frame(bar, style="Ink.TFrame")
         cells.grid(row=1, column=0, columnspan=3, sticky="ew")
         cells.columnconfigure(1, weight=1)
 
         self._status_login = tk.Label(
-            cells, text="", font=theme.FONT_SMALL, background=theme.SURFACE,
-            foreground=theme.TEXT_SECONDARY, anchor="w",
+            cells, text="", font=theme.font("caption"), background=theme.INK_SURFACE,
+            foreground=theme.INK_SURFACE_FG, anchor="w",
         )
         self._status_login.grid(row=0, column=0, sticky="w", padx=theme.PAD_MD, pady=theme.PAD_SM)
 
         # 中间段留给任务进度，由批量任务页通过 set_task_progress 写入
         self._status_task = tk.Label(
-            cells, text="", font=theme.FONT_SMALL, background=theme.SURFACE,
-            foreground=theme.TEXT_MUTED, anchor="center",
+            cells, text="", font=theme.font("caption"), background=theme.INK_SURFACE,
+            foreground=theme.INK_SURFACE_MUTED, anchor="center",
         )
         self._status_task.grid(row=0, column=1, sticky="ew")
 
         self._status_ffmpeg = tk.Label(
-            cells, text="", font=theme.FONT_SMALL, background=theme.SURFACE,
-            foreground=theme.TEXT_SECONDARY, anchor="e",
+            cells, text="", font=theme.font("caption"), background=theme.INK_SURFACE,
+            foreground=theme.INK_SURFACE_MUTED, anchor="e",
         )
         self._status_ffmpeg.grid(row=0, column=2, sticky="e", padx=theme.PAD_MD)
 
@@ -297,7 +300,8 @@ class App(ttk.Frame):
         if generation != self._status_generation:
             return
 
-        fg, _bg = theme.tone("ok") if snapshot.logged_in else theme.tone("idle")
+        # 墨底上要用亮色版状态色（theme.tone 的深色前景压上来会糊）
+        fg = theme.tone_on_ink("ok" if snapshot.logged_in else "idle")
         if snapshot.login_error:
             self._status_login.configure(
                 text="○ 未登录（cookie 读取失败）", foreground=fg
@@ -310,21 +314,21 @@ class App(ttk.Frame):
 
         info = snapshot.ffmpeg
         if info is None:
-            warn_fg, _ = theme.tone("warn")
             self._status_ffmpeg.configure(
                 text="ffmpeg 未找到（不影响投稿，仅自动抽帧不可用）",
-                foreground=warn_fg,
+                foreground=theme.tone_on_ink("warn"),
             )
         else:
             self._status_ffmpeg.configure(
-                text=f"ffmpeg 就绪（{info.source}）", foreground=theme.TEXT_SECONDARY
+                text=f"ffmpeg 就绪（{info.source}）",
+                foreground=theme.INK_SURFACE_MUTED,
             )
 
     def _apply_status_failed(self, generation: int, reason: str) -> None:
         """探测炸了要显示出来。状态栏不能永远停在「检测中…」。"""
         if generation != self._status_generation:
             return
-        idle_fg, _bg = theme.tone("idle")
+        idle_fg = theme.tone_on_ink("idle")
         self._status_login.configure(text="○ 登录态未知", foreground=idle_fg)
         self._status_ffmpeg.configure(
             text=f"环境检测失败：{reason}", foreground=idle_fg

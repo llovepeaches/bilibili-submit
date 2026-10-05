@@ -1134,9 +1134,12 @@ def test_run_failure_unlocks_buttons(tmp_path, monkeypatch):
         monkeypatch.setattr(view._worker, "run", boom)
         view._run()
 
-        assert "disabled" not in view._run_button.state(), "启动失败后按钮应恢复"
-        # 取消按钮反倒该是禁用的——压根没有任务在跑
-        assert "disabled" in view._cancel_button.state()
+        assert "disabled" not in view._action_bar._primary.state(), (
+            "启动失败后主按钮应恢复可点"
+        )
+        assert view._action_bar._primary.cget("text") == "开始投稿", (
+            "启动失败后主按钮应从「取消」变回「开始投稿」"
+        )
         assert view._editable(), "_busy 必须归位，否则再也点不动"
         assert "无法启动任务" in view._log._text.get("1.0", "end")
     finally:

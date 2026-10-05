@@ -90,7 +90,7 @@ class LoginView(ttk.Frame):
             qr_holder,
             width=theme.QR_SIZE,
             height=theme.QR_SIZE,
-            background=theme.SURFACE_ALT,
+            background=theme.PAPER_ALT,
             highlightthickness=0,
         )
         self._canvas.pack()
@@ -98,9 +98,9 @@ class LoginView(ttk.Frame):
         self._status = tk.Label(
             card,
             text="尚未获取二维码",
-            font=theme.FONT_MEDIUM,
-            background=theme.SURFACE,
-            foreground=theme.TEXT_SECONDARY,
+            font=theme.font("subtitle"),
+            background=theme.PAPER,
+            foreground=theme.INK_SECOND,
         )
         self._status.grid(row=1, column=0)
 
@@ -119,9 +119,9 @@ class LoginView(ttk.Frame):
         self._link = tk.Label(
             card,
             text="",
-            font=theme.FONT_SMALL,
-            background=theme.SURFACE,
-            foreground=theme.PRIMARY_DARK,
+            font=theme.font("caption"),
+            background=theme.PAPER,
+            foreground=theme.PINK_DEEP,
             cursor="hand2",
             wraplength=520,
         )
@@ -130,6 +130,13 @@ class LoginView(ttk.Frame):
 
         self._log = LogConsole(card, height=6)
         self._log.grid(row=4, column=0, sticky="ew")
+        # 预先写一行：空的日志框在浅色界面上是一大块无意义的色块，
+        # 看着像界面坏了。一句话说明「这里会出现什么」就够了——
+        # 用户关心的是流程输出，不是具体每一步的技术细节
+        self._log.append(
+            "点「获取二维码」后，这里会显示登录流程的每一步："
+            "申请二维码 → 等待扫码 → 手机确认 → 保存 cookie"
+        )
 
         draw_placeholder(self._canvas, "点击「获取二维码」开始")
 
@@ -222,7 +229,7 @@ class LoginView(ttk.Frame):
     def _show_qr(self, url: str) -> None:
         draw_qr(self._canvas, url)
         self._link.configure(text=f"扫码不便？点此复制链接：{url}")
-        self._status.configure(text="等待扫码…", foreground=theme.TEXT_SECONDARY)
+        self._status.configure(text="等待扫码…", foreground=theme.INK_SECOND)
 
     def _copy_link(self, _event: "object" = None) -> None:
         if not self._qr_url:
@@ -264,7 +271,7 @@ class LoginView(ttk.Frame):
     def _on_error(self, exc: BaseException) -> None:
         self._set_busy(False)
         if isinstance(exc, Cancelled):
-            self._status.configure(text="已取消", foreground=theme.TEXT_MUTED)
+            self._status.configure(text="已取消", foreground=theme.INK_MUTED)
             return
         # 二维码没出来是最常见的故障，而日志区在卡片最下方，
         # 用户未必会往下看。状态标签紧挨着二维码，必须在这里给出可读原因。
