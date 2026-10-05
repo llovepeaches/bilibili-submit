@@ -129,15 +129,23 @@ Type: filesandordirs; Name: "{app}\_internal"
 // "dist\bilibili-submit-gui\..."：改了 BuildDir 这里会跟着变，
 // 而写死的话只有真正编译失败才看得出问题——ISCC 不检查文件是否存在，
 // 它照抄 [Files] 的通配路径，装出一个缺文件的安装器。
+//
+// 但**不能直接**用 '{#BuildDir}' 拼在 {src} 后面：两者的基准不同——
+//   · {src}            = 安装器 exe 所在目录，也就是 dist\
+//   · [Files] 的 Source = 相对于 .iss 所在目录，也就是仓库根
+// 所以 '{src}\' + '{#BuildDir}' 会拼成 dist\dist\bilibili-submit-gui\，
+// 文件当然不存在。CI 上真挂过：InitializeSetup 返回 False 让安装中止，
+// 而 /SUPPRESSMSGBOXES 又把 MsgBox 压掉了，表现为无声挂起。
+// 用 ExtractFileName 取末段，既避开重复前缀，又和 BuildDir 同源。
 function InitializeSetup(): Boolean;
 var
   BuiltExe: String;
 begin
   Result := True;
-  BuiltExe := ExpandConstant('{src}\' + '{#BuildDir}\{#AppExeName}');
+  BuiltExe := ExpandConstant('{src}\') + ExtractFileName('{#BuildDir}') + '\{#AppExeName}';
   if not FileExists(BuiltExe) then
   begin
-    MsgBox('找不到打包产物：' + '{#BuildDir}\{#AppExeName}' + #13#10 +
+    MsgBox('找不到打包产物：' + BuiltExe + #13#10 +
            '请先运行 build_windows.bat（或 CI）打包，再编译安装器。' + #13#10#13#10 +
            '安装器会跳过本次安装。', mbError, MB_OK);
     Result := False;
@@ -155,7 +163,8 @@ procedure InitializeWizard();
 var
   FFmpegPath: String;
 begin
-  FFmpegPath := ExpandConstant('{src}\' + '{#BuildDir}\ffmpeg.exe');
+  // 同 InitializeSetup：{src} 已经是 dist\，不能再拼一层 dist\
+  FFmpegPath := ExpandConstant('{src}\') + ExtractFileName('{#BuildDir}') + '\ffmpeg.exe';
   if not FileExists(FFmpegPath) then
     Log('提示：产物里没有 ffmpeg.exe，自动抽帧将不可用（不影响其他功能）');
 end;

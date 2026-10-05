@@ -252,7 +252,7 @@ def _check_build_layout(text: str, defines: dict[str, str]) -> None:
         for line in code.splitlines():
             if "ExpandConstant" not in line:
                 continue
-            if "{#BuildDir}" not in line:
+            if "{#BuildDir}" not in line and "ExtractFileName" not in line:
                 fail(
                     f"[Code] 里的路径写死了目录名：{line.strip()[:60]}——"
                     "改用 {#BuildDir}，否则改了产物目录不会被发现"
@@ -261,6 +261,21 @@ def _check_build_layout(text: str, defines: dict[str, str]) -> None:
                 fail(
                     f"[Code] 里的路径写死了 exe 名：{line.strip()[:60]}——"
                     "改用 {#AppExeName}，否则改了主程序名不会被发现"
+                )
+            # {src} 已经是 dist\，再拼 {#BuildDir} 会变成 dist\dist\...。
+            # 这个坑 CI 上真踩过：InitializeSetup 返回 False 让安装中止，
+            # 而 /SUPPRESSMSGBOXES 压掉了 MsgBox，表现为无声挂起。
+            #
+            # 判据是「{src} 与 {#BuildDir} 同时出现、且没用
+            # ExtractFileName 取末段」——不能靠目录名字面量去匹配，
+            # 坏写法里写的是宏名 {#BuildDir} 而不是展开后的路径。
+            if "{src}" in line and "{#BuildDir}" in line \
+                    and "ExtractFileName" not in line:
+                fail(
+                    f"[Code] 把 {{#BuildDir}} 直接拼在 {{src}} 后面了："
+                    f"{line.strip()[:60]}——{{src}} 已经是 dist\\，"
+                    "会拼成 dist\\dist\\...。用 ExtractFileName('{#BuildDir}')"
+                    "取末段"
                 )
 
 

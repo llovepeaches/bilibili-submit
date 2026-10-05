@@ -381,6 +381,39 @@ def test_ci_waits_for_the_installer_process():
     )
 
 
+def test_code_paths_do_not_double_the_dist_prefix():
+    """``[Code]`` 里 ``{src}`` 和 ``{#BuildDir}`` 不能直接拼在一起。
+
+    两者的基准不同：
+
+    - ``{src}`` = 安装器 exe 所在目录，也就是 ``dist\\``
+    - ``[Files]`` 的 ``Source`` = 相对于 ``.iss`` 所在目录，也就是仓库根
+
+    所以 ``'{src}\\' + '{#BuildDir}'`` 拼出来是 ``dist\\dist\\bilibili-
+    submit-gui\\``，文件当然不存在。CI 上真踩过：``InitializeSetup``
+    返回 False 让安装中止，而 ``/SUPPRESSMSGBOXES`` 又把 MsgBox 压掉了，
+    表现为**无声挂起**——没有报错，job 就那么卡着。
+
+    正确写法是用 ``ExtractFileName('{#BuildDir}')`` 取末段。
+    """
+    code = _section(ISS.read_text(encoding="utf-8-sig"), "Code")
+    for line in code.splitlines():
+        if "ExpandConstant" not in line:
+            continue
+        assert not (
+            "{src}" in line and "{#BuildDir}" in line
+            and "ExtractFileName" not in line
+        ), (
+            f"[Code] 把 {{#BuildDir}} 直接拼在 {{src}} 后面：{line.strip()[:60]}"
+            "——{src} 已经是 dist\\，会拼成 dist\\dist\\..."
+        )
+        # 反过来也要成立：既然要取末段，就得真的取
+        if "{src}" in line:
+            assert "ExtractFileName" in line, (
+                f"[Code] 用 {{src}} 拼路径却没取末段：{line.strip()[:60]}"
+            )
+
+
 def test_installer_uses_correct_event_prototypes():
     """``[Code]`` 段里事件函数的原型必须写对。
 
