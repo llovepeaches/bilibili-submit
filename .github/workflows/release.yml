@@ -42,21 +42,61 @@ jobs:
           EXE_NAME: bilibili-submit-standalone
         run: python -m PyInstaller bili_submit.spec --noconfirm
 
-      # GUI 版：windowed（无控制台黑框）+ 带上 tkinter + 内嵌 ffmpeg。
-      # BUNDLE_FFMPEG=1 显式给上：spec 里 GUI 虽已默认内嵌，
-      # 但显式写出来能让"这次构建带了 ffmpeg"在日志里一目了然，
-      # 将来若有人改默认值，这里也不会被悄悄带着走。
-      - name: 打包图形界面版
+      # GUI 单文件便携版：windowed（无控制台黑框）+ tkinter + 内嵌 ffmpeg。
+      # 保留它是因为「拷走即用」是一种真实需求：U 盘、别人的机器、
+      # 不想装东西的环境。名字带 -portable 是为了和下面的安装版目录
+      # 区分——两者 EXE_NAME 相同但形态不同（单文件 vs 目录），
+      # 共用名字会在 dist 下撞车。
+      - name: 打包图形界面版（单文件便携版）
         env:
           GUI: '1'
           BUNDLE_FFMPEG: '1'
-          EXE_NAME: bilibili-submit-gui
+          EXE_NAME: bilibili-submit-gui-portable
         run: python -m PyInstaller bili_submit.spec --noconfirm
 
       # 外置份给 full 包用：启动比内嵌快，也不用每次解压 85MB
       - name: 复制外置 ffmpeg 到 dist
         shell: pwsh
         run: Copy-Item vendor\ffmpeg.exe dist\ffmpeg.exe -Force
+
+      # 安装版：onedir 目录版。ffmpeg **不进归档**，而是放到 exe 同目录——
+      # 每次启动省掉解压 60MB 到 %TEMP%，而且用户能自己换 ffmpeg 版本
+      # （ffmpeg.py 本来就优先找这个位置）。目录名 = EXE_NAME。
+      # 产物结构：dist\bilibili-submit-gui\{exe, ffmpeg.exe, _internal\, config\}
+      #
+      # --clean 只清 build\ 缓存、不动 dist\ 里已有的 exe（已实测），
+      # 所以这里可以放心用，上面的轻量版/standalone/portable 都还在。
+      - name: 打包图形界面版（安装用onedir）
+        env:
+          GUI: '1'
+          INSTALLER: '1'
+          EXE_NAME: bilibili-submit-gui
+        run: python -m PyInstaller bili_submit.spec --noconfirm --clean
+
+      - name: 整理安装版目录
+        shell: pwsh
+        run: |
+          $dir = "dist\bilibili-submit-gui"
+          Copy-Item vendor\ffmpeg.exe "$dir\ffmpeg.exe" -Force
+          Copy-Item config "$dir\config" -Recurse -Force
+          Copy-Item README.md "$dir\README.md" -Force
+          Get-ChildItem $dir | Format-Table Name, `
+            @{n='MB';e={[math]::Round($_.Length/1MB,2)}} -AutoSize
+
+      - name: 安装 Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress --limit-output
+
+      - name: 编译安装器
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) { throw "找不到 ISCC.exe" }
+          & $iscc installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 编译失败 ($LASTEXITCODE)" }
 
       - name: 冒烟测试
         shell: pwsh
@@ -82,20 +122,17 @@ jobs:
           & .\dist\bilibili-submit.exe check
           Write-Host "check 退出码 $LASTEXITCODE（未登录返回 1 属正常）"
 
-          # GUI 是 windowed 程序：没有 stdout，不能靠 --version / check 验证。
-          # 改为「启动后看它是否立刻退出」——缺 tkinter 时它会静默失败，
-          # 这是唯一能自动发现该问题的手段。
-          $gui = ".\dist\bilibili-submit-gui.exe"
-          if (-not (Test-Path $gui)) { throw "GUI exe 未生成: $gui" }
+          # GUI 单文件便携版：windowed 程序，没有 stdout，不能靠 --version /
+          # check 验证。改为「启动后看它是否立刻退出」——缺 tkinter 时它会
+          # 静默失败，这是唯一能自动发现该问题的手段。
+          $gui = ".\dist\bilibili-submit-gui-portable.exe"
+          if (-not (Test-Path $gui)) { throw "GUI 单文件版未生成: $gui" }
 
-          # 内嵌 ffmpeg 的 GUI 版应该明显大于只带 tkinter 的体积。
-          # 实测参考（v0.2.2）：只带 tkinter 约 13MB，内嵌 ffmpeg 后约 76MB
-          # （standalone 72.8MB - 轻量版 10.5MB = ffmpeg 贡献约 62MB）。
-          # 不直接检查归档内容（onefile 是压缩包，探测 ffmpeg 很麻烦），
-          # 用体积做下限断言，简单且能挡住"忘了带 ffmpeg"这种回归。
-          # 40MB 是刻意保守的中间值：远高于 13MB（漏带），远低于 76MB（带了）。
+          # 内嵌 ffmpeg 的单文件版应该明显大于只带 tkinter 的体积。
+          # 实测参考（v0.2.2）：只带 tkinter 约 13MB，内嵌 ffmpeg 后约 76MB。
+          # 40MB 是刻意保守的中间值：远高于 13MB（漏带），远低于 76MB。
           $guiMB = [math]::Round((Get-Item $gui).Length / 1MB, 1)
-          Write-Host "GUI exe 体积: $guiMB MB（预期约 72MB，>= 40MB）"
+          Write-Host "GUI 单文件版体积: $guiMB MB（预期约 76MB，>= 40MB）"
           if ($guiMB -lt 40) {
             throw "GUI exe 只有 $guiMB MB，ffmpeg 很可能没内嵌进去（预期 >= 40MB）"
           }
@@ -106,7 +143,81 @@ jobs:
             throw "GUI 启动后立即退出（退出码 $($proc.ExitCode)），可能缺少 tkinter"
           }
           Stop-Process -Id $proc.Id -Force
-          Write-Host "GUI 启动正常，已关闭"
+          Write-Host "GUI 单文件版启动正常"
+
+          # 安装版目录（onedir）：结构与单文件版完全不同，必须逐项核对。
+          # 这里最容易漏的是 _internal\——少了它 exe 在、能双击、一启动就
+          # 闪退，而任何"文件存在"检查都发现不了。
+          $guiDir = ".\dist\bilibili-submit-gui"
+          $guiExe = "$guiDir\bilibili-submit-gui.exe"
+          if (-not (Test-Path $guiExe)) { throw "安装版主程序未生成: $guiExe" }
+          if (-not (Test-Path "$guiDir\ffmpeg.exe")) {
+            throw "安装版缺少 ffmpeg.exe（必须在 exe 同目录，不能在 _internal 里）"
+          }
+          if (-not (Test-Path "$guiDir\_internal")) {
+            throw "安装版缺少 _internal\（Python 运行时，缺了会双击闪退）"
+          }
+          if (-not (Test-Path "$guiDir\config\config.example.yaml")) {
+            throw "安装版缺少 config\config.example.yaml"
+          }
+
+          # 目录版体积约 75MB（13MB 程序 + 62MB ffmpeg），明显小于
+          # 单文件版的 76MB——因为不再有归档压缩层的开销。
+          $dirMB = [math]::Round(
+            ((Get-ChildItem $guiDir -Recurse | Measure-Object Length -Sum).Sum) / 1MB, 1)
+          Write-Host "安装版目录体积: $dirMB MB"
+          if ($dirMB -lt 40) {
+            throw "安装版目录只有 $dirMB MB，ffmpeg 或 _internal 很可能没打进去"
+          }
+
+          $proc2 = Start-Process -FilePath $guiExe -PassThru
+          Start-Sleep -Seconds 8
+          if ($proc2.HasExited) {
+            throw "安装版启动后立即退出（退出码 $($proc2.ExitCode)）"
+          }
+          Stop-Process -Id $proc2.Id -Force
+          Write-Host "安装版启动正常"
+
+          # 安装器本体：编译成功还不够，必须真的装一遍——"装完双击闪退"
+          # 这种问题只有装过才知道。
+          $setup = ".\dist\bilibili-submit-setup.exe"
+          if (-not (Test-Path $setup)) { throw "安装器未生成: $setup" }
+          $setupMB = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+          Write-Host "安装器体积: $setupMB MB"
+          if ($setupMB -lt 20) {
+            throw "安装器只有 $setupMB MB，ffmpeg 或 _internal 很可能没打进去"
+          }
+
+          & $setup /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+          if ($LASTEXITCODE -ne 0) { throw "静默安装失败 ($LASTEXITCODE)" }
+          Start-Sleep -Seconds 3
+
+          $installed = "${env:ProgramFiles}\bilibili-submit"
+          if (-not (Test-Path "$installed\bilibili-submit-gui.exe")) {
+            throw "安装后找不到主程序（目录：$installed）"
+          }
+          foreach ($f in @("ffmpeg.exe", "_internal", "config\config.example.yaml", "README.md")) {
+            if (-not (Test-Path "$installed\$f")) { throw "安装后缺少 $f" }
+          }
+
+          $proc3 = Start-Process -FilePath "$installed\bilibili-submit-gui.exe" -PassThru
+          Start-Sleep -Seconds 8
+          if ($proc3.HasExited) {
+            throw "安装后的程序启动即退出（退出码 $($proc3.ExitCode)）"
+          }
+          Stop-Process -Id $proc3.Id -Force
+          Write-Host "安装版安装 + 启动 + 卸载全流程正常"
+
+          # 卸载器也要能跑：坏掉的卸载器会留下 Program Files 碎片，
+          # 下次升级直接被挡。
+          $unins = "$installed\unins000.exe"
+          if (-not (Test-Path $unins)) { throw "缺少卸载器" }
+          $up = Start-Process -FilePath $unins -ArgumentList "/VERYSILENT" -Wait -PassThru
+          if ($up.ExitCode -ne 0) { throw "静默卸载失败 ($($up.ExitCode))" }
+          Start-Sleep -Seconds 2
+          if (Test-Path "$installed\bilibili-submit-gui.exe") {
+            throw "卸载后主程序仍在：卸载不干净"
+          }
 
           # PowerShell 的 step 退出码取自最后一条原生命令的 $LASTEXITCODE，
           # 不显式归零的话，check 的 1 会让整个 step 判为失败。
@@ -156,55 +267,78 @@ jobs:
 
           | 资产 | 大小 | 说明 |
           |---|---|---|
-          | `bilibili-submit-gui.exe` | ~76 MB | **图形界面版**，双击开窗口操作，ffmpeg 已内置 |
+          | `bilibili-submit-setup.exe` | ~40 MB | **图形界面安装版**，推荐。双击安装，开始菜单有入口，能干净卸载 |
+          | `bilibili-submit-gui-portable.exe` | ~76 MB | 图形界面单文件便携版，拷走即用，无需安装 |
           | `bilibili-submit-standalone.exe` | ~73 MB | 命令行单文件版，ffmpeg 已内置 |
           | `bilibili-submit.exe` | ~11 MB | 命令行轻量 exe，需自备 ffmpeg |
           | `bilibili-submit-full-windows.zip` | ~43 MB | 命令行 exe + 外置 ffmpeg.exe，启动最快 |
           | `bilibili-submit-mini-windows.zip` | ~10 MB | 命令行 exe + config，不含 ffmpeg |
 
-          怎么选：
+          ## 怎么选
 
-          - **想要窗口界面** → `bilibili-submit-gui.exe`（ffmpeg 已内置，开箱即用）
-          - 想双击就用、不想管 ffmpeg → `standalone`
-          - 在意启动速度和体积 → `full`，让 `ffmpeg.exe` 跟着 exe 走
-            （启动不用解压 76MB，代价是要带着 ffmpeg.exe 一起拷）
+          **用图形界面**（大部分人）：
+          - 自己的电脑长期用 → `bilibili-submit-setup.exe`（安装版）。
+            装完在开始菜单里有，升级直接覆盖，不会弄乱系统；
+          - 临时用、U 盘、别人的机器 → `bilibili-submit-gui-portable.exe`，
+            不用装，双击就开。
 
-          图形界面版自带扫码登录、投稿表单、批量任务、历史与设置，
-          和命令行共用同一套逻辑，两者可以混着用。
+          **用命令行**：
+          - 想单文件开箱即用 → `standalone`
+          - 在意启动速度 → `full`，让 `ffmpeg.exe` 跟着 exe 走
+
+          ## 图形界面版
+
+          自带扫码登录、投稿表单、批量任务、历史与设置，和命令行共用
+          同一套逻辑，两者可以混着用。
+
+          安装版与便携版的区别只在打包方式，功能完全一致：
+
+          | | 安装版 | 便携版 |
+          |---|---|---|
+          | 安装 | 需要（标准安装向导） | 不需要 |
+          | 启动速度 | 快（不用解压） | 较慢（每次解压 ffmpeg 到临时目录） |
+          | 快捷方式 | 开始菜单，可选桌面 | 无 |
+          | 升级 | 重新运行安装包即可 | 重新下载替换 |
+          | 卸载 | 「设置 → 应用」里可卸载 | 直接删文件 |
+
+          图形界面版的用户数据（登录状态、界面偏好、投稿历史）存在
+          用户目录下的 `.config\bilibili_submit\`，**卸载不会删除**——
+          重装后不用重新扫码。
 
           ffmpeg 只影响 `cover: auto` 自动抽帧，其他功能不依赖它。
-          内置 ffmpeg 的版本（gui / standalone）启动时会把 ffmpeg
-          解压到临时目录，首次启动稍慢，之后有系统缓存会快一些。
 
           ## 使用
 
-          图形界面版：双击 `bilibili-submit-gui.exe`，先在「登录」页扫码，
+          图形界面版：双击打开，先在「登录」页扫码（**扫完要在手机上点确认**），
           再去「投稿」页选文件填写信息。
 
           命令行版：
 
           1. 解压（下载 exe 的话跳过这步）
-          2. `bilibili-submit.exe login` 手机扫码登录（**扫完要在手机上点确认**）
+          2. `bilibili-submit.exe login` 手机扫码登录
           3. `bilibili-submit.exe upload 视频.mp4 --title "标题" --tid 21 --tag "标签"`
           4. `bilibili-submit.exe check` 自检
 
           ## 注意事项
 
           - 首次运行可能被杀毒软件拦截：PyInstaller 的启动器常被误判，
-            请在 Windows Defender 里添加白名单。带 ffmpeg 的版本
-            （gui / standalone）启动时要把内置 ffmpeg 解压到临时目录，
-            更容易触发误报。
-          - 建议用 Windows Terminal 打开以正确显示二维码；
+            请在 Windows Defender 里添加白名单。安装版把程序放在
+            Program Files 下、且不往临时目录解压文件，被拦的概率比
+            单文件版低一些。
+          - 安装版默认装到 `C:\Program Files\bilibili-submit`。
+            安装时可以选择「仅为我安装」装到用户目录，不需要管理员权限。
+          - 建议用 Windows Terminal 打开命令行版以正确显示二维码；
             传统 cmd 显示乱码时，复制链接到手机打开同样可以登录。
           - 新号投稿频控较严，批量投稿请设置任务间隔。
           - 仅供管理自己的账号投稿使用。
           "@
           gh release create $tag `
-            "dist\bilibili-submit-gui.exe#图形界面版（内置 ffmpeg，约 76MB）" `
-            "dist\bilibili-submit-standalone.exe#单文件版（内置 ffmpeg，约 73MB）" `
-            "dist\bilibili-submit.exe#轻量 exe（不含 ffmpeg，约 11MB）" `
-            "dist\bilibili-submit-full-windows.zip#完整版（外置 ffmpeg，约 43MB）" `
-            "dist\bilibili-submit-mini-windows.zip#轻量版（不含 ffmpeg，约 10MB）" `
+            "dist\bilibili-submit-setup.exe#图形界面安装版（推荐，约 40MB）" `
+            "dist\bilibili-submit-gui-portable.exe#图形界面便携版（免安装，约 76MB）" `
+            "dist\bilibili-submit-standalone.exe#命令行单文件版（内置 ffmpeg，约 73MB）" `
+            "dist\bilibili-submit.exe#命令行轻量 exe（不含 ffmpeg，约 11MB）" `
+            "dist\bilibili-submit-full-windows.zip#命令行完整版（外置 ffmpeg，约 43MB）" `
+            "dist\bilibili-submit-mini-windows.zip#命令行轻量版（不含 ffmpeg，约 10MB）" `
             --repo ${{ github.repository }} `
             --title "bilibili-submit $tag" `
             --notes $notes
@@ -218,7 +352,9 @@ jobs:
           $repo = "${{ github.repository }}"
           Write-Host ""
           Write-Host "公开发布完成，下载链接：" -ForegroundColor Green
-          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-gui.exe"
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-setup.exe"
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-gui-portable.exe"
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-standalone.exe"
           Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-standalone.exe"
           Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit.exe"
           Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-full-windows.zip"

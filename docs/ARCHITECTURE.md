@@ -51,6 +51,8 @@ config / scheduler / cli     编排：配置、任务执行、命令行
 | `ui/environment.py` | 登录态与 ffmpeg 的纯探测，**不碰 Tk** | UI 操作 |
 | `ui/views/` | 各页面：把数据画出来、把操作翻译成下层调用 | 业务逻辑 |
 | `ui/app.py` | 主窗口、导航、状态栏 | 业务判断 |
+| `bili_submit.spec` | 打包配置。`INSTALLER=1` 走 onedir（安装版），否则 onefile | 业务代码 |
+| `installer.iss` | Inno Setup 安装器脚本（只装文件，不含代码逻辑） | 运行时行为 |
 
 ## 关键设计决策
 
@@ -704,6 +706,103 @@ Worker 完成只是把结果 `after(0)` 排进队列，能不能排上、什么�
 打桩成一调即抛，再走文件夹加载还能成功，才真正证明主路径没碰 yaml。
 
 所以顺序：写测试 → 注回 bug → 确认红 →（必要时修正测试）→ 还原 → 确认绿。
+
+## 打包形态：onefile 与 onedir
+
+图形界面版有两种分发形态，由 `bili_submit.spec` 读 `INSTALLER` 决定：
+
+| | 便携版 | 安装版 |
+|---|---|---|
+| 环境变量 | `GUI=1 BUNDLE_FFMPEG=1` | `GUI=1 INSTALLER=1` |
+| PyInstaller 形态 | onefile 单文件 | **onedir 目录** |
+| 产物 | 一个 exe | `dist\<EXE_NAME>\` 目录 + 安装器 |
+| ffmpeg | 打进 exe 归档 | **构建脚本复制到 exe 同目录** |
+| 启动 | 每次解压 60MB 到 `%TEMP%` | 即用 |
+
+安装版选 onedir 不是省事，是因为 onefile 唯一的代价就是启动时解压：
+GUI 内嵌 ffmpeg 后每次启动都要把 60MB 写到临时目录。装在
+Program Files 下这会明显变慢，临时目录里的 exe 也更容易被杀软拦。
+onedir 把 ffmpeg 放 exe 同目录，`ffmpeg.py` 本来就优先找那个位置
+（`_candidates_in_app_dir`），于是既省了解压，用户也能自己换版本。
+
+代价是「一个文件」变成「一个目录」，所以便携版保留：U 盘、别人的机器、
+「不想装东西」都是真实需求。
+
+`INSTALLER=1` 与 `BUNDLE_FFMPEG=1` 同时给会**直接 SystemExit**：那等于
+「既要目录版又要每次解压」，自相矛盾。让它当场失败比产出一个行为与
+预期不符的包好——后者要到用户那里才暴露成「为什么安装版还是这么慢」。
+
+`EXE()` 的参数抽成 `_make_exe()` 由两个分支共用。写成两份的话，以后
+调个图标 / console 很容易只改一处，于是两种形态行为悄悄分叉——
+这类 bug 极难发现，因为两边都能跑，只是行为不一致。
+
+### 安装版能成立的前提：用户数据不在程序目录
+
+装到 `C:\Program Files\` 之后程序目录是**只读**的（普通用户没有写
+权限）。所以 cookie、界面偏好、投稿历史全部落在
+`~/.config/bilibili_submit/`：
+
+```
+~/.config/bilibili_submit/
+├── cookie.json       登录状态
+├── ui-state.json     界面偏好（上次用的目录、主题模式等）
+└── history.json      投稿历史
+```
+
+这条约束早就写在 `ui/state.py` 的模块 docstring 里（当时是为了避免
+「源码运行时把仓库根弄脏」），安装版只是让它变得**不可违背**。
+写程序目录会有两种坏结果：直接崩，或者被 UAC 静默重定向到
+`VirtualStore`——后者更糟，用户以为存在 A 处、重装后读的是 B 处，
+表现为「登录状态莫名丢了」。
+
+同理，`installer.iss` 的 `[UninstallDelete]` **只删程序目录的
+`_internal` 残留，不碰用户数据**。删了等于重装后必须重新扫码登录，
+这是最容易被「清理干净」这个念头害到的地方。`tests/test_packaging.py`
+把这条钉死了。
+
+### 安装器脚本的三个坑
+
+`installer.iss`（Inno Setup 6）有三个坑，都在
+`tools/check_installer.py` 或 `tests/test_packaging.py` 里挡住了：
+
+- **必须存成 UTF-8 with BOM**。Inno Setup 6 靠 BOM 识别编码；存成
+  不带 BOM 的 UTF-8 或 GBK 都会让中文在安装向导里变乱码，**且不报错**
+  ——只在用户眼前发生；
+- **`[Files]` 必须 `recursesubdirs`**。onedir 的绝大部分内容在
+  `_internal\`（Python 运行时、tkinter 的 tcl/tk 数据）。漏了这个
+  flag 时安装器只装顶层 exe，界面能出现、点一下就闪退——因为
+  `import tkinter` 找不到；
+- **`AppId` 必须有**。缺了它 Inno Setup 认不出是同一个程序：装新版
+  时不覆盖而是并排装第二份，开始菜单出现两个图标，卸载时互删错文件。
+
+还有一条不算坑但容易忽略：**`installer.iss` 里的 `#define` 名字要与
+`EXE_NAME` 对得上**（`BuildDir` 末段 = `EXE_NAME`）。对不上时 ISCC
+**不会报错**——它照抄 `[Files]` 的通配路径，装出一个缺文件的安装器，
+用户双击闪退才发现。
+
+### 验证要装一遍，不能只编译
+
+CI 里安装器的验证是「编译 → 静默安装 → 启动 → 卸载」全跑一遍，
+不是只跑 ISCC。只编译的话，「装完双击闪退」「`_internal` 没装进去」
+这类问题只能等用户遇到才知道。
+
+顺带一个实测结论：**PyInstaller 的 `--clean` 只清 `build\` 缓存，
+不会删 `dist\` 里已有的产物**。所以同一次CI 里可以先打 onefile 版
+再打 onedir 版，两份产物共存——我一度以为会互相覆盖，实测才发现不会。
+
+### 打包相关的测试
+
+`tests/test_packaging.py` 不真跑 PyInstaller（太慢、且需要 Windows），
+而是把「构建脚本 ↔ spec ↔ installer.iss ↔ 代码」之间的**约定**钉死：
+`INSTALLER` 开关真的改变形态、`EXE(` 只出现一次（防止改样式只改一处）、
+冲突组合被拒绝、ffmpeg 在 onedir 下命中 exe 同目录且优先于系统 PATH、
+ffmpeg 不该出现在 `_internal`、`BuildDir` 与 `EXE_NAME` 同名、
+缺 `recursesubdirs` 会报错、卸载不删用户数据。
+
+`tools/check_installer.py` 补一层静态检查（段名拼错、`#define`
+未定义、BOM 缺失）。注意它得跳过 `[Code]` 段——那里是 Pascal，
+不是 `Key=Value`；`AppId={{GUID}}` 的 `{{` 也是转义写法，正则当不配对
+花括号会误报。
 
 ## 复杂度豁免
 

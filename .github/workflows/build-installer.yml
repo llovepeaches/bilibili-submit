@@ -1,0 +1,162 @@
+name: Build Windows installer
+
+# 单独一个 workflow，只干一件事：验证「GUI 安装版真的能打出来、能装上、
+# 能启动」。推 tag 走 release.yml；改安装相关的东西时用这个先验一遍。
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - installer.iss
+      - bili_submit.spec
+      - .github/workflows/build-installer.yml
+      - main_gui.py
+      - bilibili_submit/**
+  pull_request:
+    branches: [main, master]
+    paths:
+      - installer.iss
+      - bili_submit.spec
+      - .github/workflows/build-installer.yml
+      - main_gui.py
+      - bilibili_submit/**
+  workflow_dispatch:
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt pyinstaller
+
+      # 提交前的静态检查：段名拼错、#define 没定义、缺 recursesubdirs
+      # 这些在本地就能发现，不必等 ISCC 报错。
+      - name: installer.iss 静态检查
+        run: python tools/check_installer.py
+
+      - name: 准备 ffmpeg
+        run: python tools/setup_ffmpeg.py --dest vendor --force
+
+      # GUI + INSTALLER=1 -> onedir 目录版，ffmpeg 不进归档。
+      # 目录名 = EXE_NAME，必须与 installer.iss 的 BuildDir 一致。
+      - name: 打包图形界面版（onedir）
+        env:
+          GUI: '1'
+          INSTALLER: '1'
+          EXE_NAME: bilibili-submit-gui
+        run: python -m PyInstaller bili_submit.spec --noconfirm --clean
+
+      # ffmpeg 放exe 同目录：这是 onedir 最大的好处——不用每次启动
+      # 解压 60MB 到临时目录，而且用户能自己换 ffmpeg 版本
+      # （ffmpeg.py 本来就优先找这个位置）。
+      - name: ffmpeg 放到 exe 同目录
+        shell: pwsh
+        run: |
+          $dir = "dist\bilibili-submit-gui"
+          Copy-Item vendor\ffmpeg.exe "$dir\ffmpeg.exe" -Force
+          Copy-Item config "$dir\config" -Recurse -Force
+          Copy-Item README.md "$dir\README.md" -Force
+          Get-ChildItem $dir | Format-Table Name, `
+            @{n='MB';e={[math]::Round($_.Length/1MB,2)}} -AutoSize
+
+      # 装 Inno Setup。官方文档推荐的做法就是 Chocolatey 一条命令，
+      # 不用自己下安装器（下了还要静默安装，更容易踩参数坑）。
+      - name: 安装 Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress --limit-output
+
+      - name: 编译安装器
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            # 新版 Inno Setup 装在Program Files 而不是 x86
+            $iscc = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) { throw "找不到 ISCC.exe" }
+          & $iscc installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 编译失败 ($LASTEXITCODE)" }
+
+      # 这一步是整个 workflow 的核心：装出来、启动、确认没闪退。
+      # 只编译不装的话，"装完双击没反应"这种问题照样漏到用户手上。
+      - name: 静默安装并冒烟测试
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = "dist\bilibili-submit-setup.exe"
+          if (-not (Test-Path $setup)) { throw "安装器未生成: $setup" }
+
+          $mb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+          Write-Host "安装器体积: $mb MB"
+          # 装的是 onedir（约 13MB 程序 + 62MB ffmpeg），lzma2 压完
+          # 应该明显小于 75MB。低于 20MB 说明 ffmpeg 或 _internal 漏了。
+          if ($mb -lt 20) { throw "安装器只有 $mb MB，ffmpeg 或 _internal 很可能没打进去" }
+
+          # /VERYSILENT /SUPPRESSMSGBOXES /NORESTART 无人值守安装
+          & $setup /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+          if ($LASTEXITCODE -ne 0) { throw "静默安装失败 ($LASTEXITCODE)" }
+          Start-Sleep -Seconds 3
+
+          $app = "${env:ProgramFiles}\bilibili-submit"
+          $exe = "$app\bilibili-submit-gui.exe"
+          if (-not (Test-Path $exe)) {
+            throw "安装后找不到 $exe（实际目录：$(Test-Path $app)）"
+          }
+
+          # 用户真正能用到的三个文件，少一个都算安装失败
+          foreach ($f in @("ffmpeg.exe", "config\config.example.yaml", "README.md")) {
+            if (-not (Test-Path "$app\$f")) { throw "安装后缺少 $f" }
+          }
+          # _internal 是 Python 运行时，漏了整个程序起不来
+          if (-not (Test-Path "$app\_internal")) { throw "缺少 _internal\（Python 运行时）" }
+
+          # ffmpeg 必须和 exe 同目录（而不是 _internal 里）——
+          # 代码只优先找 exe 同目录，放错地方等于没带
+          if (-not (Test-Path "$app\ffmpeg.exe")) { throw "ffmpeg.exe 不在 exe 同目录" }
+
+          Write-Host "安装目录内容:"
+          Get-ChildItem $app | Format-Table Name, `
+            @{n='MB';e={[math]::Round($_.Length/1MB,2)}} -AutoSize
+
+          # 启动后不能立刻退出：缺 tkinter 时 windowed 程序会静默失败
+          $proc = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($proc.HasExited) {
+            throw "安装后的程序启动即退出（退出码 $($proc.ExitCode)）"
+          }
+          Stop-Process -Id $proc.Id -Force
+          Write-Host "安装版启动正常"
+
+          # 卸载也要验：卸载器坏掉的话用户会留着 Program Files 一地
+          # 碎片，升级也挡路。
+          $unins = "$app\unins000.exe"
+          if (-not (Test-Path $unins)) { throw "缺少卸载器 $unins" }
+          $up = Start-Process -FilePath $unins -ArgumentList "/VERYSILENT" -Wait -PassThru
+          if ($up.ExitCode -ne 0) { throw "静默卸载失败 ($($up.ExitCode))" }
+          Start-Sleep -Seconds 2
+          if (Test-Path $exe) { throw "卸载后主程序仍在：卸载不干净，升级会被挡" }
+          Write-Host "卸载正常"
+
+          # 用户数据（cookie / 界面偏好）必须在 %USERPROFILE% 下，
+          # 卸载不能碰——删了等于让人重新扫码登录。
+          $userData = "$env:USERPROFILE\.config\bilibili_submit"
+          if (Test-Path $userData) {
+            Write-Host "用户数据目录存在: $userData（卸载未删除，正确）"
+          } else {
+            Write-Host "本次未产生用户数据目录（CI 上未登录，属正常）"
+          }
+
+          exit 0
+
+      - name: 上传安装器
+        uses: actions/upload-artifact@v4
+        with:
+          name: bilibili-submit-installer
+          path: dist/bilibili-submit-setup.exe
+          retention-days: 30
+          if-no-files-found: error

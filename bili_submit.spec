@@ -92,6 +92,10 @@ excludes: list[str] = [
 # ---------------------------------------------------------------------------
 GUI = os.environ.get("GUI") == "1"
 
+# 打包形态：见下方 ONEDIR 处的完整说明。必须在这里就定义——
+# 下面的 GUI 分支要拿它决定ffmpeg 是内嵌还是外置。
+ONEDIR = os.environ.get("INSTALLER") == "1"
+
 if GUI:
     for _name in ("tkinter", "tk"):
         if _name in excludes:
@@ -106,7 +110,18 @@ if GUI:
     ]
     # GUI 版打包 tkinter 后体积涨了约 2MB，体积不再是主要矛盾，
     # 换「双击就能用」更划算——用窗口界面的人不会自己去装 ffmpeg。
-    print("[spec] GUI mode: console=False, tkinter bundled, ffmpeg embedded by default")
+    # 安装版（ONEDIR）例外：ffmpeg 改成放 exe 同目录，见下方 ffmpeg 段。
+    print(
+        "[spec] GUI mode: console=False, tkinter bundled"
+        + ("" if ONEDIR else ", ffmpeg embedded by default")
+    )
+    if ONEDIR:
+        print(
+            "[spec] INSTALLER mode: onedir directory, ffmpeg is NOT embedded.\n"
+            "       Copy ffmpeg.exe next to the exe after building (build_windows.bat\n"
+            "       and CI already do). Onefile would re-introduce the ~60MB\n"
+            "       startup decompression that this mode exists to avoid."
+        )
 
 # ---------------------------------------------------------------------------
 # ffmpeg：默认**外置**，不塞进单文件归档。
@@ -144,7 +159,25 @@ NO_FFMPEG = os.environ.get("NO_FFMPEG") == "1"
 #   * 默认行为（GUI 隐式内嵌）却找不到 -> 只警告并降级为不内嵌。
 #     否则一台没准备 ffmpeg 的机器（CI、新同事）连 GUI 包都打不出来。
 _FFMPEG_EXPLICIT = os.environ.get("BUNDLE_FFMPEG") == "1"
-BUNDLE_FFMPEG = _FFMPEG_EXPLICIT or (GUI and not NO_FFMPEG)
+
+# onedir（安装版）**从不内嵌**：ffmpeg 由构建脚本复制到 exe 同目录。
+# 这不是「内嵌也行但外置更好」，而是内嵌会把这个好处直接抵消掉——
+# onedir 唯一的优势就是启动时不用解压 60MB 到 %TEMP%，ffmpeg 一内嵌
+# 又得每次解压回去。
+#
+# 但显式要求（BUNDLE_FFMPEG=1）时**不静默忽略**：CI 或某个同事可能
+# 明确想要「全塞归档里」的产物（哪怕是 onedir），直接报错让他知道
+# 这个组合不支持，比给出一个行为与预期不符的包好。
+if ONEDIR and _FFMPEG_EXPLICIT:
+    raise SystemExit(
+        "[spec] INSTALLER=1 and BUNDLE_FFMPEG=1 are incompatible.\n"
+        "       onedir places ffmpeg next to the exe on purpose: embedding it\n"
+        "       would re-introduce the 60MB startup decompression that onedir\n"
+        "       exists to avoid.\n"
+        "       Unset BUNDLE_FFMPEG, or unset INSTALLER to build onefile."
+    )
+
+BUNDLE_FFMPEG = _FFMPEG_EXPLICIT or (GUI and not NO_FFMPEG and not ONEDIR)
 
 
 def _resolve_ffmpeg_exe() -> Path | None:
@@ -216,29 +249,75 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],
-    name=EXE_NAME,
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,          # 开启 UPX 会显著提高杀毒软件误报率
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    # CLI 工具必须保留控制台窗口，否则看不到扫码二维码和进度条；
-    # GUI 版反过来——弹窗时不能再跟一个黑框。
-    console=not GUI,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=str(BASE / "assets" / f"{APP_NAME}.ico"),
-    version=str(BASE / "assets" / "version_info.txt")
-    if (BASE / "assets" / "version_info.txt").exists()
-    else None,
-)
+# ---------------------------------------------------------------------------
+# 打包形态：onefile（单文件）vs onedir（目录）
+#
+# GUI 的**安装版走 onedir**。这不是为了省事，而是 onedir 有两个实打实的
+# 好处：
+#   1. 启动不用每次把内嵌的 ffmpeg（约 62MB）解压到临时目录。onefile
+#      每次启动都要解一次，装在 Program Files 上还要往 %TEMP% 里写
+#      60MB，慢且更容易被杀软拦；
+#   2. 目录版可以把 ffmpeg.exe 放在**exe 同目录**——代码里本来就优先
+#      找那个位置（ffmpeg.py 的 _candidates_in_app_dir），所以用户能
+#      自己换 ffmpeg 版本，不用重新打包。
+#
+# 代价是「一个文件」变成「一个目录」，所以单文件版仍然保留：
+# 便携用法（拷走即用、U 盘跑）靠它，安装版靠 onedir。
+#
+# 由 INSTALLER=1 开启（定义见文件上方 GUI 段旁边）。CLI 始终是 onefile：
+# 命令行用户要的是 `scp 过去就能跑`，目录反而碍事。
+#
+# ffmpeg 的处理已在上面 BUNDLE_FFMPEG 那里定好了（onedir 恒为外置）。
+# ---------------------------------------------------------------------------
+def _make_exe():
+    """两种打包形态共用同一份 EXE 配置。
+
+    参数逐项相同，只有 onedir 的``exclude_binaries=True`` 与空的
+    binaries/datas 位置不同——那些内容交给 COLLECT。写成函数是为了
+    以后调样式时只改一处，两边不会悄悄跑偏。
+    """
+    onedir = ONEDIR
+    return EXE(
+        pyz,
+        a.scripts,
+        # onedir：二进制与数据由 COLLECT 收进 _internal/，这里必须空着
+        [] if onedir else a.binaries,
+        [] if onedir else a.datas,
+        exclude_binaries=onedir,
+        name=EXE_NAME,
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,          # 开启 UPX 会显著提高杀毒软件误报率
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        # CLI 工具必须保留控制台窗口，否则看不到扫码二维码和进度条；
+        # GUI 版反过来——弹窗时不能再跟一个黑框。
+        console=not GUI,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=str(BASE / "assets" / f"{APP_NAME}.ico"),
+        version=str(BASE / "assets" / "version_info.txt")
+        if (BASE / "assets" / "version_info.txt").exists()
+        else None,
+    )
+
+
+if ONEDIR:
+    exe = _make_exe()
+    # 目录名用 EXE_NAME：安装器按固定名字找这个目录，
+    # 改名的话 installer.iss 和 CI 里都得跟着改，容易漏。
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name=EXE_NAME,
+    )
+else:
+    exe = _make_exe()

@@ -31,9 +31,26 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 
 **图形界面版**（不想用命令行就下这个）：
 
-| 资产 | 体积 | ffmpeg | 说明 |
+| 资产 | 体积 | 安装 | 说明 |
 |---|---|---|---|
-| [`bilibili-submit-gui.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.5/bilibili-submit-gui.exe) | ~72 MB | 内置 | **双击开窗口**，扫码登录 + 表单投稿，不用管 ffmpeg 放哪 |
+| [`bilibili-submit-setup.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.5/bilibili-submit-setup.exe) | ~40 MB | 需要 | **推荐**。双击安装，开始菜单有入口，能干净卸载 |
+| [`bilibili-submit-gui-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.5/bilibili-submit-gui-portable.exe) | ~72 MB | 免安装 | 单文件便携版，拷走即用 |
+
+两种都是「双击开窗口」，扫码登录 + 表单投稿，**不用管 ffmpeg 放哪**。
+区别只在打包方式：
+
+| | 安装版（setup） | 便携版（portable） |
+|---|---|---|
+| 安装 | 标准安装向导，可选装到用户目录 | 不用装 |
+| 启动速度 | **快**（不解压） | 较慢（每次把 ffmpeg 解压到临时目录） |
+| 快捷方式 | 开始菜单，可选桌面 | 无 |
+| 升级 | 重跑安装包即可 | 重新下载替换 |
+| 卸载 | 「设置 → 应用」里能卸 | 直接删文件 |
+| 适合 | 自己的电脑长期用 | 临时用、U 盘、别人的机器 |
+
+> 安装版启动快，是因为它把程序打成**目录**（ffmpeg 放在程序旁边），
+> 而不是把 ffmpeg 塞进 exe —— 后者每次启动都要解压 60 MB 到临时目录。
+> 顺带好处：ffmpeg 放在程序目录里，你想换版本直接替换那个文件即可。
 
 **命令行版**：
 
@@ -47,22 +64,36 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 命令行版怎么选：只想双击就用、不想管 ffmpeg → `standalone`；
 在意体积和启动速度 → `full`，把 `ffmpeg.exe` 和 exe 放一起就行。
 
-> GUI 版内置了 ffmpeg，是为了「下载下来双击就能用」——用窗口界面的人
-> 通常不会自己去装 ffmpeg。嫌大的话可以用 `full` 包里的命令行版，
-> 或者看下面的「内置 ffmpeg 的代价」。
-
 两种界面**共用同一套业务逻辑**，可以混着用：GUI 里填的表单和
 命令行 `upload` 的参数一一对应，cookie 也是同一份。
 
 目标机器**不需要装 Python**。
 
+### 用户数据存在哪
+
+登录状态、界面偏好、投稿历史都放在**用户目录下**，不在程序目录：
+
+```
+%USERPROFILE%\.config\bilibili_submit\
+├── cookie.json       登录状态
+├── ui-state.json     界面偏好（上次用的目录等）
+└── history.json      投稿历史
+```
+
+所以**卸载不会删掉这些** —— 重装后不用重新扫码。卸载只清理程序目录
+本身（`C:\Program Files\bilibili-submit\`）。想彻底清干净，连这个
+`.config` 目录一起删即可。
+
 ### 内置 ffmpeg 的代价
 
-`gui` 和 `standalone` 都把 ffmpeg 塞进了 exe 归档，换来「一个文件走天下」，代价是两条：
+`portable` 和 `standalone` 把 ffmpeg 塞进了 exe 归档，换来「一个文件走天下」，代价是两条：
 
 - **体积**：约 10~13 MB → 约 69~72 MB（exe 归档有压缩；启动解压后约占 94 MB）。
 - **启动**：单文件版每次启动都要把 ffmpeg 解压到临时目录，启动变慢；
   临时目录里的 exe 也更容易被杀毒软件误判。
+
+**安装版没有这个问题** —— 它是目录版，ffmpeg 就在程序旁边，
+启动即用。安装包本身小（~40 MB）也是因为 ffmpeg 在安装时单独压缩。
 
 ffmpeg 只影响 `cover: auto` 自动抽帧，**不影响投稿本身**。
 不需要自动封面的话，命令行轻量版（10 MB）完全够用。
@@ -396,20 +427,59 @@ bilibili-submit.exe login --proxy http://127.0.0.1:7890
 2. 双击 build_windows.bat
 ```
 
-脚本会自建虚拟环境、装依赖、执行打包，跑一次 `--version` 验证产物能启动，并自动把 ffmpeg 复制到 `dist\`。
+脚本会自建虚拟环境、装依赖、准备 ffmpeg、打包命令行版与图形界面版，
+并对产物做结构校验（`_internal\` 缺了会直接报错——那会导致双击闪退）。
+装了 [Inno Setup 6](https://jrsoftware.org/isinfo.php) 的话还会额外编译出
+`dist\bilibili-submit-setup.exe`；没装就跳过，图形界面版目录照样可用。
 
 **方式二：GitHub Actions 云端打包**
 
-推 tag 即可，Actions 会在 Windows runner 上打包并发 Release。仓库自带 `build-windows.yml`（日常构建）和 `release.yml`（发版），两者都带冒烟测试，**打包失败会直接标红，而不是给你一个坏 exe**。
+推 tag 即可，Actions 会在Windows runner 上打包并发 Release。仓库自带三个 workflow：
+
+| workflow | 触发 | 干什么 |
+|---|---|---|
+| `build-windows.yml` | 推 main / PR | 命令行版快速构建 |
+| `build-installer.yml` | 改了安装相关文件 | **验证安装器真能装上**（静默安装 → 启动 → 卸载全跑一遍） |
+| `release.yml` | 推 tag | 出正式 Release，含安装器与全部资产 |
+
+三者都带冒烟测试，**打包失败会直接标红，而不是给你一个坏 exe**。
+安装器那一关尤其重要：只编译不安装的话，「装完双击闪退」这种问题
+只能等用户遇到才知道。
 
 ```bash
 git tag v0.2.5 && git push origin v0.2.5   # 版本号换成你要发的
 ```
 
 版本号要同步改四处：`bilibili_submit/__init__.py`、`bili_submit.spec`、
-`assets/version_info.txt`，以及本文件里的下载链接。
+`assets/version_info.txt`、`installer.iss`，以及本文件里的下载链接。
 前三处有测试兜底（`tests/test_spec_bundle.py`），改漏了会直接变红。
 发布新版本也可以双击 `publish.bat`，它会把这几步一起做完。
+
+### 两种打包形态
+
+图形界面版有两种形态，由 `INSTALLER` 环境变量切换：
+
+| | 便携版 | 安装版 |
+|---|---|---|
+| 环境变量 | 不设（`BUNDLE_FFMPEG=1 GUI=1`） | `INSTALLER=1 GUI=1` |
+| PyInstaller 形态 | onefile 单文件 | **onedir 目录** |
+| 产物 | `dist\bilibili-submit-gui-portable.exe` | `dist\bilibili-submit-gui\` + `dist\bilibili-submit-setup.exe` |
+| ffmpeg | 打进 exe 归档 | **放在 exe 同目录**（构建脚本复制） |
+
+安装版坚持用 onedir不是为了省事，是因为 onefile 每次启动都要把
+内嵌的 60 MB ffmpeg 解压到 `%TEMP%` —— 装在 Program Files 下更慢、
+更容易被杀软拦。onedir 把 ffmpeg 放程序旁边，既省掉解压，
+用户也能自己替换 ffmpeg 版本（`ffmpeg.py` 本来就优先找这个位置）。
+
+代价是「一个文件」变成「一个目录」，所以便携版仍然保留：U 盘、别人的
+机器、「不想装东西」都是真实需求。
+
+`INSTALLER=1` 与 `BUNDLE_FFMPEG=1` 同时给会**直接报错**——那等于
+「既要目录版又要每次解压」，是个自相矛盾的组合，不如当场说清。
+
+安装器脚本是 [`installer.iss`](installer.iss)（Inno Setup 6），
+`tools/check_installer.py` 能在提交前静态检查它（段名拼错、
+`#define` 未定义、缺 `recursesubdirs` 之类）。
 
 ### 打包相关的说明
 
@@ -481,7 +551,8 @@ bilibili_submit/
 main.py                PyInstaller 打包入口
 main_gui.py            图形界面打包入口
 run.py                 源码运行入口
-bili_submit.spec       打包配置
+bili_submit.spec       打包配置（INSTALLER=1 走 onedir，见「两种打包形态」）
+installer.iss          Windows 安装器脚本（Inno Setup 6）
 build_windows.bat      Windows 一键打包
 publish.bat            一键发布
 assets/                图标与 Windows 版本资源
@@ -490,6 +561,8 @@ CHANGELOG.md           更新日志
 docs/                  部署、FAQ、架构、截图
 tests/test_theme_contrast.py  配色对比度与色相的守门测试
 tests/test_action_bar.py      底部操作条的行为测试
+tests/test_packaging.py       打包形态的约定测试（onedir / ffmpeg / 安装器）
+tools/check_installer.pyinstaller.iss 静态检查（提交前跑）
 tools/make_icon.py         图标生成（仅开发时用）
 tools/setup_ffmpeg.py      复制 ffmpeg 到指定目录（--dest vendor 供内嵌打包）
 tools/make_source_zip.py   打包源码 zip
