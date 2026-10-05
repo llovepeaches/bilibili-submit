@@ -60,6 +60,22 @@ DIRECTIVES = {
     "CloseApplications", "RestartApplications", "SetupLogging",
 }
 
+#: Inno Setup 事件函数的原型：名字 → function / procedure。
+#: 只列本项目会用到的几个——写得不全不会误报（查不到就放行），
+#: 写错了才会报。新增 [Code] 事件时顺手补进来。
+EVENT_PROTOTYPES = {
+    "InitializeSetup": "function",     # 返回 Boolean，False 可拒绝安装
+    "InitializeWizard": "procedure",   # 只有初始化，没有返回值
+    "DeinitializeSetup": "procedure",
+    "CurStepChanged": "procedure",
+    "CurPageChanged": "procedure",
+    "NextButtonClick": "function",
+    "BackButtonClick": "function",
+    "ShouldSkipPage": "function",
+    "PrepareToInstall": "function",
+    "CheckPassword": "function",
+}
+
 errors: list[str] = []
 warnings: list[str] = []
 
@@ -147,6 +163,40 @@ def _check_directives(lines: list[str]) -> None:
             warn(
                 f"第 {number} 行：{key} 不在已知指令表里"
                 "（若确实拼错了请补进脚本顶部的 DIRECTIVES）"
+            )
+
+
+def _check_code_prototypes(text: str) -> None:
+    """``[Code]`` 段里事件函数的原型对不对。
+
+    这类错误**只有真跑 ISCC 才看得到**（本项目 CI 上真踩过：
+    ``InitializeWizard`` 写成了 ``function ... : Boolean``，ISCC 报
+    ``Invalid prototype for 'InitializeWizard'``，而 installer.iss
+    的其他部分一点问题都没有）。ISCC 只能跑在 Windows 上，所以能在
+    这里挡住就省一整轮 CI。
+
+    只查表里有的名字：不在表里的自定义函数照样放行，免得误报。
+
+    注意 Inno Setup 里这两个长得像但不一样——
+    ``InitializeSetup`` 是 function（返回值能拒绝安装），
+    ``InitializeWizard`` 是 procedure（只做初始化，没有返回值）。
+    """
+    code = _section(text, "Code")
+    if not code:
+        return
+    for line_no, line in enumerate(code.splitlines(), 1):
+        stripped = line.strip()
+        match = re.match(r"^(function|procedure)\s+(\w+)\s*(\([^)]*\))?\s*(:\s*\w+)?\s*;", stripped)
+        if not match:
+            continue
+        kind, name = match.group(1), match.group(2)
+        expect = EVENT_PROTOTYPES.get(name)
+        if expect is None:
+            continue  # 自定义函数，不查
+        if kind != expect:
+            fail(
+                f"[Code] 第 {line_no} 行：{name} 应该是 {expect} 而不是 "
+                f"{kind}——ISCC 会报 Invalid prototype for '{name}'"
             )
 
 
@@ -266,6 +316,7 @@ def main() -> int:
     _check_directives(lines)
     _check_build_layout(text, defines)
     _check_files_section(text)
+    _check_code_prototypes(text)
     _check_icon(defines)
 
     for message in warnings:

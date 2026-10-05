@@ -146,11 +146,15 @@ end;
 
 // 同上，检查 ffmpeg 在不在。缺了它程序还能跑，只是「cover: auto」
 // 自动抽帧用不了——值得提醒但不必拒绝安装。
-function InitializeWizard(): Boolean;
+//
+// 注意是 **procedure** 不是 function：Inno Setup 的 InitializeWizard
+// 没有返回值，写成 `function ... : Boolean` 时 ISCC 报
+// "Invalid prototype for 'InitializeWizard'"——而这类错误只有真正跑
+// ISCC 才看得到，本项目的静态检查器查不出来（它不解析 Pascal 原型）。
+procedure InitializeWizard();
 var
   FFmpegPath: String;
 begin
-  Result := True;
   FFmpegPath := ExpandConstant('{src}\' + '{#BuildDir}\ffmpeg.exe');
   if not FileExists(FFmpegPath) then
     Log('提示：产物里没有 ffmpeg.exe，自动抽帧将不可用（不影响其他功能）');

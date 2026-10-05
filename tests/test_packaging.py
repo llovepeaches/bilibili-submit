@@ -305,6 +305,44 @@ def test_installer_uses_a_stable_app_id():
     assert "AppId=" in text, "installer.iss 缺 AppId，升级会装出两份"
 
 
+def test_installer_uses_correct_event_prototypes():
+    """``[Code]`` 段里事件函数的原型必须写对。
+
+    这类错误**只有真跑 ISCC 才看得到**——CI 上真踩过：
+    ``InitializeWizard`` 写成 ``function ... : Boolean``，ISCC 报
+    ``Invalid prototype for 'InitializeWizard'``，而 installer.iss
+    的其他部分一点问题都没有。ISCC 只能跑在 Windows 上，本地查不出。
+
+    这两个最容易混：``InitializeSetup`` 是 function（返回 False 可以
+    拒绝安装），``InitializeWizard`` 是 procedure（只做初始化，没有
+    返回值）。名字像，写法不一样。
+    """
+    code = _section(ISS.read_text(encoding="utf-8-sig"), "Code")
+    assert code, "installer.iss 应当有 [Code] 段"
+
+    declared = {
+        name: kind
+        for kind, name in re.findall(
+            r"^\s*(function|procedure)\s+(\w+)\s*[\(:;]", code, re.MULTILINE
+        )
+    }
+    for name, expect in (("InitializeSetup", "function"),
+                         ("InitializeWizard", "procedure")):
+        if name in declared:
+            assert declared[name] == expect, (
+                f"{name} 写成 {declared[name]}，应该是 {expect}——"
+                f"ISCC 会报 Invalid prototype for '{name}'"
+            )
+
+    # 检查器也得挡住同一件事（它比这条断言通用）
+    assert "EVENT_PROTOTYPES" in (
+        ROOT / "tools" / "check_installer.py"
+    ).read_text(encoding="utf-8"), (
+        "tools/check_installer.py 应当有事件原型表，"
+        "否则这类错误只能等 ISCC 报——而那要跑一整轮 Windows CI"
+    )
+
+
 def test_installer_checker_survives_windows_console_encoding():
     """``tools/check_installer.py`` 在 Windows 控制台编码下不能崩。
 
