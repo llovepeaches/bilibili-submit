@@ -331,8 +331,18 @@ def test_ci_waits_for_the_installer_process():
             "$LASTEXITCODE 拿不到值。改用 Start-Process -Wait -PassThru"
         )
         if "bilibili-submit-setup.exe" in code and "/VERYSILENT" in code:
-            assert "Start-Process" in code and "-Wait" in code, (
-                f"{path.name} 静默安装没有等安装器结束——退出码判断会失效"
+            assert "Start-Process" in code, (
+                f"{path.name} 静默安装没用 Start-Process——退出码判断会失效"
+            )
+            # 安装/卸载都得有超时：卡在 UAC 上会永远不返回。
+            # -Wait 或轮询都行，但不能干等。
+            assert "-Wait" in code or "while (-not" in code, (
+                f"{path.name} 静默安装没有等待或超时保护——"
+                "卡住时既拿不到退出码，也不会自己结束"
+            )
+            assert "超时" in code, (
+                f"{path.name} 的安装/卸载没有超时保护：卡在 UAC 上会让 "
+                "job 挂死，而挂死比失败难查得多"
             )
         # 卸载器不能用 -Wait：卡在 UAC 或残留进程上会永远不返回。
         # CI 上真挂过 8 分钟，只能手动取消。要轮询 + 超时。

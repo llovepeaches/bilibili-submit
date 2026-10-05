@@ -194,8 +194,23 @@ jobs:
           # 参数先存数组，免得写多行——PowerShell 的续行符是反引号 `
           # 不是反斜杠 \，写成 \ 的话每行会被当成独立命令（CI 上真报过
           # "The term '-ArgumentList' is not recognized"）。
+          # 安装也用轮询而不是 -Wait：Inno Setup 在 /VERYSILENT 下若卡在
+          # UAC 提权上会一直不返回（CI 上挂死过 8 分钟，只能手动取消）。
+          # 轮询 + 超时，超时就杀掉并报明确错误——挂死比失败难查得多。
           $setupArgs = @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-")
-          $setupProc = Start-Process -FilePath $setup -ArgumentList $setupArgs -Wait -PassThru
+          Write-Host "开始静默安装..."
+          $setupProc = Start-Process -FilePath $setup -ArgumentList $setupArgs -PassThru
+          $waited = 0
+          while (-not $setupProc.HasExited -and $waited -lt 120) {
+            Start-Sleep -Seconds 3
+            $waited += 3
+          }
+          if (-not $setupProc.HasExited) {
+            Get-Process -Name "bilibili-submit-setup" -ErrorAction SilentlyContinue |
+              Stop-Process -Force
+            throw "静默安装超时（${waited}s）——安装器卡住了（多半是 UAC 提权）"
+          }
+          Write-Host "安装结束，退出码 $($setupProc.ExitCode)，耗时 ${waited}s"
           if ($setupProc.ExitCode -ne 0) { throw "静默安装失败 ($($setupProc.ExitCode))" }
           Start-Sleep -Seconds 3
 
