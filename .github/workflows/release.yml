@@ -212,19 +212,34 @@ jobs:
           if ($proc3.HasExited) {
             throw "安装后的程序启动即退出（退出码 $($proc3.ExitCode)）"
           }
-          Stop-Process -Id $proc3.Id -Force
-          Write-Host "安装版安装 + 启动 + 卸载全流程正常"
+          # 按进程名杀：PyInstaller 可能留子进程，残留会让卸载器一直
+          # 等着程序关闭（CI 上挂死过）。
+          Get-Process -Name "bilibili-submit-gui" -ErrorAction SilentlyContinue |
+            Stop-Process -Force
+          Start-Sleep -Seconds 2
+          Write-Host "安装版安装 + 启动正常"
 
           # 卸载器也要能跑：坏掉的卸载器会留下 Program Files 碎片，
           # 下次升级直接被挡。
           $unins = "$installed\unins000.exe"
           if (-not (Test-Path $unins)) { throw "缺少卸载器" }
-          $up = Start-Process -FilePath $unins -ArgumentList "/VERYSILENT" -Wait -PassThru
+          # 不用 -Wait：卸载器卡在 UAC 或残留进程上会永远不返回。
+          $up = Start-Process -FilePath $unins -ArgumentList "/VERYSILENT" -PassThru
+          $waited = 0
+          while (-not $up.HasExited -and $waited -lt 90) {
+            Start-Sleep -Seconds 3
+            $waited += 3
+          }
+          if (-not $up.HasExited) {
+            Stop-Process -Id $up.Id -Force
+            throw "静默卸载超时（${waited}s）——卸载器卡住了（UAC 或残留进程？）"
+          }
           if ($up.ExitCode -ne 0) { throw "静默卸载失败 ($($up.ExitCode))" }
           Start-Sleep -Seconds 2
           if (Test-Path "$installed\bilibili-submit-gui.exe") {
             throw "卸载后主程序仍在：卸载不干净"
           }
+          Write-Host "安装版安装 + 启动 + 卸载全流程正常（卸载 ${waited}s）"
 
           # PowerShell 的 step 退出码取自最后一条原生命令的 $LASTEXITCODE，
           # 不显式归零的话，check 的 1 会让整个 step 判为失败。

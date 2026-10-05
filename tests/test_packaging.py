@@ -334,23 +334,33 @@ def test_ci_waits_for_the_installer_process():
             assert "Start-Process" in code and "-Wait" in code, (
                 f"{path.name} 静默安装没有等安装器结束——退出码判断会失效"
             )
-            # PowerShell 的续行符是反引号 ` 不是反斜杠。写成 \ 的话
-            # 每行被当成独立命令，CI 上报的是
-            # "The term '-ArgumentList' is not recognized"。
-            #
-            # 判据是「反斜杠**前面有没有空格**」：续行写作 `$setup \`
-            # （反斜杠孤零零挂在行尾），而 Windows 路径写作
-            # `stage-mini\`（反斜杠紧跟路径字符）。只判"行尾是反斜杠"
-            # 会把一堆路径误判成续行。
-            for line in lines:
-                stripped = line.rstrip()
-                if not stripped.endswith("\\") or len(stripped) < 2:
-                    continue
-                assert not stripped[-2].isspace(), (
-                    f"{path.name} 里可能是用反斜杠续行的 PowerShell："
-                    f"{stripped.strip()[:50]}——续行符是反引号 ` 不是 \\"
-                    "（行尾反斜杠前带空格，正是续行的写法）"
-                )
+        # 卸载器不能用 -Wait：卡在 UAC 或残留进程上会永远不返回。
+        # CI 上真挂过 8 分钟，只能手动取消。要轮询 + 超时。
+        assert '"/VERYSILENT" -Wait' not in code, (
+            f"{path.name} 的卸载用了 -Wait：卸载器卡住时会永远不返回。"
+            "改成轮询 + 超时"
+        )
+        # PowerShell 的续行符是反引号 ` 不是反斜杠。写成 \ 的话
+        # 每行被当成独立命令，CI 上报的是
+        # "The term '-ArgumentList' is not recognized"。
+        #
+        # 判据是「反斜杠**前面有没有空格**」：续行写作 `$setup \`
+        # （反斜杠孤零零挂在行尾），而 Windows 路径写作
+        # `stage-mini\`（反斜杠紧跟路径字符）。只判"行尾是反斜杠"
+        # 会把一堆路径误判成续行。
+        for line in lines:
+            stripped = line.rstrip()
+            if not stripped.endswith("\\") or len(stripped) < 2:
+                continue
+            assert not stripped[-2].isspace(), (
+                f"{path.name} 里可能是用反斜杠续行的 PowerShell："
+                f"{stripped.strip()[:50]}——续行符是反引号 ` 不是 \\"
+                "（行尾反斜杠前带空格，正是续行的写法）"
+            )
+    assert "timeout-minutes" in INSTALLER_YML.read_text(encoding="utf-8"), (
+        "build-installer.yml 应当设 timeout-minutes——"
+        "脚本内的超时是第二道，job 级兜底才是最后一道"
+    )
 
 
 def test_installer_uses_correct_event_prototypes():

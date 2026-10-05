@@ -32,6 +32,10 @@ on:
 jobs:
   installer:
     runs-on: windows-latest
+    # 兜底：安装/卸载若卡在 UAC 或残留进程上会一直挂着不返回
+    # （CI 上真挂过 8 分钟）。脚本内部已有超时，这里是最后一道——
+    # 挂死比失败难查，也让 runner 白占着。
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -139,23 +143,39 @@ jobs:
             @{n='MB';e={[math]::Round($_.Length/1MB,2)}} -AutoSize
 
           # 启动后不能立刻退出：缺 tkinter 时 windowed 程序会静默失败
+          Write-Host "启动安装后的程序..."
           $proc = Start-Process -FilePath $exe -PassThru
           Start-Sleep -Seconds 8
           if ($proc.HasExited) {
             throw "安装后的程序启动即退出（退出码 $($proc.ExitCode)）"
           }
-          Stop-Process -Id $proc.Id -Force
+          # 按进程名杀，不只是这个 PID——PyInstaller 可能留下子进程，
+          # 残留会让卸载器一直等着程序关闭（CI 上就挂死过这一步）。
+          Get-Process -Name "bilibili-submit-gui" -ErrorAction SilentlyContinue |
+            Stop-Process -Force
+          Start-Sleep -Seconds 2
           Write-Host "安装版启动正常"
 
           # 卸载也要验：卸载器坏掉的话用户会留着 Program Files 一地
           # 碎片，升级也挡路。
           $unins = "$app\unins000.exe"
           if (-not (Test-Path $unins)) { throw "缺少卸载器 $unins" }
-          $up = Start-Process -FilePath $unins -ArgumentList "/VERYSILENT" -Wait -PassThru
+          # 不用 -Wait：卸载器若卡在 UAC 或残留进程上会永远不返回。
+          # 轮询 + 超时，超时就杀掉并报错——挂死比失败难查得多。
+          $up = Start-Process -FilePath $unins -ArgumentList "/VERYSILENT" -PassThru
+          $waited = 0
+          while (-not $up.HasExited -and $waited -lt 90) {
+            Start-Sleep -Seconds 3
+            $waited += 3
+          }
+          if (-not $up.HasExited) {
+            Stop-Process -Id $up.Id -Force
+            throw "静默卸载超时（${waited}s）——卸载器卡住了（UAC 或残留进程？）"
+          }
           if ($up.ExitCode -ne 0) { throw "静默卸载失败 ($($up.ExitCode))" }
           Start-Sleep -Seconds 2
           if (Test-Path $exe) { throw "卸载后主程序仍在：卸载不干净，升级会被挡" }
-          Write-Host "卸载正常"
+          Write-Host "卸载正常（${waited}s）"
 
           # 用户数据（cookie / 界面偏好）必须在 %USERPROFILE% 下，
           # 卸载不能碰——删了等于让人重新扫码登录。
