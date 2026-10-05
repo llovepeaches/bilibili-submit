@@ -305,6 +305,38 @@ def test_installer_uses_a_stable_app_id():
     assert "AppId=" in text, "installer.iss 缺 AppId，升级会装出两份"
 
 
+def test_installer_checker_survives_windows_console_encoding():
+    """``tools/check_installer.py`` 在 Windows 控制台编码下不能崩。
+
+    它打印中文（产物目录名、错误说明），而 Windows 上 Python 默认
+    用控制台代码页：PowerShell 是 cp1252、cmd.exe 是 cp936，两者都
+    编码不了部分中文——一句 ``print`` 就抛 UnicodeEncodeError，
+    整个 job 变红，而真实的 installer.iss 一点问题都没有。
+
+    **CI 上真发生过**：脚本在 Linux（UTF-8）跑得好好的，到 Windows
+    runner 第一条 print 就把 job 打成 failure。一个检查 Windows
+    安装器的脚本自己死在 Windows 编码上，是最不该有的失败方式。
+
+    所以这里用子进程 + ``PYTHONIOENCODING`` 模拟两种控制台，确认它
+    仍能正常退出。不模拟就测不出来——pytest 自己跑在 UTF-8 下。
+    """
+    import subprocess
+
+    for codepage in ("cp1252", "cp936"):
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "check_installer.py")],
+            cwd=ROOT, capture_output=True,
+            env={**os.environ, "PYTHONIOENCODING": codepage},
+        )
+        assert proc.returncode == 0, (
+            f"check_installer.py 在 {codepage} 下退出了 "
+            f"{proc.returncode}——Windows 控制台编码问题又回来了"
+        )
+        assert "UnicodeEncodeError" not in proc.stderr.decode(
+            "utf-8", errors="replace"
+        )
+
+
 def test_installer_does_not_delete_user_data_on_uninstall():
     """卸载**不能**删用户数据。
 

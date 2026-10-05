@@ -13,6 +13,26 @@ import re
 import sys
 from pathlib import Path
 
+
+def _force_utf8_output() -> None:
+    """把 stdout/stderr 强制成 UTF-8。
+
+    本脚本会打印中文（产物目录名、错误说明），而 Windows 上 Python
+    默认用控制台代码页：PowerShell 是 cp1252、cmd.exe 是 cp936。
+    两者都**编码不了**部分中文，一句 print 就会抛 UnicodeEncodeError
+    直接崩掉——CI 上真发生过：脚本在 Linux（UTF-8）跑得好好的，
+    到了 Windows runner 第一条 print 就把整个 job 打成 failure。
+
+    一个检查 Windows 安装器的脚本自己死在 Windows 编码上，是这个
+    工具最不该有的失败方式。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except (AttributeError, ValueError):  # 非 TextIO / 已被包装
+            pass
+
+
 ROOT = Path(__file__).resolve().parent.parent
 ISS = ROOT / "installer.iss"
 
@@ -223,6 +243,7 @@ def _check_icon(defines: dict[str, str]) -> None:
 
 
 def main() -> int:
+    _force_utf8_output()
     if not ISS.is_file():
         print(f"找不到 {ISS}")
         return 1
