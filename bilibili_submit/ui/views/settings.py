@@ -18,8 +18,19 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
+from ... import __version__
+from ...update import (
+    ReleaseInfo,
+    check_for_update,
+    fetch_latest_release,
+    hint_text,
+    is_newer,
+    mark_version_seen,
+    open_release_page,
+    should_notify,
+)
 from ..environment import EnvironmentSnapshot, probe_environment
 from .. import theme
 from ..state import (
@@ -43,6 +54,11 @@ __all__ = ["SettingsView"]
 #: 下拉框选项顺序。跟随系统放第一个：它是默认值，也最不需要用户操心。
 THEME_OPTIONS = [THEME_MODE_LABELS[key] for key in ("system", "light", "dark")]
 
+#: 更新检查的结果。第二项是「到底查到了没有」——手动点的那一次要能
+#: 区分「已是最新」和「网络不通」，否则断网时界面会说「已是最新」，
+#: 那是骗人。自动检查不看这一项：它失败就该完全安静。
+_UpdateResult = tuple[ReleaseInfo | None, bool]
+
 
 class SettingsView(ttk.Frame):
     """设置页。"""
@@ -62,6 +78,10 @@ class SettingsView(ttk.Frame):
         #: 下慢的会后到，把新的覆盖回去，界面显示的登录态是另一个文件
         #: 读出来的。
         self._probe_generation = 0
+        #: 更新检查同样是一次性的短任务，理由与上面一致；和探测分开两个
+        #: Worker 是因为它们可以随时各来一次，共用一个会互相把对方丢掉。
+        self._update_worker: Worker[_UpdateResult] | None = None
+        self._update_generation = 0
         self._build()
 
     def _build(self) -> None:
@@ -130,6 +150,26 @@ class SettingsView(ttk.Frame):
         )
         self._env = KeyValueList(card, label_width=12)
         self._env.grid(row=7, column=0, sticky="w")
+
+        ttk.Separator(card, orient="horizontal").grid(
+            row=8, column=0, sticky="ew", pady=theme.PAD_MD
+        )
+
+        # 更新
+        ttk.Label(card, text="更新", style="Heading.TLabel").grid(
+            row=9, column=0, sticky="w", pady=(0, theme.PAD_SM)
+        )
+        row = FormRow(
+            card,
+            "检查更新",
+            hint="每次启动自动查一次（24 小时内不重复请求）。有新版本才提示，"
+            "没有就什么都不做。",
+        )
+        row.grid(row=10, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        row.add(SecondaryButton, text="检查更新", command=self._on_check_update)
+        self._update = KeyValueList(card, label_width=12)
+        self._update.grid(row=11, column=0, sticky="w")
+        self._update.set_rows([("当前版本", __version__, "idle")])
 
     # ---------- 行为 ----------
 
@@ -256,3 +296,121 @@ class SettingsView(ttk.Frame):
                 ("ffmpeg", "检测失败", "error"),
             ]
         )
+
+    # ---------- 检查更新（异步） ----------
+
+    def _on_check_update(self) -> None:
+        """手动点按钮。不受限频约束——用户主动点，一天也点不了几次。"""
+        self._start_update_check(manual=True)
+
+    def auto_check_update(self) -> None:
+        """启动时的静默检查，由 :class:`~..app.App` 延迟调用。
+
+        失败**完全不显示**：这是后台动作，用户没要求知道，断网时不该
+        让界面上多一行「检查失败」。
+        """
+        self._start_update_check(manual=False)
+
+    def _start_update_check(self, *, manual: bool) -> None:
+        self._update_generation += 1
+        generation = self._update_generation
+        proxy = self.app.ctx.proxy
+
+        if manual:
+            # 先摆过渡态，理由同 _start_env_probe：先起线程再摆的话，
+            # 结果可能比过渡态先落地，变成「点了没反应」
+            self._update.set_rows(
+                [
+                    ("当前版本", __version__, "idle"),
+                    ("最新版本", "检查中…", "busy"),
+                ]
+            )
+
+        if manual:
+
+            def task(_report: object, _cancelled: object) -> _UpdateResult:
+                info = fetch_latest_release(proxy=proxy)
+                if info is None:
+                    return None, False
+                return (info if is_newer(info.tag, __version__) else None), True
+
+        else:
+
+            def task(_report: object, _cancelled: object) -> _UpdateResult:
+                return check_for_update(proxy=proxy), True
+
+        worker: Worker[_UpdateResult] = Worker(self)
+        self._update_worker = worker
+        try:
+            worker.run(
+                task,
+                on_done=lambda result: self._on_update_done(
+                    generation, result, manual=manual
+                ),
+                on_error=lambda exc: self._on_update_error(
+                    generation, exc, manual=manual
+                ),
+            )
+        except RuntimeError as exc:
+            # 线程没起来不会有回调，手动的那次得自己收尾
+            if manual:
+                self._show_update_failed(str(exc))
+
+    def _on_update_done(
+        self, generation: int, result: _UpdateResult, *, manual: bool
+    ) -> None:
+        if generation != self._update_generation:
+            return
+        info, succeeded = result
+
+        if manual:
+            if not succeeded:
+                self._show_update_failed("没查到（网络不通？）")
+                return
+            if info is None:
+                self._update.set_rows(
+                    [
+                        ("当前版本", __version__, "idle"),
+                        ("最新版本", f"已是最新（{__version__}）", "ok"),
+                    ]
+                )
+                return
+            self._update.set_rows(
+                [
+                    ("当前版本", __version__, "idle"),
+                    ("最新版本", info.version, "warn"),
+                ]
+            )
+
+        if info is not None:
+            self._prompt_update(info)
+
+    def _on_update_error(
+        self, generation: int, exc: BaseException, *, manual: bool
+    ) -> None:
+        if generation != self._update_generation:
+            return
+        if manual:
+            self._show_update_failed(str(exc))
+
+    def _show_update_failed(self, reason: str) -> None:
+        self._update.set_rows(
+            [
+                ("当前版本", __version__, "idle"),
+                ("最新版本", f"检查失败：{reason}", "idle"),
+            ]
+        )
+
+    def _prompt_update(self, info: ReleaseInfo) -> None:
+        """弹一次提示，问要不要去下载页。
+
+        用 ``messagebox`` 而不是就地显示：启动自动检查时用户多半在别的页，
+        就地显示一定会被错过。同一个版本只弹一次——记在
+        ``mark_version_seen`` 里，不看用户选了什么：他看见了就够了。
+        """
+        if not should_notify(info.version):
+            return
+        title, body = hint_text(info)
+        if messagebox.askyesno(title, f"{body}\n\n现在去下载页吗？", parent=self):
+            open_release_page(info.url)
+        mark_version_seen(info.version)

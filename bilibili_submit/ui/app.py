@@ -101,6 +101,9 @@ class App(ttk.Frame):
 
         # 首次进入刷新一次登录态，之后由各视图在需要时调用
         safe_after(self, 100, self.refresh_status)
+        # 更新检查压后：首屏绘制和 ffmpeg 探测都在抢这一两秒，
+        # 跟它们挤在起跑线上只会让窗口看起来卡了一下。
+        safe_after(self, 1500, self._auto_check_update)
 
     # ---------- 布局 ----------
 
@@ -253,6 +256,18 @@ class App(ttk.Frame):
         refresh: Callable[[], None] | None = getattr(view, "refresh", None)
         if refresh:
             refresh()
+
+    def _auto_check_update(self) -> None:
+        """启动时静默查一次更新。
+
+        动作本身在设置页里（它持有弹窗和限频），这里只负责踢一脚——
+        用 ``getattr`` 而不是直接调用，是因为更新检查对界面是可选的：
+        哪天设置页不想要这个入口了，删掉方法即可，主窗口不用跟着改。
+        """
+        view = self._views.get("设置")
+        runner = getattr(view, "auto_check_update", None)
+        if runner is not None:
+            runner()
 
     def refresh_status(self) -> None:
         """刷新状态栏：登录态与 ffmpeg。

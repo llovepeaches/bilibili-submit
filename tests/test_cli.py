@@ -292,3 +292,69 @@ def test_upload_directory_uses_folder_name_as_title(tmp_path, monkeypatch):
     with pytest.raises(_Stop):
         cli.cmd_upload(args)
     assert captured["title"] == "旅行日记"
+
+
+# ---------- check 顺带的新版本提示 ----------
+
+
+class _FakeNavClient:
+    """只实现 ``nav()`` 的替身。check 只想确认登录态能不能查通。"""
+
+    def nav(self):
+        return {"uname": "测试用户", "mid": 1}
+
+
+def _silence_ffmpeg(monkeypatch):
+    monkeypatch.setattr(cli, "ffmpeg_status", lambda: None)
+
+
+def test_check_notice_goes_to_stderr(capsys, monkeypatch, tmp_path):
+    """更新提示走 stderr：check 的正常输出是要读的，插一行进去等于污染。"""
+    from bilibili_submit.update import ReleaseInfo
+
+    info = ReleaseInfo("9.9.9", "v9.9.9", "https://example.test/x", False)
+    _silence_ffmpeg(monkeypatch)
+    monkeypatch.setattr(cli, "_client_from_config", lambda cfg: _FakeNavClient())
+    monkeypatch.setattr(cli, "check_for_update", lambda **_k: info)
+    monkeypatch.setattr(cli, "should_notify", lambda version, path=None: True)
+    monkeypatch.setattr(cli, "mark_version_seen", lambda version, path=None: None)
+
+    code = cli.cmd_check(cli.build_parser().parse_args(["check"]))
+    out, err = capsys.readouterr()
+
+    assert "新版本" not in out, f"提示混进了 stdout：{out!r}"
+    assert "新版本 9.9.9" in err
+    assert code == cli.EXIT_OK
+
+
+def test_check_stays_silent_when_there_is_nothing_new(capsys, monkeypatch):
+    """没有新版本（或没查成）时，一行多余输出都不该有。"""
+    _silence_ffmpeg(monkeypatch)
+    monkeypatch.setattr(cli, "_client_from_config", lambda cfg: _FakeNavClient())
+    monkeypatch.setattr(cli, "check_for_update", lambda **_k: None)
+
+    code = cli.cmd_check(cli.build_parser().parse_args(["check"]))
+    _out, err = capsys.readouterr()
+
+    assert "新版本" not in err
+    assert code == cli.EXIT_OK
+
+
+def test_check_notice_is_skipped_when_login_fails(capsys, monkeypatch):
+    """未登录时用户正忙着处理登录，不该再塞一句「有新版」。"""
+    from bilibili_submit.exceptions import NotLoggedInError
+
+    def no_login(cfg):
+        raise NotLoggedInError("未登录")
+
+    _silence_ffmpeg(monkeypatch)
+    monkeypatch.setattr(cli, "_client_from_config", no_login)
+    called = []
+    monkeypatch.setattr(cli, "check_for_update", lambda **_k: called.append(1))
+
+    code = cli.cmd_check(cli.build_parser().parse_args(["check"]))
+    _out, err = capsys.readouterr()
+
+    assert called == [], "登录都失败了还在查更新"
+    assert "新版本" not in err
+    assert code == cli.EXIT_FAIL

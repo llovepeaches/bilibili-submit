@@ -44,6 +44,7 @@ from .metadata import COMMON_TIDS, ArchiveMeta
 from .multipart import strip_part_marker
 from .scheduler import DEFAULT_HISTORY_FILE, RunOptions, read_history, run_all, run_task
 from .submit import get_backend
+from .update import check_for_update, mark_version_seen, should_notify
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +373,30 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(f"登录态检查失败：{exc}")
         return EXIT_FAIL
 
+    # 走到这里说明 check 是成功的：未登录时用户正忙着处理登录，
+    # 不该再塞一句「有新版」进去。
+    _print_update_notice(cfg)
     return EXIT_OK
+
+
+def _print_update_notice(cfg: "AppConfig") -> None:
+    """顺带提一句新版本。
+
+    走 **stderr** 而不是 stdout：check 的正常输出是要给人读也可能给
+    脚本解析的，往里面插一行无关内容等于污染。退出码也不受影响——
+    更新提示不是 check 的检查项。
+
+    查不到（网络不通、已是最新、被限频）就什么都不打印；「查更新」
+    这件事本身失败不该让 check 看起来有问题。
+    """
+    info = check_for_update(proxy=cfg.account.proxy)
+    if info is None or not should_notify(info.version):
+        return
+    print(
+        f"提示：新版本 {info.version} 已发布（当前 {__version__}）→ {info.url}",
+        file=sys.stderr,
+    )
+    mark_version_seen(info.version)
 
 
 def _print_ffmpeg_status() -> None:
