@@ -32,7 +32,7 @@ from ...update import (
     should_notify,
 )
 from ..environment import EnvironmentSnapshot, probe_environment
-from .. import theme
+from .. import layout, theme
 from ..state import (
     AppUIState,
     THEME_MODE_LABELS,
@@ -42,9 +42,9 @@ from ..state import (
 )
 from ..workers import Worker
 from ..widgets import (
-    Card,
     FormRow,
     KeyValueList,
+    ScrollArea,
     SectionTitle,
     SecondaryButton,
 )
@@ -89,48 +89,70 @@ class SettingsView(ttk.Frame):
             self, "设置", "改动立即生效；主题一项需重启客户端。"
         ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
 
-        card = Card(self)
-        card.grid(row=1, column=0, sticky="nsew")
+        # 最小窗口下这一页装不下（实测 reqh=730 vs 可用 595），底部
+        # 「更新」那一块会被整个裁掉。包进滚动区兜住。
+        #
+        # ``ScrollArea.body`` 本身就是 ``Card.TFrame`` + 同样的 padding，
+        # 所以把 ``card`` 直接绑到它上面，下面几十处引用一行都不用改
+        # ——投稿页（upload.py）已经是这个写法。
+        self._area = ScrollArea(self)
+        self._area.grid(row=1, column=0, sticky="nsew")
+        card = self._area.body
         card.columnconfigure(0, weight=1)
 
-        # 代理
+        # 四段各装一个分组 frame，宽屏（wide 档）排成两列、窄屏竖排。
+        #
+        # 分组 frame 是**静态**的：切换只改 grid 配置，不重建控件。
+        # 重建会丢掉用户已填的表单内容，也会让异步探测回来的结果
+        # 无处可写（探测回来时那个 KeyValueList 可能已经换了新实例）。
+        #
+        # 顺带去掉了原先挂在段间的三条 Separator：分组标题 + 间距
+        # 已经足够分层，而横线在双列时会横跨两列、反而切断阅读。
+        self._groups: list[ttk.Frame] = []
+        for index in range(4):
+            group = ttk.Frame(card, style="Card.TFrame")
+            group.columnconfigure(0, weight=1)
+            group.grid(row=index, column=0, sticky="ew", pady=(0, theme.PAD_MD))
+            self._groups.append(group)
+        basic, look, env_box, update_box = self._groups
+
+        # ① 连接：代理与 cookie 路径
+        ttk.Label(basic, text="连接", style="Heading.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, theme.PAD_SM)
+        )
         self._proxy_var = tk.StringVar()
         row = FormRow(
-            card,
+            basic,
             "代理",
             hint="例如 http://127.0.0.1:7890；境外网络或直连被风控时填。留空表示不走代理。",
         )
-        row.grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        row.grid(row=1, column=0, sticky="ew", pady=(0, theme.PAD_SM))
         row.add(ttk.Entry, textvariable=self._proxy_var)
         self._proxy_var.trace_add("write", self._on_proxy_change)
 
         # cookie 文件
         self._cookie_var = tk.StringVar()
         row = FormRow(
-            card, "Cookie 文件", hint="含 SESSDATA，等同于账号凭据，请勿外传。"
+            basic, "Cookie 文件", hint="含 SESSDATA，等同于账号凭据，请勿外传。"
         )
-        row.grid(row=1, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        row.grid(row=2, column=0, sticky="ew")
         row.add(ttk.Entry, textvariable=self._cookie_var, padx=(0, theme.PAD_SM))
         row.add(
             SecondaryButton, text="浏览…", command=self._pick_cookie, column=1, sticky="w"
         )
 
-        ttk.Separator(card, orient="horizontal").grid(
-            row=2, column=0, sticky="ew", pady=theme.PAD_MD
-        )
-
-        # 外观：主题模式
-        ttk.Label(card, text="外观", style="Heading.TLabel").grid(
-            row=3, column=0, sticky="w", pady=(0, theme.PAD_SM)
+        # ② 外观：主题模式
+        ttk.Label(look, text="外观", style="Heading.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, theme.PAD_SM)
         )
         self._theme_var = tk.StringVar(value=THEME_OPTIONS[0])
         row = FormRow(
-            card,
+            look,
             "主题",
             hint="跟随系统即读 Windows 的浅色/深色设置。tk 控件的颜色在建界面时"
             "就写死了，改这里要**重启客户端**才生效。",
         )
-        row.grid(row=4, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        row.grid(row=1, column=0, sticky="ew")
         row.add(
             ttk.Combobox,
             textvariable=self._theme_var,
@@ -140,36 +162,53 @@ class SettingsView(ttk.Frame):
         )
         self._theme_var.trace_add("write", self._on_theme_change)
 
-        ttk.Separator(card, orient="horizontal").grid(
-            row=5, column=0, sticky="ew", pady=theme.PAD_MD
+        # ③ 环境自检
+        ttk.Label(env_box, text="环境自检", style="Heading.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, theme.PAD_SM)
         )
+        self._env = KeyValueList(env_box, label_width=12)
+        self._env.grid(row=1, column=0, sticky="w")
 
-        # 环境自检
-        ttk.Label(card, text="环境自检", style="Heading.TLabel").grid(
-            row=6, column=0, sticky="w", pady=(0, theme.PAD_SM)
-        )
-        self._env = KeyValueList(card, label_width=12)
-        self._env.grid(row=7, column=0, sticky="w")
-
-        ttk.Separator(card, orient="horizontal").grid(
-            row=8, column=0, sticky="ew", pady=theme.PAD_MD
-        )
-
-        # 更新
-        ttk.Label(card, text="更新", style="Heading.TLabel").grid(
-            row=9, column=0, sticky="w", pady=(0, theme.PAD_SM)
+        # ④ 更新
+        ttk.Label(update_box, text="更新", style="Heading.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, theme.PAD_SM)
         )
         row = FormRow(
-            card,
+            update_box,
             "检查更新",
             hint="每次启动自动查一次（24 小时内不重复请求）。有新版本才提示，"
             "没有就什么都不做。",
         )
-        row.grid(row=10, column=0, sticky="ew", pady=(0, theme.PAD_SM))
+        row.grid(row=1, column=0, sticky="ew", pady=(0, theme.PAD_SM))
         row.add(SecondaryButton, text="检查更新", command=self._on_check_update)
-        self._update = KeyValueList(card, label_width=12)
-        self._update.grid(row=11, column=0, sticky="w")
+        self._update = KeyValueList(update_box, label_width=12)
+        self._update.grid(row=2, column=0, sticky="w")
         self._update.set_rows([("当前版本", __version__, "idle")])
+
+    def apply_layout(self, spec: "layout.Layout") -> None:
+        """按档位把四段排成一列或两列。
+
+        只 ``grid_configure`` 已建好的分组 frame——不重建、不换父容器。
+
+        .. important::
+           两列都要拿到 ``columnconfigure`` 权重，否则右列会被压成
+           0 宽：只改 ``column`` 不改 ``weight`` 是这类切换最常见的
+           失效方式，而且**不报错**，界面只是「右半边空白」。
+        """
+        two = spec.columns > 1
+        card = self._area.body
+        card.columnconfigure(1, weight=1 if two else 0)
+        for index, group in enumerate(self._groups):
+            column, row = (index % 2, index // 2) if two else (0, index)
+            group.grid_configure(
+                row=row,
+                column=column,
+                sticky="ew",
+                padx=(0, spec.gutter) if (two and column == 0) else 0,
+                pady=(0, theme.PAD_MD),
+            )
+        # 列数变了，canvas 的滚动区不会自己重算
+        self._area.refresh()
 
     # ---------- 行为 ----------
 

@@ -33,8 +33,8 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 
 | 资产 | 体积 | 安装 | 说明 |
 |---|---|---|---|
-| [`bilibili-submit-setup.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.6/bilibili-submit-setup.exe) | ~33 MB | 需要 | **推荐**。双击安装，开始菜单有入口，能干净卸载 |
-| [`bilibili-submit-gui-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.6/bilibili-submit-gui-portable.exe) | ~72 MB | 免安装 | 单文件便携版，拷走即用 |
+| [`bilibili-submit-setup.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.1/bilibili-submit-setup.exe) | ~33 MB | 需要 | **推荐**。双击安装，开始菜单有入口，能干净卸载 |
+| [`bilibili-submit-gui-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.1/bilibili-submit-gui-portable.exe) | ~72 MB | 免安装 | 单文件便携版，拷走即用 |
 
 两种都是「双击开窗口」，扫码登录 + 表单投稿，**不用管 ffmpeg 放哪**。
 区别只在打包方式：
@@ -56,10 +56,10 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 
 | 资产 | 体积 | ffmpeg | 说明 |
 |---|---|---|---|
-| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.6/bilibili-submit-standalone.exe) | ~70 MB | 内置 | **单个 exe，双击即用**，不用管 ffmpeg 放哪 |
-| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.6/bilibili-submit.exe) | ~10 MB | 需自备 | 轻量 exe |
-| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.6/bilibili-submit-full-windows.zip) | ~41 MB | 外置 | 轻量 exe + `ffmpeg.exe`，启动最快 |
-| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.6/bilibili-submit-mini-windows.zip) | ~10 MB | 需自备 | 轻量 exe + config + 文档 |
+| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.1/bilibili-submit-standalone.exe) | ~70 MB | 内置 | **单个 exe，双击即用**，不用管 ffmpeg 放哪 |
+| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.1/bilibili-submit.exe) | ~10 MB | 需自备 | 轻量 exe |
+| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.1/bilibili-submit-full-windows.zip) | ~41 MB | 外置 | 轻量 exe + `ffmpeg.exe`，启动最快 |
+| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.1/bilibili-submit-mini-windows.zip) | ~10 MB | 需自备 | 轻量 exe + config + 文档 |
 
 命令行版怎么选：只想双击就用、不想管 ffmpeg → `standalone`；
 在意体积和启动速度 → `full`，把 `ffmpeg.exe` 和 exe 放一起就行。
@@ -447,7 +447,7 @@ bilibili-submit.exe login --proxy http://127.0.0.1:7890
 只能等用户遇到才知道。
 
 ```bash
-git tag v0.2.6 && git push origin v0.2.6   # 版本号换成你要发的
+git tag v0.2.7-rc.1 && git push origin v0.2.7-rc.1   # 版本号换成你要发的
 ```
 
 版本号要同步改六处：`bilibili_submit/__init__.py`、`bili_submit.spec`、

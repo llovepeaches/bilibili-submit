@@ -91,7 +91,17 @@ CONTROL_PAD_X = 12
 FOCUS_RING = 2
 FOCUS_RING_GAP = 2
 
-NAV_WIDTH = 200               # 侧边导航栏宽度
+#: 侧栏宽度，两套：展开 200px（导航项带文字），折叠成图标栏 56px。
+#:
+#: 56 = :data:`GRID` * 7。折叠后导航项只剩一个汉字图标（约 28px），
+#: 左右各留 12px 让它居中——再窄就挤了，再宽则图标栏看着像没排满。
+#: 由 :mod:`.layout` 按窗口档位在两者之间切换。
+NAV_WIDTH_EXPANDED = 200
+NAV_WIDTH_COLLAPSED = 56
+#: 默认（也是历史引用里）的侧栏宽度。测试和老代码都读这个名字，
+#: 所以折叠值另起一个、不改这一个——``MIN_WIDTH > NAV_WIDTH + QR_SIZE``
+#: 这条断言盯的就是展开态装得下二维码。
+NAV_WIDTH = NAV_WIDTH_EXPANDED
 NAV_ITEM_HEIGHT = 40
 #: 导航项之间的间隙（半格）。项高本身是 40，间隙再按整格给就太散了。
 NAV_ITEM_GAP = 4
@@ -106,7 +116,13 @@ ROW_HEIGHT = 36
 #: 日志区高度（文本行数）。给足上下文又不至于把上方表单挤没。
 LOG_HEIGHT = 7
 
-MIN_WIDTH = 1000
+#: 最小窗口宽度。880 是让 :data:`~.layout.BREAKPOINT_MEDIUM`（900）
+#: 真的能触发的下界——再小就没有「宽屏」可言，再大则最低那档断点
+#: 永远跑不到，等于写了一段死代码。
+#:
+#: 侧栏在 880 下会折叠成 56px，内容区反而有 800px，比 1000 宽时的
+#: 776px 还宽——这正是折叠的意义。
+MIN_WIDTH = 880
 MIN_HEIGHT = 660
 DEFAULT_WIDTH = 1180
 DEFAULT_HEIGHT = 760
@@ -287,53 +303,85 @@ _LIGHT = {
     # 「未登录时的主按钮」是需要读懂原因的，读不清等于没提示。
     "DISABLED_FG": "#93818A",
     # 导航
-    "NAV_BG": "#EFE7EA",
+    # 侧栏底色**不能和 DISABLED_BG 同值**：两者一旦撞色，禁用按钮就长得
+    # 和侧栏一个样，「这个按钮为什么点不动」在深色下尤其读不出来。
+    # 这里比窗口底再深一档，让侧栏明确地「退到后面去」。
+    "NAV_BG": "#E9E0E4",
     "NAV_FG": "#241A1F",
     "NAV_HOVER": "#E4D8DD",
     "NAV_ACTIVE_BG": "#FDFAFB",      # 选中项反白，像一张被抽出的单据
     "NAV_ACTIVE_FG": "#A62052",      # 选中文字用深梅，粉色当背景看不清
     # 日志
-    "LOG_BG": "#F7F1F3",
+    "LOG_BG": "#F3EDF0",
     "LOG_TEXT": "#241A1F",
     # 表单
     "COLLAPSE_BG": "#F1E9EC",        # 折叠标题栏：中性、面积大不刺眼
+    # 折叠标题栏的悬停态。**不能复用 HOVER**：两者色值相同的话，鼠标
+    # 划过标题栏时底色纹丝不动，「这一行能点」就只剩光标在说——而光标
+    # 快速划过最容易错过。这里必须比 COLLAPSE_BG 深一档才看得见。
+    "COLLAPSE_HOVER": "#E4D6DC",
     "FIELD_BG": "#FFFFFF",           # 输入框比卡片更亮，边界才清楚
 }
 
 #: 深色。**不是浅色的反转**：深色用「更亮的表面」表达深度，靠明度而不是
 #: 阴影分层；文字整体降字重，避免深底上的粗体糊成一块。绝不用纯黑#000。
+#:
+#: .. important::
+#:    每一级表面必须有**自己的**明度。上一版有六个键共用三个色值
+#:    （``PAPER_ALT``/``DISABLED_BG``/``COLLAPSE_BG`` 全是 ``#2A2126``，
+#:    ``INK_SURFACE``/``FIELD_BG`` 都是 ``#2E2429``，``NAV_BG``/``LOG_BG``
+#:    都是 ``#171215``），结果是深色模式下层级完全糊成一片：禁用按钮
+#:    和表头一个色、操作条和输入框分不出来、侧栏和日志区连成一块。
+#:    现在按明度排成十级阶梯，并有测试盯着「不许再有重复」——
+#:    ``tests/test_theme_contrast.py::test_surfaces_form_a_distinct_ladder``。
+#: 算出来的不是凑的：SHELL 固定在 ``#120E11``，而 ``PAPER`` 被弱化文字
+#: 的 4.5:1 卡住上限，中间要塞进九级，等比排下来每级就是 1.04。
 _DARK = {
-    "SHELL": "#120E11",
-    "PAPER": "#211A1F",
-    "PAPER_ALT": "#2A2126",
+    # ---- 表面十级阶梯：由深到浅 ----
+    # 方向遵循一条规律：**「内含面」和「悬停态」永远朝中间灰走**。浅色下
+    # 内含面比卡片暗（纸白 → 灰），深色下内含面比卡片亮（墨黑 → 灰）。
+    # 所以两套色板的排序是镜像的，不能共用一份顺序表。
+    "SHELL": "#120E11",          # ① 窗口底
+    "NAV_BG": "#171316",         # ② 侧栏
+    "LOG_BG": "#1C171B",         # ③ 日志区
+    "PAPER": "#201B1F",          # ④ 卡片：所有东西的基准面
+    "COLLAPSE_BG": "#241E22",    # ⑤ 折叠标题栏
+    "DISABLED_BG": "#282126",    # ⑥ 禁用控件（比卡片亮，但最"钝"）
+    "PAPER_ALT": "#2B2429",      # ⑦ 表头、次级面
+    "COLLAPSE_HOVER": "#2E272C",  # ⑧ 折叠标题栏悬停：比 ⑤ 亮两级
+    "FIELD_BG": "#312A2F",       # ⑨ 输入框
+    "INK_SURFACE": "#352C33",    # ⑩ 操作条：深色下它是最亮的一档
+    # ---- 描边两级：要比最亮的表面还亮，否则在深色上看不见边界 ----
     "LINE": "#382C33",
     "LINE_STRONG": "#4C3C45",
+    # ---- 墨色三级 ----
     "INK": "#F6EEF1",
     "INK_SECOND": "#C9B8C0",
-    "INK_MUTED": "#9A8791",       # 5.07:1 on PAPER
-    "PINK": "#FF9BB6",              # 深底上要提亮才够彩度
+    # 5.57:1 on PAPER。比上一版（#9A8791）提亮了一档：卡片在九级阶梯里
+    # 上移之后，弱化文字贴到悬停态的折叠标题栏上只剩 4.33:1，读不清。
+    "INK_MUTED": "#A08F9A",
+    # ---- 强调色 ----
+    "PINK": "#FF9BB6",           # 深底上要提亮才够彩度
     "PINK_HOVER": "#FFB3C8",
     "PINK_PRESSED": "#E87C9C",
     "PINK_DEEP": "#FF9BB6",
-    "PINK_TINT": "#3A1F2A",         # 深色下的「浅底」是深色
+    "PINK_TINT": "#3A1F2A",      # 深色下的「浅底」是深色
     "INK_ON_PINK": "#241A1F",
-    "INK_SURFACE": "#2E2429",       # 深色下的操作条要**比卡片亮**，不是更黑
+    # ---- 墨色实心块上的文字 ----
     "INK_SURFACE_FG": "#F6EEF1",
     "INK_SURFACE_MUTED": "#B39FA8",
+    # ---- 交互态：hover/pressed 同样朝中间灰走，所以是**更亮** ----
     "HOVER": "#332830",
     "PRESSED": "#3E3138",
-    "FOCUS_RING": "#FF9BB6",        # 8.62:1
-    "DISABLED_BG": "#2A2126",
-    "DISABLED_FG": "#7A6871",       # 3.01:1 on DISABLED_BG，理由同浅色
-    "NAV_BG": "#171215",
+    "FOCUS_RING": "#FF9BB6",     # 焦点环 9.68:1 on SHELL
+    "DISABLED_FG": "#7A6871",    # 3.03:1 on DISABLED_BG，理由同浅色
+    # ---- 导航 ----
     "NAV_FG": "#F6EEF1",
     "NAV_HOVER": "#2A2126",
-    "NAV_ACTIVE_BG": "#342930",       # 选中项反白，像一张被抽出的单据
+    "NAV_ACTIVE_BG": "#342930",  # 选中项反白，像一张被抽出的单据
     "NAV_ACTIVE_FG": "#FF9BB6",
-    "LOG_BG": "#171215",
+    # ---- 日志 ----
     "LOG_TEXT": "#D9C9D0",
-    "COLLAPSE_BG": "#2A2126",
-    "FIELD_BG": "#2E2429",
 }
 
 #: 语义色：**成对**给出前景与浅底。
@@ -358,8 +406,8 @@ _DARK_TONES = {
     "error": ("#FF9B94", "#3D1A1A"),
     "busy": ("#FF9BB6", "#3A1F2A"),
     "missing": ("#F0C56B", "#3A2D14"),
-    "info": ("#C9B8C0", "#2A2126"),
-    "idle": ("#9A8791", "#211A1F"),
+    "info": ("#C9B8C0", "#2B2429"),     # 底 = PAPER_ALT
+    "idle": ("#9A8791", "#201B1F"),     # 底 = PAPER，让待处理行融进卡片
 }
 
 #: 语义色名 -> 配对的 glyph。状态**不能只靠颜色**传达——色盲用户看不出
@@ -448,6 +496,7 @@ FOCUS_RING = _LIGHT["FOCUS_RING"]
 DISABLED_BG = _LIGHT["DISABLED_BG"]
 DISABLED_FG = _LIGHT["DISABLED_FG"]
 COLLAPSE_BG = _LIGHT["COLLAPSE_BG"]
+COLLAPSE_HOVER = _LIGHT["COLLAPSE_HOVER"]
 FIELD_BG = _LIGHT["FIELD_BG"]
 LOG_BG = _LIGHT["LOG_BG"]
 LOG_TEXT = _LIGHT["LOG_TEXT"]

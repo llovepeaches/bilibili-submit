@@ -478,6 +478,7 @@ def test_layout_survives_resizing():
 
         for width, height in (
             (theme.MIN_WIDTH, theme.MIN_HEIGHT),
+            (900, theme.MIN_HEIGHT),          # compact 上界，正好换档
             (theme.DEFAULT_WIDTH, theme.DEFAULT_HEIGHT),
             (1920, 1080),
         ):
@@ -505,6 +506,427 @@ def test_qr_draws_on_canvas():
 
         draw_placeholder(canvas, "等待获取")
         assert canvas.find_all(), "占位画面应该有内容"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_nav_collapses_at_compact():
+    """窄窗口下侧栏收成图标栏，宽窗口下恢复展开，来回切不错位。
+
+    「收起」必须是 **grid_remove** 而不是重建或 pack_forget：反复
+    切换后文字要么消失要么跑到别的位置去，靠这条用例盯住。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui import layout
+    from bilibili_submit.ui.app import App
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+
+        nav = app._nav
+        text_label = next(iter(app._nav_buttons.values()))._text
+
+        def settle(width, height):
+            root.geometry(f"{width}x{height}")
+            root.update()
+            root.update_idletasks()
+
+        # —— 最窄档：收成图标栏
+        settle(theme.MIN_WIDTH, theme.MIN_HEIGHT)
+        assert app._tier == layout.COMPACT
+        assert nav.winfo_width() == theme.NAV_WIDTH_COLLAPSED
+        assert not text_label.winfo_ismapped(), "图标栏里不该还留着导航文字"
+        assert not app._brand_text.winfo_ismapped(), "图标栏塞不下品牌名"
+        assert not app._nav_version.winfo_ismapped(), "图标栏塞不下版本号"
+        # 图标必须还在——不然整条导航是空的
+        assert app._brand_mark.winfo_ismapped()
+
+        # —— 默认档：恢复展开
+        settle(theme.DEFAULT_WIDTH, theme.DEFAULT_HEIGHT)
+        assert app._tier == layout.MEDIUM
+        assert nav.winfo_width() == theme.NAV_WIDTH_EXPANDED
+        assert text_label.winfo_ismapped(), "宽窗口下导航文字该回来了"
+        assert app._brand_text.winfo_ismapped()
+        assert app._nav_version.winfo_ismapped()
+
+        # —— 来回切三次：配置不能被 forget 掉
+        for _ in range(3):
+            settle(theme.MIN_WIDTH, theme.MIN_HEIGHT)
+            settle(theme.DEFAULT_WIDTH, theme.DEFAULT_HEIGHT)
+        assert nav.winfo_width() == theme.NAV_WIDTH_EXPANDED
+        assert text_label.winfo_ismapped()
+        # 位置没跑偏：文字仍在导航项里、且比图标靠右
+        assert text_label.winfo_x() > 0
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_apply_layout_reaches_every_view_without_raising():
+    """分发档位时不能炸，且不需要响应式的视图可以完全不实现。
+
+    ``App`` 用 ``getattr`` 分发，没实现 ``apply_layout`` 的视图会被
+    静默跳过——这是**故意**的（登录页就一个二维码，不需要断点），
+    所以这里不断言「每个视图都实现了」，只断言分发本身安全。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui import layout
+    from bilibili_submit.ui.app import App
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+
+        # 三档都分发一遍：档位切换走的是同一条路径，任一档炸了都算 bug
+        for width in (theme.MIN_WIDTH, theme.DEFAULT_WIDTH, 1920):
+            root.geometry(f"{width}x{theme.MIN_HEIGHT}")
+            root.update()
+            app._apply_layout(force=True)
+        assert app._tier == layout.WIDE
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_button_hierarchy_is_graded_per_view():
+    """每个视图里强调型按钮至多一个，且批量页要有降级后的文字型按钮。
+
+    「强调色是稀缺资源」——一排七个长得一样的描边按钮，用户扫一遍
+    也分不出该点哪个。粉色每多出现一次，注意力就被多拿走一次。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui.app import App
+    from bilibili_submit.ui.widgets import FluentButton
+
+    def collect(widget, out):
+        for child in widget.winfo_children():
+            if isinstance(child, FluentButton):
+                out.append(child)
+            collect(child, out)
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+
+        for key, view in app._views.items():
+            buttons: list = []
+            collect(view, buttons)
+            accents = [
+                b for b in buttons if b._variant == FluentButton.ACCENT
+            ]
+            assert len(accents) <= 1, (
+                f"视图「{key}」有 {len(accents)} 个强调型按钮，主操作该只有一个"
+            )
+
+        # 批量页的 yaml 入口必须已经降级成文字型：它和「重新扫描」
+        # 平起平坐会让真正要点的操作淹没在一排同级按钮里
+        view = app._views["批量任务"]
+        buttons = []
+        collect(view, buttons)
+        texts = [b for b in buttons if b._variant == FluentButton.TEXT]
+        assert texts, "批量页没有文字型按钮：「从 YAML 加载…」该降级"
+        assert any(b._text.startswith("从 YAML") for b in texts)
+    finally:
+        root.destroy()
+
+
+def test_fluent_button_cursor_marks_clickability():
+    """可点的按钮给手型光标，禁用时不给。
+
+    手型光标是在说「这里能点」。给一个点不动的控件手型，等于骗用户
+    再点一次——而批量页执行期间会禁掉好几个按钮。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.widgets import SecondaryButton, TertiaryButton
+
+    root = tk.Tk()
+    try:
+        for factory in (SecondaryButton, TertiaryButton):
+            button = factory(root, "测试", lambda: None)
+            assert button.cget("cursor") == "hand2", f"{factory.__name__} 缺少手型光标"
+            button.state(["disabled"])
+            assert button.cget("cursor") != "hand2", (
+                f"{factory.__name__} 禁用后还在给手型光标，是在骗用户"
+            )
+            button.state(["!disabled"])
+            assert button.cget("cursor") == "hand2", "恢复后又该给手型了"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_collapsible_header_reacts_to_hover():
+    """折叠区标题栏悬停要换底色。
+
+    「这一行能点」原本只靠手型光标传达，光标快速划过很容易错过——
+    底色是最不容易漏掉的那个信号。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui.widgets import Collapsible
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        panel = Collapsible(root, "标题", opened=False)
+        panel.pack(fill="x")
+        root.update()
+
+        header = panel._header
+        assert header.cget("bg") == theme.COLLAPSE_BG
+
+        header.event_generate("<Enter>")
+        root.update()
+        # 用 COLLAPSE_HOVER 而不是通用 HOVER：后者和 COLLAPSE_BG 在浅色
+        # 下是同一个色值，刷上去等于没刷。这条断言原本写的是 theme.HOVER，
+        # 于是「悬停完全没反应」也能通过——是真漏不是巧合。
+        assert str(header.cget("bg")) == theme.COLLAPSE_HOVER, "悬停时标题栏该换底色"
+        assert theme.COLLAPSE_HOVER != theme.COLLAPSE_BG, "悬停色和常态同色等于没反馈"
+
+        header.event_generate("<Leave>")
+        root.update()
+        assert str(header.cget("bg")) == theme.COLLAPSE_BG, "移开后该恢复"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_settings_two_columns_at_wide():
+    """设置页在最宽档排成两列，中等档收回一列。
+
+    双列要**同时**改 column 和 columnconfigure 权重——只改 column 的
+    话右列是 0 宽，不报错、界面只是右半边空白，是最难发现的一种坏。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui import layout
+    from bilibili_submit.ui.app import App
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        app.show("设置")
+
+        view = app._views["设置"]
+        groups = view._groups
+        assert len(groups) == 4
+
+        def settle(width, height):
+            root.geometry(f"{width}x{height}")
+            root.update()
+            root.update_idletasks()
+
+        # —— 中等档：一列
+        settle(theme.DEFAULT_WIDTH, theme.DEFAULT_HEIGHT)
+        assert app._tier == layout.MEDIUM
+        for group in groups:
+            assert group.grid_info()["column"] == 0
+        assert not groups[1].winfo_ismapped() or (
+            groups[1].winfo_x() == groups[0].winfo_x()
+        ), "中等档下第二组不该跑到右边去"
+
+        # —— 最宽档：两列
+        settle(1920, 1080)
+        assert app._tier == layout.WIDE
+        assert groups[0].grid_info()["column"] == 0
+        assert groups[1].grid_info()["column"] == 1
+        assert groups[1].winfo_x() > groups[0].winfo_x(), "右列没排到右边"
+
+        # 两列要**均分**宽度。这是最容易坏又最不像 bug 的一处：
+        # 漏了 ``card.columnconfigure(1, weight=1)`` 不会报错，右列只是
+        # 停在自然宽度上（实测 1164 vs 484），右边空一大片。
+        # 注意 weight 管的是「额外空间」而非自然宽度，所以不能用
+        # 「右列宽度 > 0」来测——那样永远绿。
+        left, right = groups[0].winfo_width(), groups[1].winfo_width()
+        ratio = max(left, right) / max(min(left, right), 1)
+        assert ratio < 1.3, (
+            f"两列宽度失衡（{left} vs {right}，比值 {ratio:.2f}）——"
+            "多半是忘了给第 1 列 columnconfigure 权重"
+        )
+        # 折行：第 0、1 组在同一行，第 2、3 组在下一行
+        assert groups[2].grid_info()["row"] == 1
+        assert groups[2].grid_info()["column"] == 0
+
+        # —— 收回窄档不能残留双列
+        settle(theme.MIN_WIDTH, theme.MIN_HEIGHT)
+        for group in groups:
+            assert group.grid_info()["column"] == 0
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_tasks_action_bar_outside_scrollarea_and_reachable():
+    """批量任务页：「开始投稿」必须在滚动区外、最小窗口下完整可见。
+
+    这一页纵向溢出 480px（实测 reqh=946 vs 可用 465），不补滚动区的话
+    进度条和日志区会被挤出可视范围。但补了滚动区之后有个新风险：
+    有人顺手把操作条也包进去——那内容一长「开始投稿」就被推出屏幕，
+    正是 ActionBar 存在的意义所在。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui.app import App
+    from bilibili_submit.ui.widgets import ScrollArea
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        root.geometry(f"{theme.MIN_WIDTH}x{theme.MIN_HEIGHT}")
+        root.update()
+        app.show("批量任务")
+        root.update()
+
+        view = app._views["批量任务"]
+
+        def collect(widget, out):
+            for child in widget.winfo_children():
+                out.append(child)
+                collect(child, out)
+
+        nodes: list = []
+        collect(view, nodes)
+        areas = [node for node in nodes if isinstance(node, ScrollArea)]
+        assert areas, "批量任务页必须包进 ScrollArea，否则日志区被压成 1px"
+
+        bar = view._action_bar
+        inside: list = []
+        collect(areas[0], inside)
+        assert bar not in inside, (
+            "操作条不能放进 ScrollArea：内容一长「开始投稿」就被推出可视范围"
+        )
+
+        bar_bottom = bar.winfo_rooty() + bar.winfo_height()
+        window_bottom = root.winfo_rooty() + root.winfo_height()
+        assert bar_bottom <= window_bottom, (
+            f"最小窗口下操作条被截断：{bar_bottom} > 窗口底 {window_bottom}"
+        )
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_tasks_log_area_is_not_squashed():
+    """日志区必须有真实高度，不能被压成一条线。
+
+    改之前实测是 ``h=1``：进度条越界、日志只剩一条缝，投稿过程中的
+    报错完全看不见——而「跑到哪了、哪条错了」恰恰是这一页存在的理由。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui.app import App
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        root.geometry(f"{theme.MIN_WIDTH}x{theme.MIN_HEIGHT}")
+        root.update()
+        app.show("批量任务")
+        root.update()
+
+        view = app._views["批量任务"]
+        assert view._log.winfo_height() > theme.ROW_HEIGHT, (
+            f"日志区被压成 {view._log.winfo_height()}px，投稿报错会看不见"
+        )
+        # 滚到底之后日志要能完整看到
+        view._area._canvas.yview_moveto(1.0)
+        root.update()
+        canvas_bottom = (
+            view._area._canvas.winfo_rooty() + view._area._canvas.winfo_height()
+        )
+        log_bottom = view._log.winfo_rooty() + view._log.winfo_height()
+        assert log_bottom <= canvas_bottom + 2, (
+            f"滚到底后日志区仍被裁：{log_bottom} > 视口底 {canvas_bottom}"
+        )
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_settings_bottom_visible_at_min_size():
+    """最小窗口下设置页底部「更新」那一块必须能滚到、且完整可见。
+
+    实测过：这一页 reqh=730、可用高度 595，不包滚动区的话底部
+    135px 直接被裁掉——用户点「检查更新」永远看不到结果。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui.app import App
+    from bilibili_submit.ui.widgets import ScrollArea
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        root.geometry(f"{theme.MIN_WIDTH}x{theme.MIN_HEIGHT}")
+        root.update()
+        app.show("设置")
+        root.update()
+
+        view = app._views["设置"]
+
+        # 递归找而不是读 view._area：属性名改了这条不该失效，
+        # 要抓的是「这一页有没有滚动区」这件事本身
+        def find_areas(widget, out):
+            for child in widget.winfo_children():
+                if isinstance(child, ScrollArea):
+                    out.append(child)
+                find_areas(child, out)
+
+        areas: list = []
+        find_areas(view, areas)
+        assert areas, (
+            f"设置页内容比最小窗口高（{view.winfo_reqheight()} > {theme.MIN_HEIGHT}），"
+            "必须放进 ScrollArea，否则底部「更新」区被裁掉"
+        )
+        area = areas[0]
+
+        # 滚到底
+        area._canvas.yview_moveto(1.0)
+        root.update()
+
+        canvas_bottom = area._canvas.winfo_rooty() + area._canvas.winfo_height()
+        block = view._update
+        assert block.winfo_height() > 1, "「更新」区被压成了 0 高"
+        assert block.winfo_rooty() + block.winfo_height() <= canvas_bottom + 2, (
+            f"滚到底后「更新」区仍被裁：底 {block.winfo_rooty() + block.winfo_height()}"
+            f" > 视口底 {canvas_bottom}"
+        )
     finally:
         root.destroy()
 
@@ -830,6 +1252,67 @@ def test_history_view_shows_list_when_entries_exist(tmp_path, monkeypatch):
         root.update_idletasks()
         assert view._tree.winfo_ismapped(), "恢复后列表应重新显示"
         assert not view._placeholder.winfo_ismapped(), "恢复后占位应重新隐藏"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_history_columns_keep_fixed_content_fixed():
+    """历史页列宽：定长列不被拉伸，任务名吸收剩余空间。
+
+    时间和 BV 号是定长内容（``2026-05-01 12:34:56`` / ``BV1xx411c7mD``），
+    跟着窗口变宽只会多出一片空白；任务名才是会被截断的那个。
+
+    .. note::
+       这条**测不出**「用不用权重算法」——在 ``MIN_WIDTH`` 以上的可达
+       宽度里，两种写法给出的结果一模一样（ttk 的 ``stretch`` 会把
+       最后一列拉满剩余空间，差异被吃掉了）。共用 ``layout.column_widths``
+       换来的其实是「改一处不会漏另一处」，属于可维护性而不是可观测
+       行为，别指望有测试替它背书。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui import theme as ui_theme
+    from bilibili_submit.ui.app import App
+    from bilibili_submit.ui.views import history as history_view
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        view = app._views["历史"]
+
+        def widths() -> dict[str, int]:
+            return {c: view._tree.column(c, "width") for c in history_view.COLUMNS}
+
+        root.geometry(f"{ui_theme.MIN_WIDTH}x700")
+        root.update_idletasks()
+        root.update()
+        narrow = widths()
+
+        root.geometry("1400x700")
+        root.update_idletasks()
+        root.update()
+        wide = widths()
+
+        # 定长内容不跟着窗口长
+        assert narrow["time"] == wide["time"] == history_view._COLUMN_MIN_WIDTHS["time"]
+        assert narrow["bvid"] == wide["bvid"] == history_view._COLUMN_MIN_WIDTHS["bvid"]
+        # 任务名吃掉多出来的宽度
+        assert wide["name"] > narrow["name"], (
+            f"窗口变宽后任务名列该跟着长：{narrow['name']} → {wide['name']}"
+        )
+        assert narrow["name"] >= history_view._COLUMN_MIN_WIDTHS["name"], (
+            f"最小窗口下任务名列被压到 {narrow['name']}，读不出是哪个任务"
+        )
+        # 列宽总和要贴合表格，别溢出也别空一大片
+        tree_width = view._tree.winfo_width()
+        assert sum(wide.values()) == tree_width, (
+            f"列宽合计 {sum(wide.values())} 与表格实宽 {tree_width} 对不上"
+        )
     finally:
         root.destroy()
 

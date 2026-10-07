@@ -10,14 +10,19 @@ from tkinter import ttk
 from datetime import datetime
 
 from ...scheduler import DEFAULT_HISTORY_FILE, read_history_diagnose
-from .. import theme
+from .. import layout, theme
 from ..widgets import Card, LogConsole, Placeholder, SecondaryButton, SectionTitle
 
 __all__ = ["HistoryView"]
 
 COLUMNS = ("time", "bvid", "name")
 _HEADINGS = {"time": "时间", "bvid": "BV 号", "name": "任务"}
-_WIDTHS = {"time": 140, "bvid": 130, "name": 240}
+#: 列宽权重。时间和 BV 号都是**定长内容**（``2026-05-01 12:34:56`` /
+#: ``BV1xx411c7mD``），跟着窗口变宽只会多出一片空白，所以权重给 0；
+#: 剩下的全给任务名——它才是会被截断的那个。
+_COLUMN_WEIGHTS = {"time": 0, "bvid": 0, "name": 1}
+#: 每列下限。BV 号低于 130 会被截成 ``BV1xx411c…``，那就失去意义了。
+_COLUMN_MIN_WIDTHS = {"time": 140, "bvid": 130, "name": 240}
 
 #: 只展示最近这么多条，避免长列表拖慢渲染
 VISIBLE_LIMIT = 200
@@ -57,8 +62,10 @@ class HistoryView(ttk.Frame):
         )
         for column in COLUMNS:
             self._tree.heading(column, text=_HEADINGS[column])
-            self._tree.column(column, width=_WIDTHS[column], stretch=(column == "name"))
+            self._tree.column(column, stretch=(column == "name"))
         self._tree.grid(row=0, column=0, sticky="nsew")
+        self._tree.bind("<Configure>", self._resize_columns)
+        self._resize_columns()
 
         scroll = ttk.Scrollbar(holder, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=scroll.set)
@@ -74,6 +81,25 @@ class HistoryView(ttk.Frame):
 
         self._log = LogConsole(card, height=4)
         self._log.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+
+    def _resize_columns(self, _event: "tk.Event | None" = None) -> None:
+        """按权重把可用宽度分给各列。
+
+        和批量任务页走同一个 :func:`layout.column_widths`。之前这里写死
+        140/130/240，宽屏上右侧空一大片、窄屏上任务名反而被截——同一个
+        窗口里两个表格的拉伸手感不一样，看着像两个应用。
+
+        宽度没量出来时不动手：``<Configure>`` 在布局的每一步都会触发，
+        拿 1px 去算比例会把列压成下限，再也没恢复回来。
+        """
+        total = self._tree.winfo_width()
+        if total < 100:
+            return
+        widths = layout.column_widths(
+            COLUMNS, _COLUMN_WEIGHTS, _COLUMN_MIN_WIDTHS, total
+        )
+        for column, width in widths.items():
+            self._tree.column(column, width=width)
 
     def refresh(self) -> None:
         """重新读取历史文件并填充列表。"""

@@ -104,6 +104,8 @@ _PAIRS = [
     ("日志文字 / 日志底", "LOG_TEXT", "LOG_BG", 4.5),
     ("折叠标题 / 折叠底", "INK", "COLLAPSE_BG", 4.5),
     ("折叠弱化 / 折叠底", "INK_MUTED", "COLLAPSE_BG", 4.5),
+    # 悬停态也压着同样的提示文字，鼠标停在上面那几秒正是要读它的时候
+    ("折叠弱化 / 折叠悬停底", "INK_MUTED", "COLLAPSE_HOVER", 4.5),
     ("输入框文字 / 输入框", "INK", "FIELD_BG", 4.5),
     ("深梅文字 / 卡片", "PINK_DEEP", "PAPER", 4.5),
     ("深梅文字 / 粉浅底", "PINK_DEEP", "PINK_TINT", 4.5),
@@ -146,6 +148,57 @@ def test_semantic_tones_meet_wcag(mode):
     finally:
         theme.set_mode("light")
     assert not failures, f"{mode} 语义色不达标：\n  " + "\n  ".join(failures)
+
+
+#: 一套色板里必须**各自有自己明度**的表面。
+#:
+#: 为什么要单列：深色上一版有六个键共用三个色值，界面看起来「没什么
+#: 问题」——因为没有任何报错，也没有任何测试会红。但层级是假的：禁用
+#: 按钮和表头一个色、操作条和输入框分不出来。这里的断言方式不是「不许
+#: 相等」（太弱，#2A2126 和 #2A2127 也互不相等），而是**每两级之间要
+#: 拉开看得出来的差距**。
+_LADDER_ROLES = (
+    "SHELL", "NAV_BG", "LOG_BG", "PAPER", "COLLAPSE_BG", "DISABLED_BG",
+    "PAPER_ALT", "COLLAPSE_HOVER", "FIELD_BG", "INK_SURFACE",
+)
+
+#: 真正会被并排看到、必须能分辨的组合，以及各自的最低明度比。
+#:
+#: 不像「任意两级都要 ≥1.03」那样一刀切——卡片和输入框之间要 1.03 就够，
+#: 但**悬停态必须一眼看出来**，所以单独抬到 1.10。
+_LADDER_GAPS = (
+    ("悬停态 / 折叠底", "COLLAPSE_HOVER", "COLLAPSE_BG", 1.10),
+    ("窗口底 / 卡片", "SHELL", "PAPER", 1.05),
+    ("侧栏 / 窗口底", "NAV_BG", "SHELL", 1.03),
+    ("表头 / 卡片", "PAPER_ALT", "PAPER", 1.03),
+    ("输入框 / 卡片", "FIELD_BG", "PAPER", 1.03),
+    ("折叠底 / 卡片", "COLLAPSE_BG", "PAPER", 1.03),
+    ("禁用底 / 卡片", "DISABLED_BG", "PAPER", 1.03),
+    ("日志底 / 卡片", "LOG_BG", "PAPER", 1.03),
+)
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_surfaces_form_a_distinct_ladder(mode):
+    """十级表面不许有两个角色共用同一个色值。"""
+    palette = theme.palette_for(mode)
+    seen: dict[str, list[str]] = {}
+    for name in _LADDER_ROLES:
+        seen.setdefault(palette[name], []).append(name)
+    clashes = [f"{value} 被 {names} 共用" for value, names in seen.items() if len(names) > 1]
+    assert not clashes, f"{mode} 色板的表面色撞值：\n  " + "\n  ".join(clashes)
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_surface_layers_are_far_enough_apart(mode):
+    """会被并排看到的表面，明度要拉开到看得出来。"""
+    palette = theme.palette_for(mode)
+    failures = [
+        f"{label} = {contrast(palette[one], palette[other]):.3f}:1 < {minimum}"
+        for label, one, other, minimum in _LADDER_GAPS
+        if contrast(palette[one], palette[other]) < minimum
+    ]
+    assert not failures, f"{mode} 色板的层级糊在一起：\n  " + "\n  ".join(failures)
 
 
 def test_accent_button_passes_on_its_own_color():

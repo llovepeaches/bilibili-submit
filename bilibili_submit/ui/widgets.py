@@ -26,6 +26,7 @@ __all__ = [
     "FluentButton",
     "PrimaryButton",
     "SecondaryButton",
+    "TertiaryButton",
     "BrandMark",
     "StatusPill",
     "ActionBar",
@@ -100,8 +101,62 @@ class ScrollArea(ttk.Frame):
             widget.bind("<Button-5>", lambda e: self._scroll_units(1))
 
     def _on_wheel(self, event: tk.Event) -> str:
+        if self._nested_can_scroll(event.widget, -1 if event.delta > 0 else 1):
+            return ""  # 内嵌控件自己还能滚，交给它
         self._scroll_units(-1 if event.delta > 0 else 1)
         return "break"
+
+    def bind_nested_scroll(self, widget: tk.Misc) -> None:
+        """给**内嵌的可滚动控件**装「滚到边界交给外层」的转发。
+
+        Tk 的事件沿 ``bindtags`` 传播，不沿父容器链——鼠标停在
+        Treeview 上滚滚轮时，绑在 ``self._canvas`` 上的处理器
+        **根本收不到**（Treeview 的 bindtags 里没有 canvas）。
+
+        批量任务页的任务列表就装在滚动区里面，不装这个转发的后果是：
+        整页内容溢出时用户滚鼠标只能滚列表，永远滚不到下面的日志区，
+        而滚动条又细得很难拖。
+
+        用法：建完列表/日志后调一次::
+
+            area.bind_nested_scroll(self._tree)
+        """
+        if sys.platform == "win32":
+            widget.bind("<MouseWheel>", self._on_wheel)
+        else:
+            widget.bind("<Button-4>", lambda e: self._scroll_from_nested(-1, widget))
+            widget.bind("<Button-5>", lambda e: self._scroll_from_nested(1, widget))
+
+    def _scroll_from_nested(self, direction: int, widget: tk.Misc) -> str:
+        if self._nested_can_scroll(widget, direction):
+            return ""
+        self._scroll_units(direction)
+        return "break"
+
+    @staticmethod
+    def _nested_can_scroll(widget: tk.Misc, direction: int) -> bool:
+        """内嵌控件在这个方向上还有余量吗？有就放行给它自己滚。
+
+        认不出的控件（没有 ``yview``）一律当作「不能滚」——
+        那是普通 Label，事件本来也不该被它截住。
+        """
+        view = getattr(widget, "yview", None)
+        if view is None:
+            return False
+        try:
+            first, last = view()
+        except Exception:  # noqa: BLE001 - 控件已销毁/不是滚动控件
+            return False
+        return first > 0.0 if direction < 0 else last < 1.0
+
+    def refresh(self) -> None:
+        """外部改了 ``body`` 内部几何后，手动重算滚动区。
+
+        档位切换会改列表的 ``minsize``，但 canvas 的 ``scrollregion``
+        不会因为孙子控件变了就自己更新——不调这一下，滚到底的位置
+        停留在旧值上，底部一截滚不到。
+        """
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
 
     def _scroll_units(self, direction: int) -> None:
         # 内容装得下时别滚，否则会把外层容器滚乱
@@ -225,9 +280,12 @@ class Collapsible(ttk.Frame):
             ).grid(row=1, column=1, columnspan=2, sticky="w")
 
         # Tk 的事件不冒泡，标题栏里每个子控件都得单独绑一次，
-        # 否则点在文字上没反应——只有点到 padding 才展开，很难用
+        # 否则点在文字上没反应——只有点到 padding 才展开，很难用。
+        # 悬停同理：绑在 header 上的话，鼠标移到标题文字上时底色就掉了。
         for widget in (self._header, self._arrow, self._hint, *self._header.winfo_children()):
             widget.bind("<Button-1>", self._on_click)
+            widget.bind("<Enter>", self._on_hover)
+            widget.bind("<Leave>", self._on_unhover)
 
         self._render()
 
@@ -262,6 +320,35 @@ class Collapsible(ttk.Frame):
     def _on_click(self, _event: "tk.Event") -> str:
         self.set_opened(not self._opened)
         return "break"
+
+    def _on_hover(self, _event: "tk.Event") -> None:
+        """悬停时整条标题栏换底色。
+
+        「这一行能点」本来只靠手型光标传达，而光标在快速划过时很
+        容易错过——底色是最不容易被漏掉的那个信号。
+
+        用 ``COLLAPSE_HOVER`` 而不是通用的 ``HOVER``：通用的 ``HOVER``
+        是给卡片上的控件选的，刷到折叠标题栏上会和它原本的底色撞成
+        同一个值（浅色下就是如此），等于刷了个寂寞。
+        """
+        self._paint_header(theme.COLLAPSE_HOVER)
+
+    def _on_unhover(self, _event: "tk.Event") -> None:
+        self._paint_header(theme.COLLAPSE_BG)
+
+    def _paint_header(self, background: str) -> None:
+        """把标题栏（含里面所有 Label）统一刷成某个底色。
+
+        子控件要一个个刷：``tk.Frame`` 的底色不会被子 Label 继承，
+        Label 默认是父容器底色但**只在创建时取一次**，之后改父的不
+        会跟着变。
+        """
+        self._header.configure(bg=background)
+        for child in self._header.winfo_children():
+            try:
+                child.configure(bg=background)
+            except tk.TclError:  # 已被销毁，跳过
+                continue
 
     def _render(self) -> None:
         self._arrow.configure(text="▾" if self._opened else "▸")
@@ -512,12 +599,16 @@ class FluentButton(tk.Canvas):
     ACCENT = "accent"
     #: 标准型（描边），其余按钮都用这个
     STANDARD = "standard"
+    #: 文字型（无边框），只给「低频但必须存在」的入口
+    TEXT = "text"
 
     #: 聚焦环预留的边距（上下左右各这么多）
     _RING = 2
     #: 按钮最小宽度。中文两字按钮（"取消"）按文字算只有 44px，
     #: 太窄会显得局促，Fluent 也有同样的最小宽度约束。
     _MIN_WIDTH = 64
+    #: 文字型的最小宽度。它内边距更小，同样的下限会显得两头空荡荡。
+    _MIN_WIDTH_TEXT = 48
 
     def __init__(
         self,
@@ -532,13 +623,18 @@ class FluentButton(tk.Canvas):
     ) -> None:
         self._text = text
         self._command = command
-        self._variant = variant if variant in (self.ACCENT, self.STANDARD) else self.STANDARD
+        self._variant = variant if variant in (
+            self.ACCENT, self.STANDARD, self.TEXT
+        ) else self.STANDARD
         self._height = int(height or theme.CONTROL_HEIGHT)
         self._disabled = False
         self._hovered = False
         self._pressed = False
         self._focused = False
         self._explicit_width = width
+        #: 文字型按钮平时不画底色，用父容器的底色——记下它是 `background`
+        #: 传进来的那个值，不能一律取 ``theme.PAPER``（导航区里就会错）。
+        self._base_background = background or theme.PAPER
 
         # 测量字体和实际绘制字体必须是同一个，否则中文按钮宽度会算错。
         self._measure = theme.measure_font(
@@ -551,8 +647,9 @@ class FluentButton(tk.Canvas):
             height=self._height + self._RING * 2,
             highlightthickness=0,
             borderwidth=0,
-            background=background or theme.PAPER,
+            background=self._base_background,
             takefocus=1,
+            cursor="hand2",
         )
         self._paint()
         self._bind_events()
@@ -616,6 +713,8 @@ class FluentButton(tk.Canvas):
         if self._explicit_width:
             return int(self._explicit_width)
         text_width = self._measure.measure(self._text or " ")
+        if self._variant == self.TEXT:
+            return max(self._MIN_WIDTH_TEXT, text_width + theme.PAD_SM * 2)
         return max(self._MIN_WIDTH, text_width + theme.CONTROL_PAD_X * 2)
 
     def _set_disabled(self, disabled: bool) -> None:
@@ -624,6 +723,9 @@ class FluentButton(tk.Canvas):
             self._hovered = False
             self._pressed = False
         self._disabled = bool(disabled)
+        # 禁用时不给手型光标：手型在说「这里能点」，而它点不动——
+        # 给一个点不动的控件手型，等于骗用户再点一次
+        self.configure(cursor="" if disabled else "hand2")
 
     def _bind_events(self) -> None:
         # 不要叫 ``_bind``：那是 ``tk.Misc.bind`` 内部调用的方法名，
@@ -690,6 +792,14 @@ class FluentButton(tk.Canvas):
             if self._hovered:
                 return theme.PINK_HOVER, theme.INK_ON_PINK
             return theme.PINK, theme.INK_ON_PINK
+        if self._variant == self.TEXT:
+            # 文字型平时不画底色（融进父容器），只有悬停/按下才浮出一层。
+            # 文字用深梅：它是全按钮唯一的"可点"信号，得站得住。
+            if self._pressed:
+                return theme.PRESSED, theme.PINK_DEEP
+            if self._hovered:
+                return theme.HOVER, theme.PINK_DEEP
+            return self._base_background, theme.PINK_DEEP
         # 标准型：底色极浅，靠边框表达「这是个按钮」
         if self._pressed:
             return theme.PRESSED, theme.INK
@@ -705,6 +815,21 @@ class FluentButton(tk.Canvas):
         按钮里撑出空荡感。
         """
         return theme.font("body-strong" if self._variant == self.ACCENT else "body")
+
+    def _outline_for(self, fill: str) -> str:
+        """当前状态的描边色。
+
+        文字型把描边涂成**和底色一样**——Canvas 画不出「无边框」，
+        只能让它隐形。这样文字型就只剩文字和悬停底色两个信号，
+        正好是它该有的分量。
+        """
+        if self._disabled:
+            return theme.LINE
+        if self._variant == self.TEXT:
+            return fill
+        if self._variant == self.ACCENT:
+            return theme.PINK
+        return theme.LINE_STRONG if self._hovered else theme.LINE
 
     def _paint(self) -> None:
         width = int(float(self["width"]))
@@ -723,10 +848,7 @@ class FluentButton(tk.Canvas):
                 outline=theme.FOCUS_RING,
             )
 
-        outline = theme.LINE if self._disabled else (
-            theme.PINK if self._variant == self.ACCENT
-            else (theme.LINE_STRONG if self._hovered else theme.LINE)
-        )
+        outline = self._outline_for(fill)
         self.create_polygon(
             _round_rect_points(
                 ring, ring, width - 1 - ring, height - 1 - ring, theme.RADIUS_CONTROL
@@ -769,6 +891,30 @@ class SecondaryButton(FluentButton):
     ) -> None:
         super().__init__(
             master, text=text, command=command, variant=FluentButton.STANDARD
+        )
+
+
+class TertiaryButton(FluentButton):
+    """文字型按钮：没有边框，只有一行字。
+
+    给「低频但必须存在」的入口——批量页的「从 YAML 加载…」就是典型：
+    它在注释里明写着「多数用户不该看见它」，可又不能删（yaml 能表达
+    界面表达不了的东西）。这类入口做成标准描边按钮，就会和主操作
+    争夺注意力：一排七个长得一样的按钮，用户扫一遍也分不出该点哪个。
+
+    没有边框不等于看不出能点——三个信号都还在：文字用深梅（强调色）、
+    悬停浮出一层浅底、手型光标。
+
+    .. note::
+       一个视图里**也不要放太多**。它比标准按钮弱，但放五个就等于
+       又造出了一排同级的按钮，问题原样回来。
+    """
+
+    def __init__(
+        self, master: tk.Misc, text: str, command: Callable[[], None]
+    ) -> None:
+        super().__init__(
+            master, text=text, command=command, variant=FluentButton.TEXT
         )
 
 
@@ -830,7 +976,10 @@ class StatusPill(tk.Label):
             background=theme.PAPER_ALT,
             foreground=theme.INK,
             padx=theme.PAD_SM,
-            pady=2,
+            # 半格的内边距：胶囊要贴着文字，用整格会显得像个按钮。
+            # 这里**不给手型光标**——状态标签是读的，不是点的，
+            # 给手型等于暗示「点它有反应」。
+            pady=theme.GRID // 4,
         )
         self.set(text, tone)
 
@@ -865,7 +1014,7 @@ class NavItem(tk.Frame):
     硬凑一个空实现只会让人误以为它支持禁用。
     """
 
-    BAR_WIDTH = 3
+    BAR_WIDTH = theme.NAV_BAR_WIDTH
 
     def __init__(
         self,
@@ -894,24 +1043,30 @@ class NavItem(tk.Frame):
         self._bar.pack(side="left", fill="y")
         self._bar.pack_propagate(False)
 
-        body = tk.Frame(self, background=theme.NAV_BG)
-        body.pack(side="left", fill="both", expand=True)
+        # 内容区用 **grid** 而不是 pack：折叠成图标栏时要隐藏文字，
+        # 而 packer 只有 ``pack_forget()``（会把配置一起忘掉），没有
+        # 对应的 ``pack_remove()``。grid 的 ``grid_remove()`` 记住配置，
+        # 是本项目唯一认可的隐藏方式（见 .impeccable.md 反模式）。
+        self._body = tk.Frame(self, background=theme.NAV_BG)
+        self._body.pack(side="left", fill="both", expand=True)
+        self._body.rowconfigure(0, weight=1)
+        self._body.columnconfigure(1, weight=1)
 
         self._icon = tk.Label(
-            body, text=icon, font=theme.font("subtitle"),
+            self._body, text=icon, font=theme.font("subtitle"),
             background=theme.NAV_BG, foreground=theme.INK_MUTED,
             width=2, anchor="center",
         )
-        self._icon.pack(side="left", padx=(theme.PAD_MD, theme.PAD_XS))
+        self._icon.grid(row=0, column=0, padx=(theme.PAD_MD, theme.PAD_XS))
 
         self._text = tk.Label(
-            body, text=text, font=theme.font("body"),
+            self._body, text=text, font=theme.font("body"),
             background=theme.NAV_BG, foreground=theme.NAV_FG,
             anchor="w",
         )
-        self._text.pack(side="left", fill="x", expand=True)
+        self._text.grid(row=0, column=1, sticky="ew")
 
-        self._paintable = (self, body, self._icon, self._text)
+        self._paintable = (self, self._body, self._icon, self._text)
         for widget in self._paintable:
             widget.bind("<Button-1>", self._on_click)
             widget.bind("<Enter>", self._on_enter)
@@ -924,6 +1079,28 @@ class NavItem(tk.Frame):
         """切换选中态。"""
         self._active = active
         self._render()
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """收成图标栏：只留汉字图标，隐藏文字。
+
+        窗口窄到一定程度时，导航那 200px 里大半是空白，而内容区正
+        挤得看不全文件名——折叠把那 144px 还给内容区。
+
+        隐藏用 ``grid_remove()``（记住配置）而不是 ``grid_forget()``，
+        理由见 :meth:`__init__` 里的说明。图标在折叠态靠
+        ``columnconfigure`` 的权重变化居中：文字那列权重归零后，
+        图标列吃满整行，自然居中——比手算 padx 稳。
+        """
+        if collapsed:
+            self._text.grid_remove()
+            self._body.columnconfigure(0, weight=1)
+            self._body.columnconfigure(1, weight=0)
+            self._icon.grid_configure(padx=(0, 0))
+        else:
+            self._text.grid()
+            self._body.columnconfigure(0, weight=0)
+            self._body.columnconfigure(1, weight=1)
+            self._icon.grid_configure(padx=(theme.PAD_MD, theme.PAD_XS))
 
     # ---------- 内部 ----------
 
@@ -1309,6 +1486,18 @@ class LogConsole(tk.Frame):
         self._text.configure(state="normal")
         self._text.delete("1.0", "end")
         self._text.configure(state="disabled")
+
+    def forward_wheel_to(self, area: "ScrollArea") -> None:
+        """把「滚到边界」的滚轮事件交给外层滚动区。
+
+        日志自带滚动条，装在外层滚动区里时会把滚轮事件吃掉——用户
+        滚到底想看下面的内容却滚不动。交给 :meth:`ScrollArea.
+        bind_nested_scroll` 判断边界后再决定是否转给外层。
+
+        抽成方法而不是让调用方读 ``self._text``，是因为那个 Text 是
+        本组件的内部实现，调用方不该知道它是 ``tk.Text`` 还是别的。
+        """
+        area.bind_nested_scroll(self._text)
 
 
 class Placeholder(ttk.Frame):

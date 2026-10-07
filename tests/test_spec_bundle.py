@@ -54,7 +54,12 @@ def test_windows_version_resource_matches_package():
 
     text = (ROOT / "assets" / "version_info.txt").read_text(encoding="utf-8")
 
-    expected = tuple(int(seg) for seg in __version__.split("."))
+    # Windows 的版本资源只认数字四段，塞不进 ``-rc.1`` 这种 semver 预发布
+    # 后缀，所以比较时**先切掉后缀**再取前三段——``0.2.7-rc.1`` 和
+    # ``0.2.7`` 指向同一批数字。直接 ``int(seg)`` 会在 ``int("7-rc")``
+    # 上抛 ValueError，测试崩掉而不是变红，反而看不出是版本没同步。
+    core = __version__.split("-", 1)[0]
+    expected = tuple(int(seg) for seg in core.split("."))
 
     for key in ("filevers", "prodvers"):
         match = re.search(rf"{key}=\(([^)]*)\)", text)

@@ -32,11 +32,10 @@ from ...exceptions import BiliError, ConfigError, NotLoggedInError
 from ...multipart import PartGroup, group_files, strip_part_marker
 from ...scheduler import RunOptions, TaskOutcome, run_task
 from ...submit import get_backend
-from .. import theme
+from .. import layout, theme
 from ..state import BatchUIState, DEFAULT_TID, load_ui_state, save_ui_state
 from ..widgets import (
     ActionBar,
-    Card,
     Collapsible,
     FormRow,
     LogConsole,
@@ -44,10 +43,12 @@ from ..widgets import (
     Placeholder,
     PrimaryButton,
     ProgressBar,
+    ScrollArea,
     SecondaryButton,
     SectionTitle,
     StatusPill,
     SummaryBar,
+    TertiaryButton,
 )
 from ..workers import Cancelled, Event, Worker
 from .upload import (
@@ -156,23 +157,11 @@ def render_title_template(template: str, name: str, number: int) -> str:
 def _column_widths(total: int) -> dict[str, int]:
     """按权重把总宽度分给各列，返回每列宽度。
 
-    抽成纯函数是因为「分得对不对」跟窗口无关，绑死在 Tk 上就只能靠
-    建窗口 + 拖尺寸来测，那种测试既慢又脆。
+    算法本身在 :func:`layout.column_widths`——历史页用的是同一份。
+    两边各写一遍的结果就是同一个窗口里两个表格拉伸手感不一样，
+    而且改一处漏一处。
     """
-    fixed = sum(_COLUMN_MIN_WIDTHS[c] for c in COLUMNS if not _COLUMN_WEIGHTS[c])
-    weights = sum(_COLUMN_WEIGHTS.values())
-    usable = max(total - fixed, 0)
-    return {
-        column: (
-            _COLUMN_MIN_WIDTHS[column]
-            if not _COLUMN_WEIGHTS[column]
-            else max(
-                _COLUMN_MIN_WIDTHS[column],
-                int(usable * _COLUMN_WEIGHTS[column] / weights),
-            )
-        )
-        for column in COLUMNS
-    }
+    return layout.column_widths(COLUMNS, _COLUMN_WEIGHTS, _COLUMN_MIN_WIDTHS, total)
 
 
 @dataclass(frozen=True)
@@ -273,12 +262,24 @@ class TasksView(ttk.Frame):
             "选一个视频文件夹，顶部参数填一次，下面就是全部待投稿任务。",
         ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
 
-        card = Card(self)
-        card.grid(row=1, column=0, sticky="nsew")
+        # 最小窗口下这一页纵向缺 480px（实测 reqh=946 vs 可用 465）：
+        # 进度条直接越界、日志区被压成 1px 高。包进滚动区兜住。
+        #
+        # ``ScrollArea.body`` 本身就是 ``Card.TFrame`` + 同样的 padding，
+        # 所以把 ``card`` 绑到它上面，下面几十处引用一行都不用改。
+        self._area = ScrollArea(self)
+        self._area.grid(row=1, column=0, sticky="nsew")
+        card = self._area.body
         card.columnconfigure(0, weight=1)
         # 空状态 + 列表共用 row 6。空状态里带一个「选择文件夹」按钮，
-        # 所以这一行至少要够放标题 + 说明 + 按钮，否则按钮会被裁掉一半
-        card.rowconfigure(6, weight=1, minsize=theme.PAD_2XL * 5)
+        # 所以这一行至少要够放标题 + 说明 + 按钮，否则按钮会被裁掉一半。
+        #
+        # 注意：滚动区里 **weight=1 不生效**——canvas 给 body 的是自然
+        # 高度，没有「剩余空间」可分。所以列表高度只能靠 minsize 兜，
+        # 具体值由 :meth:`apply_layout` 按档位给。
+        card.rowconfigure(
+            6, weight=1, minsize=layout.layout_for(theme.DEFAULT_WIDTH).list_min_height
+        )
 
         # ① 顶部统一投稿参数。**默认收起**——「填一次」的东西不该
         # 每次进来都占掉半屏。收起时标题栏右侧会列出已改过的项，
@@ -450,7 +451,9 @@ class TasksView(ttk.Frame):
             text="熟悉配置文件？可从 yaml 加载，逐任务参数与投稿后端以配置为准。",
             style="Card.Secondary.TLabel",
         ).pack(side="left", padx=(0, theme.PAD_SM))
-        self._config_button = SecondaryButton(
+        # 文字型：这个入口在注释里就写着「多数用户不该看见它」，做成
+        # 描边按钮就会和「重新扫描」这些真正要点的操作平起平坐。
+        self._config_button = TertiaryButton(
             advanced, "从 YAML 加载…", self._pick_config
         )
         self._config_button.pack(side="left")
@@ -516,7 +519,9 @@ class TasksView(ttk.Frame):
 
         self._log = LogConsole(card, height=theme.LOG_HEIGHT)
         self._log.grid(row=8, column=0, sticky="nsew", pady=(theme.PAD_SM, 0))
-        card.rowconfigure(8, weight=1)
+        # 这一行**刻意不给 weight**：滚动区里列表（row 6）靠 minsize 兜
+        # 高度，日志再抢一份就会把列表压没——之前正是这样把日志压成
+        # 1px、又把进度条挤出可视区的。日志自己有滚动条，固定高度即可。
 
         # 操作条放在卡片**外面**，钉在页面底部。和投稿页同一个位置、
         # 同一套交互：底部深色条 + 左边说「将要发生什么」+ 右边主按钮。
@@ -542,6 +547,28 @@ class TasksView(ttk.Frame):
         ):
             variable.trace_add("write", lambda *_: self._update_shared_hint())
         self._update_shared_hint()
+
+        # 列表和日志都自带滚动条，而它们装在外层滚动区**里面**。不装
+        # 转发的话，滚鼠标只会滚它们自己，永远滚不到页面底部去看日志
+        # ——而外层滚动条细得很难拖。理由见 ScrollArea.bind_nested_scroll。
+        self._area.bind_nested_scroll(self._tree)
+        self._log.forward_wheel_to(self._area)
+
+    def apply_layout(self, spec: "layout.Layout") -> None:
+        """按窗口档位调整任务列表的最小高度。
+
+        .. important::
+           **只做几何**。这里不许刷数据（重扫目录、重读偏好）——
+           ``App.show()`` 本来就会调 :meth:`refresh`，若在这里顺手刷
+           一遍，拖一次窗口就会重扫一次目录，而用户只是想看宽一点。
+
+        ``refresh()`` 也是必须的：改了 ``minsize`` 之后 canvas 的
+        ``scrollregion`` 不会自己更新，不重算的话「滚到底」停留在旧
+        位置，底部一截够不着。
+        """
+        self._area.body.rowconfigure(6, minsize=spec.list_min_height)
+        self._area.refresh()
+        self._resize_columns()
 
     # ---------- 行为 ----------
 

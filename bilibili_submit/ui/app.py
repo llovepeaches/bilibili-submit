@@ -33,7 +33,7 @@ from ..auth import (
     load_cookies,
 )
 from ..client import BiliClient
-from . import theme, win_effects
+from . import layout, theme, win_effects
 from .environment import EnvironmentSnapshot, probe_environment
 from .state import load_app_state, resolve_theme_mode
 from .widgets import BrandMark, NavItem
@@ -92,12 +92,25 @@ class App(ttk.Frame):
         self._status_worker: Worker[EnvironmentSnapshot] | None = None
         self._status_generation = 0
 
+        #: 当前布局档位。``None`` 表示还没定过档，见 :meth:`_apply_layout`。
+        self._tier: str | None = None
+        self._last_height = 0
+        #: 重入闸。改侧栏宽度会引发一串 ``<Configure>``，递归进来就死循环
+        self._applying_layout = False
+
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
 
         self._build_nav()
         self._build_content()
         self._build_statusbar()
+
+        # 断点响应绑在**根窗口**上：Tk 的事件不冒泡，绑在 self 上收不到
+        # root 的尺寸变化。放在所有视图建完之后——档位要分发给它们。
+        self.master.bind("<Configure>", self._on_root_configure, add="+")
+        # 首帧先定一次档：此时窗口可能还没映射（winfo_width() 是 1），
+        # _apply_layout 会用 DEFAULT_WIDTH 兜住，不该按最窄档闪一帧。
+        self._apply_layout(force=True)
 
         # 首次进入刷新一次登录态，之后由各视图在需要时调用
         safe_after(self, 100, self.refresh_status)
@@ -122,7 +135,8 @@ class App(ttk.Frame):
     }
 
     def _build_nav(self) -> None:
-        nav = ttk.Frame(self, style="Nav.TFrame", width=theme.NAV_WIDTH)
+        self._nav = ttk.Frame(self, style="Nav.TFrame", width=theme.NAV_WIDTH)
+        nav = self._nav
         nav.grid(row=0, column=0, sticky="nsew")
         nav.grid_propagate(False)
         nav.columnconfigure(0, weight=1)
@@ -153,34 +167,40 @@ class App(ttk.Frame):
             self._nav_buttons[label] = item
             self._views_info.append((label, view_cls))
 
-        # 底部版本号
-        ttk.Label(
+        # 底部版本号。折叠成图标栏时藏起来——56px 里塞不下版本号，
+        # 而版本号在设置页也有，藏掉不丢信息。
+        self._nav_version = ttk.Label(
             nav,
             text=f"v{__version__}",
             style="Nav.Secondary.TLabel",
-        ).grid(row=100, column=0, sticky="sw", padx=theme.PAD_LG, pady=theme.PAD_MD)
+        )
+        self._nav_version.grid(
+            row=100, column=0, sticky="sw", padx=theme.PAD_LG, pady=theme.PAD_MD
+        )
 
     def _build_brand(self, nav: tk.Misc) -> None:
         """品牌区：主色方块 + 应用名。
 
         导航顶部有个视觉锚点，整块侧栏才不像一串裸按钮。
         """
-        brand = ttk.Frame(nav, style="Nav.TFrame")
+        self._brand = ttk.Frame(nav, style="Nav.TFrame")
+        brand = self._brand
         brand.grid(row=0, column=0, sticky="ew", pady=(theme.PAD_LG, theme.PAD_MD))
         brand.columnconfigure(1, weight=1)
 
-        BrandMark(brand, "B").grid(
+        self._brand_mark = BrandMark(brand, "B")
+        self._brand_mark.grid(
             row=0, column=0, padx=(theme.PAD_LG, theme.PAD_SM)
         )
 
-        text_box = ttk.Frame(brand, style="Nav.TFrame")
-        text_box.grid(row=0, column=1, sticky="w")
+        self._brand_text = ttk.Frame(brand, style="Nav.TFrame")
+        self._brand_text.grid(row=0, column=1, sticky="w")
         tk.Label(
-            text_box, text="哔哩投稿", font=theme.font("body-strong"),
+            self._brand_text, text="哔哩投稿", font=theme.font("body-strong"),
             background=theme.NAV_BG, foreground=theme.NAV_FG,
         ).pack(anchor="w")
         tk.Label(
-            text_box, text="自动投稿工具", font=theme.font("caption"),
+            self._brand_text, text="自动投稿工具", font=theme.font("caption"),
             background=theme.NAV_BG, foreground=theme.INK_MUTED,
         ).pack(anchor="w")
 
@@ -233,6 +253,88 @@ class App(ttk.Frame):
             foreground=theme.INK_SURFACE_MUTED, anchor="e",
         )
         self._status_ffmpeg.grid(row=0, column=2, sticky="e", padx=theme.PAD_MD)
+
+    # ---------- 响应式 ----------
+
+    def _on_root_configure(self, event: "tk.Event") -> None:
+        """窗口尺寸变了就重新定档。
+
+        四道闸，缺一道拖窗口时界面就会抖成一团：
+
+        1. ``<Configure>`` 绑在 root 上，但 Tk 在**子控件**几何变化时
+           也会往上层派发——只认 root 自己那一份。
+        2. 窗口还没映射时 ``winfo_width()`` 是 1，拿它判档会先按最窄档
+           布一帧再跳档，用户看得见闪一下。
+        3. 档位没变、高度变化也不到四格时不动手——和
+           ``TasksView._resize_columns`` 同样的道理，无脑重排会抖。
+        4. 重入闸：改侧栏宽度本身就会引发一串 Configure。
+        """
+        if event.widget is not self.master or self._applying_layout:
+            return
+        width = self.master.winfo_width()
+        if width < 100:
+            return
+        height = self.master.winfo_height()
+        if (
+            layout.tier_for(width) == self._tier
+            and abs(height - self._last_height) < theme.GRID * 4
+        ):
+            return
+        self._apply_layout()
+
+    def _apply_layout(self, force: bool = False) -> None:
+        """按当前窗口宽度定档，并把档位分给各视图。
+
+        .. important::
+           这里**只做几何**。视图的 ``apply_layout`` 里不许刷数据
+           （扫描目录、环境探测、更新检查）——拖一次窗口就重扫一遍
+           目录是这类钩子最容易犯的错。``App.show()`` 本来就会调
+           ``view.refresh()``，这里不需要再踢一脚。
+        """
+        width = self.master.winfo_width()
+        spec = layout.layout_for(width if width >= 100 else theme.DEFAULT_WIDTH)
+        if not force and spec.tier == self._tier:
+            return
+        self._tier = spec.tier
+        self._last_height = self.master.winfo_height()
+        self._applying_layout = True
+        try:
+            self._apply_nav(spec)
+            for view in self._views.values():
+                # 可选协议：视图不实现就跳过。和 _auto_check_update 一样
+                # 用 getattr 而不是抽象基类——加一个新页不该被迫实现
+                # 它用不上的钩子。
+                hook = getattr(view, "apply_layout", None)
+                if hook is not None:
+                    hook(spec)
+        finally:
+            self._applying_layout = False
+
+    def _apply_nav(self, spec: "layout.Layout") -> None:
+        """侧栏折叠：改宽度 + 导航项只留图标 + 藏掉品牌名与版本号。
+
+        宽度直接 ``configure``：``_build_nav`` 里已经开了
+        ``grid_propagate(False)``，否则改了也会被内容顶回去。
+
+        折叠时品牌区只剩 32px 的 ``BrandMark``，靠把第 0 列的权重给满
+        让它居中——比手算 padx 稳（图标宽度会随字体变）。
+        """
+        self._nav.configure(width=spec.nav_width)
+        for item in self._nav_buttons.values():
+            item.set_collapsed(spec.nav_collapsed)
+
+        if spec.nav_collapsed:
+            self._brand_text.grid_remove()
+            self._nav_version.grid_remove()
+            self._brand.columnconfigure(0, weight=1)
+            self._brand.columnconfigure(1, weight=0)
+            self._brand_mark.grid_configure(padx=0)
+        else:
+            self._brand_text.grid()
+            self._nav_version.grid()
+            self._brand.columnconfigure(0, weight=0)
+            self._brand.columnconfigure(1, weight=1)
+            self._brand_mark.grid_configure(padx=(theme.PAD_LG, theme.PAD_SM))
 
     def set_task_progress(self, text: str) -> None:
         """在状态栏中段显示任务进度，供批量任务页调用。
