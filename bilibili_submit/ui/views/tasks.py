@@ -58,18 +58,18 @@ if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
 
 from ..widgets import (
     ActionBar,
-    Collapsible,
+    ExpansionPanel,
     FormRow,
     LogConsole,
     OptionSwitches,
     Placeholder,
     ProgressBar,
     ScrollArea,
-    SecondaryButton,
+    OutlinedButton,
     SectionTitle,
-    StatusPill,
+    AssistChip,
     SummaryBar,
-    TertiaryButton,
+    TextButton,
 )
 from ..workers import Cancelled, Worker
 from .upload import (
@@ -277,7 +277,7 @@ class TasksView(ttk.Frame):
         # 每次进来都占掉半屏。收起时标题栏右侧会列出已改过的项，
         # 用户瞄一眼就知道参数还在（见 _update_shared_hint）。
         # 任务列表才是这一页的主体，表单不该抢它的位置。
-        self._shared_section = Collapsible(
+        self._shared_section = ExpansionPanel(
             card,
             "投稿设置",
             "这一批任务共用",
@@ -348,7 +348,7 @@ class TasksView(ttk.Frame):
         # ② 更多设置。默认收起：这些都是「想起来才动一次」的开关，
         #    铺开会占掉列表三行的高度。收起时标题栏右侧会列出已开启的项，
         #    否则用户会以为自己设的东西丢了。
-        self._more_section = Collapsible(
+        self._more_section = ExpansionPanel(
             card,
             "更多设置",
             "投稿标题模板、互动设置、音质增强",
@@ -370,7 +370,7 @@ class TasksView(ttk.Frame):
             ttk.Entry, textvariable=self._title_template_var
         )
         self._apply_title_button = row.add(
-            SecondaryButton,
+            OutlinedButton,
             text="套用到选中行",
             command=self._apply_title_template,
             column=1,
@@ -402,14 +402,14 @@ class TasksView(ttk.Frame):
         row.grid(row=0, column=0, sticky="ew")
         row.add(ttk.Entry, textvariable=self._dir_var, padx=(0, theme.PAD_SM))
         self._pick_button = row.add(
-            SecondaryButton,
+            OutlinedButton,
             text="选择文件夹…",
             command=self._pick_dir,
             column=1,
             sticky="w",
         )
         self._load_button = row.add(
-            SecondaryButton,
+            OutlinedButton,
             text="重新扫描",
             command=self._load,
             column=2,
@@ -445,12 +445,12 @@ class TasksView(ttk.Frame):
         ).pack(side="left", padx=(0, theme.PAD_SM))
         # 文字型：这个入口在注释里就写着「多数用户不该看见它」，做成
         # 描边按钮就会和「重新扫描」这些真正要点的操作平起平坐。
-        self._config_button = TertiaryButton(
+        self._config_button = TextButton(
             advanced, "从 YAML 加载…", self._pick_config
         )
         self._config_button.pack(side="left")
 
-        self._source_pill = StatusPill(card, "尚未选择文件夹", "idle")
+        self._source_pill = AssistChip(card, "尚未选择文件夹", "idle")
         self._source_pill.grid(
             row=4, column=0, sticky="w", pady=(0, theme.PAD_SM)
         )
@@ -529,7 +529,7 @@ class TasksView(ttk.Frame):
         # 用户不知道那儿本来应该有东西
         self._refresh_action_bar()
         # 统一参数一改就同步折叠区摘要。挂在建完之后：变量本身是在
-        # Collapsible 之后创建的，构造期挂不上
+        # ExpansionPanel 之后创建的，构造期挂不上
         for variable in (
             self._tid_var, self._tag_var, self._desc_var,
             self._copyright_var, self._dtime_var,

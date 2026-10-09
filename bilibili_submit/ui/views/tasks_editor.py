@@ -28,7 +28,7 @@ from typing import Any, Callable
 from ...config import TaskConfig, task_files, task_part_titles
 from ...multipart import strip_part_marker
 from .. import theme
-from ..widgets import PrimaryButton, SecondaryButton
+from ..widgets import FilledButton, OutlinedButton
 
 
 def render_title_template(template: str, name: str, number: int) -> str:
@@ -124,13 +124,13 @@ class PartTitlesDialog:
         buttons.grid(
             row=row, column=0, columnspan=3, sticky="e", pady=(theme.PAD_MD, 0)
         )
-        SecondaryButton(buttons, "用文件名", self._reset).pack(
+        OutlinedButton(buttons, "用文件名", self._reset).pack(
             side="left", padx=(0, theme.PAD_SM)
         )
-        SecondaryButton(buttons, "取消", self._cancel).pack(
+        OutlinedButton(buttons, "取消", self._cancel).pack(
             side="left", padx=(0, theme.PAD_SM)
         )
-        PrimaryButton(buttons, "确定", self._ok).pack(side="left")
+        FilledButton(buttons, "确定", self._ok).pack(side="left")
 
     def _reset(self) -> None:
         """「用文件名」：把每行填回文件名，用户能直接看到将要用的值。

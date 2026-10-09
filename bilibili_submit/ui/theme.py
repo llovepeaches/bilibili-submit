@@ -115,7 +115,7 @@ NAV_WIDTH = NAV_WIDTH_EXPANDED
 NAV_ITEM_HEIGHT = 40
 #: 导航项之间的间隙（半格）。项高本身是 40，间隙再按整格给就太散了。
 NAV_ITEM_GAP = 4
-#: Material 的导航高亮是**整行药丸**（不是 Fluent 的左侧竖条）：
+#: Material 的导航高亮是**整行药丸**（不是旧版的左侧竖条）：
 #: 药丸不满铺，两侧各留这条缝，形状才读得出来。
 NAV_ITEM_MARGIN = 6
 INPUT_HEIGHT = CONTROL_HEIGHT
@@ -146,9 +146,9 @@ FONT_PREFIX = "Bili"
 def _pick_family() -> str:
     """挑一个该平台大概率存在的 UI 字体。
 
-    Windows 上用 Segoe UI——Fluent Design 的标准字体，也是系统默认，
-    不会像写死 "Microsoft YaHei" 那样在高 DPI 下显得厚重。
-    Linux/macOS 回退到各自的 CJK 字体，否则中文渲染成方框。
+    Windows 上用 Segoe UI——它是 Windows 那套设计体系（Fluent Design）
+    的标准字体，也是系统默认，不会像写死 "Microsoft YaHei" 那样在高 DPI
+    下显得厚重。Linux/macOS 回退到各自的 CJK 字体，否则中文渲染成方框。
     """
     if sys.platform == "win32":
         return "Segoe UI"
@@ -719,7 +719,7 @@ def apply(style: "ttk.Style", mode: str | None = None) -> str:
         font=font("caption"),
     )
 
-    # 按钮。药丸形由自绘的 FluentButton 提供；这里是ttk 版本的兜底样式，
+    # 按钮。药丸形由自绘的 MaterialButton 提供；这里是ttk 版本的兜底样式，
     # 高度靠 padding 凑到 32 / 40，五态齐全。
     style.configure(
         "Primary.TButton",
@@ -855,9 +855,9 @@ def apply(style: "ttk.Style", mode: str | None = None) -> str:
     # 分隔线
     style.configure("TSeparator", background=LINE)
 
-    # 滚动条。Fluent 的滚动条是**无箭头**的细条——clam 默认在两端画
-    # 三角按钮，深色模式下箭头区露出浅底、非常扎眼，所以干脆去掉，
-    # 只留滑轨和滑块。本项目只用纵向滚动条，水平方向不存在。
+    # 滚动条。Windows 那套设计体系（Fluent）里滚动条是**无箭头**的细条
+    # ——clam 默认在两端画三角按钮，深色模式下箭头区露出浅底、非常扎眼，
+    # 所以干脆去掉，只留滑轨和滑块。本项目只用纵向滚动条，水平方向不存在。
     style.layout(
         "TScrollbar",
         [

@@ -28,7 +28,7 @@ from ...client import BiliClient
 from ...exceptions import BiliError
 from .. import theme
 from ..qr import draw_placeholder, draw_qr
-from ..widgets import Card, LogConsole, PrimaryButton, SecondaryButton, SectionTitle
+from ..widgets import Card, LogConsole, FilledButton, OutlinedButton, SectionTitle
 from ..workers import Cancelled, Worker
 
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
@@ -112,10 +112,10 @@ class LoginView(ttk.Frame):
         buttons = ttk.Frame(card, style="Card.TFrame")
         buttons.grid(row=2, column=0, pady=theme.PAD_MD)
 
-        self._start_button = PrimaryButton(buttons, "获取二维码", self._start)
+        self._start_button = FilledButton(buttons, "获取二维码", self._start)
         self._start_button.pack(side="left", padx=(0, theme.PAD_SM))
 
-        self._cancel_button = SecondaryButton(buttons, "取消", self._cancel)
+        self._cancel_button = OutlinedButton(buttons, "取消", self._cancel)
         self._cancel_button.pack(side="left")
         self._cancel_button.state(["disabled"])
 

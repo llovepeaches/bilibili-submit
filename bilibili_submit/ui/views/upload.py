@@ -20,13 +20,13 @@ from ...submit import get_backend
 from .. import theme
 from ..widgets import (
     ActionBar,
-    Collapsible,
+    ExpansionPanel,
     FormRow,
     OptionSwitches,
     LogConsole,
     ProgressBar,
     ScrollArea,
-    SecondaryButton,
+    OutlinedButton,
     SectionTitle,
 )
 from ..workers import Cancelled, Worker
@@ -117,7 +117,7 @@ class UploadView(ttk.Frame):
         row.grid(row=0, column=0, sticky="ew", pady=theme.PAD_XS)
         row.add(ttk.Entry, textvariable=self._file_var, padx=(0, theme.PAD_SM))
         row.add(
-            SecondaryButton,
+            OutlinedButton,
             text="选择文件…",
             command=self._pick_file,
             column=1,
@@ -191,7 +191,7 @@ class UploadView(ttk.Frame):
 
         # 更多设置：与批量任务页共用同一组开关，术语和默认值都一致，
         # 免得用户在一个页里设过、換个页又要重新找一遍。
-        self._more = Collapsible(
+        self._more = ExpansionPanel(
             form, "更多设置", "互动设置、音质增强", opened=False,
             on_toggle=lambda _opened: self._update_more_hint(),
         )

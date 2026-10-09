@@ -340,7 +340,7 @@ def test_theme_apply_does_not_raise():
 
 
 @needs_display
-def test_fluent_button_states_and_invoke():
+def test_material_button_states_and_invoke():
     """自绘按钮的五态与 ttk 兼容接口。
 
     ``state()`` 的形状是照着 ``ttk.Widget.state()`` 抄的——现有代码和
@@ -349,13 +349,13 @@ def test_fluent_button_states_and_invoke():
     """
     import tkinter as tk
 
-    from bilibili_submit.ui.widgets import PrimaryButton, SecondaryButton
+    from bilibili_submit.ui.widgets import FilledButton, OutlinedButton
 
     root = tk.Tk()
     try:
         hits: list[str] = []
-        primary = PrimaryButton(root, "开始投稿", lambda: hits.append("p"))
-        secondary = SecondaryButton(root, "取消", lambda: hits.append("s"))
+        primary = FilledButton(root, "开始投稿", lambda: hits.append("p"))
+        secondary = OutlinedButton(root, "取消", lambda: hits.append("s"))
         # 不 map 出来事件送不到（Tk 只给可见窗口派发事件）
         primary.pack()
         secondary.pack()
@@ -393,19 +393,19 @@ def test_fluent_button_states_and_invoke():
 
 
 @needs_display
-def test_fluent_button_picks_up_dark_palette():
+def test_material_button_picks_up_dark_palette():
     """按钮颜色在创建时取自当前模式；深色模式下实心底应是深色板的强调色。"""
     import tkinter as tk
 
-    from bilibili_submit.ui.widgets import FluentButton
+    from bilibili_submit.ui.widgets import MaterialButton
 
     theme.set_mode("dark")
     try:
         root = tk.Tk()
         try:
-            button = FluentButton(
+            button = MaterialButton(
                 root, "开始投稿", lambda: None,
-                variant=FluentButton.ACCENT, height=theme.PRIMARY_BUTTON_HEIGHT,
+                variant=MaterialButton.ACCENT, height=theme.PRIMARY_BUTTON_HEIGHT,
             )
             assert button.winfo_reqheight() == theme.PRIMARY_BUTTON_HEIGHT + 4
         finally:
@@ -511,11 +511,11 @@ def test_nav_active_indicator_is_a_pill():
     """
     import tkinter as tk
 
-    from bilibili_submit.ui.widgets import NavItem
+    from bilibili_submit.ui.widgets import NavRailItem
 
     root = tk.Tk()
     try:
-        item = NavItem(root, text="登录", icon="登")
+        item = NavRailItem(root, text="登录", icon="登")
         item.pack(fill="x", padx=40)
         root.update_idletasks()
         root.update()
@@ -653,11 +653,11 @@ def test_button_hierarchy_is_graded_per_view():
     from tkinter import ttk
 
     from bilibili_submit.ui.app import App
-    from bilibili_submit.ui.widgets import FluentButton
+    from bilibili_submit.ui.widgets import MaterialButton
 
     def collect(widget, out):
         for child in widget.winfo_children():
-            if isinstance(child, FluentButton):
+            if isinstance(child, MaterialButton):
                 out.append(child)
             collect(child, out)
 
@@ -672,7 +672,7 @@ def test_button_hierarchy_is_graded_per_view():
             buttons: list = []
             collect(view, buttons)
             accents = [
-                b for b in buttons if b._variant == FluentButton.ACCENT
+                b for b in buttons if b._variant == MaterialButton.ACCENT
             ]
             assert len(accents) <= 1, (
                 f"视图「{key}」有 {len(accents)} 个强调型按钮，主操作该只有一个"
@@ -683,14 +683,14 @@ def test_button_hierarchy_is_graded_per_view():
         view = app._views["批量任务"]
         buttons = []
         collect(view, buttons)
-        texts = [b for b in buttons if b._variant == FluentButton.TEXT]
+        texts = [b for b in buttons if b._variant == MaterialButton.TEXT]
         assert texts, "批量页没有文字型按钮：「从 YAML 加载…」该降级"
         assert any(b._text.startswith("从 YAML") for b in texts)
     finally:
         root.destroy()
 
 
-def test_fluent_button_cursor_marks_clickability():
+def test_outlined_and_text_button_cursor_marks_clickability():
     """可点的按钮给手型光标，禁用时不给。
 
     手型光标是在说「这里能点」。给一个点不动的控件手型，等于骗用户
@@ -698,11 +698,11 @@ def test_fluent_button_cursor_marks_clickability():
     """
     import tkinter as tk
 
-    from bilibili_submit.ui.widgets import SecondaryButton, TertiaryButton
+    from bilibili_submit.ui.widgets import OutlinedButton, TextButton
 
     root = tk.Tk()
     try:
-        for factory in (SecondaryButton, TertiaryButton):
+        for factory in (OutlinedButton, TextButton):
             button = factory(root, "测试", lambda: None)
             assert button.cget("cursor") == "hand2", f"{factory.__name__} 缺少手型光标"
             button.state(["disabled"])
@@ -725,13 +725,13 @@ def test_collapsible_header_reacts_to_hover():
     import tkinter as tk
     from tkinter import ttk
 
-    from bilibili_submit.ui.widgets import Collapsible
+    from bilibili_submit.ui.widgets import ExpansionPanel
 
     root = tk.Tk()
     try:
         style = ttk.Style(root)
         theme.apply(style)
-        panel = Collapsible(root, "标题", opened=False)
+        panel = ExpansionPanel(root, "标题", opened=False)
         panel.pack(fill="x")
         root.update()
 
@@ -1615,11 +1615,11 @@ def test_collapsible_hides_its_body_when_closed():
     """收起时内容真的不占位——否则「把高度还给列表」就是句空话。"""
     import tkinter as tk
 
-    from bilibili_submit.ui.widgets import Collapsible
+    from bilibili_submit.ui.widgets import ExpansionPanel
 
     root = tk.Tk()
     try:
-        box = Collapsible(root, "更多设置", "互动与音质")
+        box = ExpansionPanel(root, "更多设置", "互动与音质")
         box.pack(fill="x")
         row = tk.Frame(box.body)
         row.pack()
@@ -1648,12 +1648,12 @@ def test_collapsible_click_toggles_and_fires_callback():
     """点标题栏要能展开；重复设同一个值不重复触发回调。"""
     import tkinter as tk
 
-    from bilibili_submit.ui.widgets import Collapsible
+    from bilibili_submit.ui.widgets import ExpansionPanel
 
     root = tk.Tk()
     try:
         seen: list[bool] = []
-        box = Collapsible(root, "更多设置", on_toggle=seen.append)
+        box = ExpansionPanel(root, "更多设置", on_toggle=seen.append)
         box.pack(fill="x")
 
         box._on_click(None)
@@ -1674,11 +1674,11 @@ def test_collapsible_hint_survives_when_collapsed():
     """提示文字是收起后唯一还能看见的状态，必须读得到。"""
     import tkinter as tk
 
-    from bilibili_submit.ui.widgets import Collapsible
+    from bilibili_submit.ui.widgets import ExpansionPanel
 
     root = tk.Tk()
     try:
-        box = Collapsible(root, "更多设置")
+        box = ExpansionPanel(root, "更多设置")
         box.pack()
         assert box.hint == ""
         box.set_hint("杜比、Hi-Res")

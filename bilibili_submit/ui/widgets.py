@@ -19,22 +19,22 @@ __all__ = [
     "Card",
     "ScrollArea",
     "SectionTitle",
-    "Collapsible",
+    "ExpansionPanel",
     "OptionSwitches",
     "OPTION_LABELS",
     "FormRow",
-    "FluentButton",
-    "PrimaryButton",
-    "SecondaryButton",
-    "TertiaryButton",
+    "MaterialButton",
+    "FilledButton",
+    "OutlinedButton",
+    "TextButton",
     "BrandMark",
-    "StatusPill",
+    "AssistChip",
     "ActionBar",
     "ProgressBar",
     "LogConsole",
     "Placeholder",
     "KeyValueList",
-    "NavItem",
+    "NavRailItem",
     "SummaryBar",
 ]
 
@@ -203,11 +203,12 @@ class SectionTitle(ttk.Frame):
             ).pack(anchor="w", pady=(theme.PAD_XS, 0))
 
 
-class Collapsible(ttk.Frame):
-    """可折叠分组：点标题栏展开或收起里面的表单。
+class ExpansionPanel(ttk.Frame):
+    """展开面板（Expansion panel）：点标题栏展开或收起里面的表单。
 
-    页面上方「每次都要填的」和「偶尔动一次的」挤在一起时，任务列表
-    就被压得只剩三行。折叠把选择权还给用户。
+    Material 3 的组件名，按钮三档之外最常用的那个。页面上方「每次都要
+    填的」和「偶尔动一次的」挤在一起时，任务列表就被压得只剩三行。
+    折叠把选择权还给用户。
 
     收起时右侧可以显示一段提示（见 :meth:`set_hint`）——**这条是必需
     的**：里面开着杜比、关着评论，收起后界面上什么都没有，用户会以为
@@ -577,8 +578,8 @@ def _state_wants_disabled(name: object) -> bool | None:
     return None
 
 
-class FluentButton(tk.Canvas):
-    """Material 风格按钮：Canvas 自绘药丸 + 文字。
+class MaterialButton(tk.Canvas):
+    """Material 3 按钮基类：Canvas 自绘药丸 + 文字，三档形态的共同实现。
 
     为什么不直接用 ``ttk.Button``：clam 主题（这里统一用的跨平台上观感
     一致的那个）画的是**直角**，而 Material 3 的按钮是**药丸形**
@@ -608,7 +609,7 @@ class FluentButton(tk.Canvas):
     #: 聚焦环预留的边距（上下左右各这么多）
     _RING = 2
     #: 按钮最小宽度。中文两字按钮（"取消"）按文字算只有 44px，
-    #: 太窄会显得局促，Fluent 也有同样的最小宽度约束。
+    #: 太窄会显得局促，Material 3 同样有最小宽度约束。
     _MIN_WIDTH = 64
     #: 文字型的最小宽度。它内边距更小，同样的下限会显得两头空荡荡。
     _MIN_WIDTH_TEXT = 48
@@ -870,8 +871,8 @@ class FluentButton(tk.Canvas):
         )
 
 
-class PrimaryButton(FluentButton):
-    """主操作按钮（主色实心，40px）。一个视图里最多放一个。"""
+class FilledButton(MaterialButton):
+    """实心按钮（Filled）：主色填充，最高强调层级。一个视图里最多放一个。"""
 
     def __init__(
         self, master: tk.Misc, text: str, command: Callable[[], None]
@@ -880,25 +881,25 @@ class PrimaryButton(FluentButton):
             master,
             text=text,
             command=command,
-            variant=FluentButton.ACCENT,
+            variant=MaterialButton.ACCENT,
             height=theme.PRIMARY_BUTTON_HEIGHT,
             width=96,
         )
 
 
-class SecondaryButton(FluentButton):
-    """次操作按钮（描边，32px）。"""
+class OutlinedButton(MaterialButton):
+    """描边按钮（Outlined）：1px 边框 + 透明底，中等强调层级。"""
 
     def __init__(
         self, master: tk.Misc, text: str, command: Callable[[], None]
     ) -> None:
         super().__init__(
-            master, text=text, command=command, variant=FluentButton.STANDARD
+            master, text=text, command=command, variant=MaterialButton.STANDARD
         )
 
 
-class TertiaryButton(FluentButton):
-    """文字型按钮：没有边框，只有一行字。
+class TextButton(MaterialButton):
+    """文字按钮（Text）：没有边框，只有一行字。
 
     给「低频但必须存在」的入口——批量页的「从 YAML 加载…」就是典型：
     它在注释里明写着「多数用户不该看见它」，可又不能删（yaml 能表达
@@ -917,14 +918,14 @@ class TertiaryButton(FluentButton):
         self, master: tk.Misc, text: str, command: Callable[[], None]
     ) -> None:
         super().__init__(
-            master, text=text, command=command, variant=FluentButton.TEXT
+            master, text=text, command=command, variant=MaterialButton.TEXT
         )
 
 
 class BrandMark(tk.Canvas):
     """品牌徽标：圆角方块 + 一个字。
 
-    Fluent 的应用标识一律带圆角（沿用控件圆角体系），而 ``tk.Frame``
+    Material 3 的应用标识一律带圆角（沿用控件圆角体系），而 ``tk.Frame``
     只能是直角——和旁边的圆角按钮摆在一起时很扎眼，所以这里也自绘。
     """
 
@@ -959,8 +960,8 @@ def _tone_colors(tone: str) -> tuple[str, str]:
     return theme.TONES.get(tone, theme.TONES["idle"])
 
 
-class StatusPill(tk.Label):
-    """状态标签：形状记号 + 文字，表达「就绪/未就绪/进行中」。
+class AssistChip(tk.Label):
+    """辅助标签（Assist chip）：形状记号 + 文字，表达「就绪/未就绪/进行中」。
 
     用 ``tk.Label`` 而非 ``ttk``：ttk 的 Label 改前景色要绕 style，
     而状态色是动态变化的，直接 tk.Label 更省事。
@@ -998,8 +999,8 @@ class StatusPill(tk.Label):
         )
 
 
-class NavItem(tk.Frame):
-    """侧边导航项：Material 的**整行药丸**高亮。
+class NavRailItem(tk.Frame):
+    """导航栏项（Navigation rail item）：Material 的**整行药丸**高亮。
 
     Material 3 的导航选中指示是一个撑满整行的药丸底（圆角 = 高度
     一半），不再有左侧竖条。tk.Frame 画不出圆角，所以底座换成
@@ -1008,7 +1009,7 @@ class NavItem(tk.Frame):
 
     未选中/悬停时药丸涂成**当刻该有的底色**（隐形 / 悬停色），选中
     才浮出反白药丸——选中与否只是底色差异，图标和文字不会左右跳动。
-    这是 Fluent 版竖条「占位不隐藏」的同一条纪律。
+    这是竖条版导航「占位不隐藏」的同一条纪律。
 
     .. note::
        文字隐藏用 ``itemconfigure(state="hidden")``：window item 和
@@ -1136,7 +1137,7 @@ class NavItem(tk.Frame):
             canvas.delete(self._pill_item)
             self._pill_item = None
         # 底永远是导航底——药丸不满铺（两侧各留 NAV_ITEM_MARGIN），
-        # 圆角才读得出来；这一点 Material 和 Fluent 的满铺选中不一样
+        # 圆角才读得出来；满铺的选中样式读不出这个「悬空」感。
         canvas.configure(background=theme.NAV_BG)
         width = canvas.winfo_width()
         if width <= 1:
@@ -1224,7 +1225,7 @@ class SummaryBar(ttk.Frame):
         改变任务选择，而执行期间的选择是不可改的（见
         ``TasksView._editable``）。
         """
-        button = SecondaryButton(self._actions, text, command)
+        button = OutlinedButton(self._actions, text, command)
         button.grid(row=0, column=len(self._buttons), padx=(theme.PAD_XS, 0))
         self._buttons.append(button)
         return button
@@ -1308,8 +1309,8 @@ class ActionBar(tk.Frame):
         )
         self._reason.grid(row=0, column=1, sticky="e", padx=(0, theme.PAD_MD))
 
-        self._secondary: SecondaryButton | None = None
-        self._primary: PrimaryButton | None = None
+        self._secondary: OutlinedButton | None = None
+        self._primary: FilledButton | None = None
 
     def set_primary(
         self,
@@ -1331,16 +1332,16 @@ class ActionBar(tk.Frame):
 
         self._on_submit = command
         self._idle_text = text
-        self._primary = PrimaryButton(self, text, command)
+        self._primary = FilledButton(self, text, command)
         self._primary.grid(row=0, column=3, padx=(theme.PAD_XS, theme.PAD_LG))
 
         if secondary_text and secondary_command:
             self._on_cancel = secondary_command
-            self._secondary = SecondaryButton(self, secondary_text, secondary_command)
+            self._secondary = OutlinedButton(self, secondary_text, secondary_command)
             self._secondary.grid(row=0, column=2, padx=(theme.PAD_XS, theme.PAD_XS))
 
     @property
-    def secondary(self) -> "SecondaryButton | None":
+    def secondary(self) -> "OutlinedButton | None":
         """次操作按钮。调用方要控制它的启用状态时用这个拿。"""
         return self._secondary
 
@@ -1564,7 +1565,7 @@ class Placeholder(ttk.Frame):
                 wraplength=360,
             ).grid(row=1, column=0, pady=(0, theme.PAD_SM))
         if action_text and on_action:
-            SecondaryButton(self, action_text, on_action).grid(
+            OutlinedButton(self, action_text, on_action).grid(
                 row=2, column=0, pady=(theme.PAD_SM, theme.PAD_XL)
             )
 
@@ -1586,7 +1587,7 @@ class KeyValueList(ttk.Frame):
         """重建表格。
 
         Args:
-            rows: ``(键, 值, 色调)`` 三元组序列，色调见 :class:`StatusPill`。
+            rows: ``(键, 值, 色调)`` 三元组序列，色调见 :class:`AssistChip`。
         """
         for key_label, value_label in self._rows:
             key_label.destroy()

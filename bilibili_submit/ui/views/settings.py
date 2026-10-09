@@ -47,7 +47,7 @@ from ..widgets import (
     KeyValueList,
     ScrollArea,
     SectionTitle,
-    SecondaryButton,
+    OutlinedButton,
 )
 
 __all__ = ["SettingsView"]
@@ -142,7 +142,7 @@ class SettingsView(ttk.Frame):
         row.grid(row=2, column=0, sticky="ew")
         row.add(ttk.Entry, textvariable=self._cookie_var, padx=(0, theme.PAD_SM))
         row.add(
-            SecondaryButton, text="浏览…", command=self._pick_cookie, column=1, sticky="w"
+            OutlinedButton, text="浏览…", command=self._pick_cookie, column=1, sticky="w"
         )
 
         # ② 外观：主题模式
@@ -184,7 +184,7 @@ class SettingsView(ttk.Frame):
             "没有就什么都不做。",
         )
         row.grid(row=1, column=0, sticky="ew", pady=(0, theme.PAD_SM))
-        row.add(SecondaryButton, text="检查更新", command=self._on_check_update)
+        row.add(OutlinedButton, text="检查更新", command=self._on_check_update)
         self._update = KeyValueList(update_box, label_width=12)
         self._update.grid(row=2, column=0, sticky="w")
         self._update.set_rows([("当前版本", __version__, "idle")])

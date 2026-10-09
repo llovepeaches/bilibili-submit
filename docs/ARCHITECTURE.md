@@ -44,8 +44,8 @@ config / scheduler / cli     编排：配置、任务执行、命令行
 | `cli.py` | 参数解析、输出格式化、退出码 | 业务逻辑 |
 | `console.py` | Windows 控制台 UTF-8 适配 | 任何业务 |
 | `ui/` | 图形界面（tkinter）。见下方「界面层」 | 业务逻辑 |
-| `ui/theme.py` | 颜色/字体/间距的唯一来源（Fluent 规范，浅/深两套色板） | 具体控件 |
-| `ui/widgets.py` | 可复用组件（`Collapsible` 折叠区、`OptionSwitches` 投稿开关、自绘圆角的 `FluentButton`），不知道 B 站的存在 | 业务概念 |
+| `ui/theme.py` | 颜色/字体/间距的唯一来源（Material 3 规范，浅/深两套色板） | 具体控件 |
+| `ui/widgets.py` | 可复用组件（`ExpansionPanel` 展开面板、`OptionSwitches` 投稿开关、自绘药丸的 `MaterialButton`），不知道 B 站的存在 | 业务概念 |
 | `ui/qr.py` | 二维码矩阵 → Canvas 绘制 | 网络请求 |
 | `ui/workers.py` | 后台线程与取消 | UI 操作 |
 | `ui/state.py` | 界面偏好读写（批量页参数 + 主题模式） | Tk 操作 |
@@ -370,7 +370,7 @@ readonly 是 ttk 的**选项**，不是状态标志位。踩过这个坑：yaml 
 两条 tk 的硬边界，用降级方案而不是假装实现：
 
 - **输入框/下拉框画不出圆角**（ttk 引擎绘制）→ 1px 细边框 + 聚焦色；
-  按钮用 Canvas 自绘（`ui/widgets.py: FluentButton`），圆角是真的；
+  按钮用 Canvas 自绘（`ui/widgets.py: MaterialButton`），药丸形是真的；
   - 自绘按钮的事件绑定方法**不能叫 `_bind`**——那会覆盖 `tk.Misc._bind()`，
     叫 `_bind_events`；
 - **没有原生阴影** → 卡片用底色 + 1px 描边表达层级。

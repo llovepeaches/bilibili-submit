@@ -36,7 +36,7 @@ from ..client import BiliClient
 from . import layout, theme, win_effects
 from .environment import EnvironmentSnapshot, probe_environment
 from .state import load_app_state, resolve_theme_mode
-from .widgets import BrandMark, NavItem
+from .widgets import BrandMark, NavRailItem
 from .views import (
     HistoryView,
     LoginView,
@@ -144,7 +144,7 @@ class App(ttk.Frame):
 
         self._build_brand(nav)
 
-        self._nav_buttons: dict[str, NavItem] = {}
+        self._nav_buttons: dict[str, NavRailItem] = {}
         self._views_info: list[tuple[str, type]] = []
         entries = [
             ("登录", LoginView),
@@ -154,7 +154,7 @@ class App(ttk.Frame):
             ("设置", SettingsView),
         ]
         for index, (label, view_cls) in enumerate(entries, start=1):
-            item = NavItem(
+            item = NavRailItem(
                 nav,
                 text=label,
                 icon=self.NAV_ICONS.get(label, "●"),

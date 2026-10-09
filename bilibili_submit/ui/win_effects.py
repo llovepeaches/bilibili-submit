@@ -109,7 +109,7 @@ def apply_window_effects(root: tk.Tk, dark: bool) -> None:
     _set_dwm_attribute(
         hwnd, _DWMWA_USE_IMMERSIVE_DARK_MODE, 1 if dark else 0
     )
-    # 窗口圆角：Fluent 的窗口四角是圆的
+    # 窗口圆角：Windows 11（Fluent）那一代开始窗口四角是圆的
     _set_dwm_attribute(hwnd, _DWMWA_WINDOW_CORNER_PREFERENCE, _DWMWCP_ROUND)
 
     # Mica。系统会尝试铺材质，但 tk 控件背景不透明，铺了也被盖住——

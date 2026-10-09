@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from ...scheduler import DEFAULT_HISTORY_FILE, read_history_diagnose
 from .. import layout, theme
-from ..widgets import Card, LogConsole, Placeholder, SecondaryButton, SectionTitle
+from ..widgets import Card, LogConsole, Placeholder, OutlinedButton, SectionTitle
 
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
     from ._host import AppHost
@@ -54,7 +54,7 @@ class HistoryView(ttk.Frame):
 
         actions = ttk.Frame(card, style="Card.TFrame")
         actions.grid(row=0, column=0, sticky="w", pady=(0, theme.PAD_SM))
-        SecondaryButton(actions, "刷新", self.refresh).pack(side="left")
+        OutlinedButton(actions, "刷新", self.refresh).pack(side="left")
 
         holder = ttk.Frame(card, style="Card.TFrame")
         holder.grid(row=1, column=0, sticky="nsew")
