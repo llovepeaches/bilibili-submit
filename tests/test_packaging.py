@@ -270,15 +270,26 @@ def test_section_parsing_ignores_section_names_inside_comments():
     # 光有内联样本不够，还得拿**真实的 installer.iss** 跑一遍：
     # 内联样本证明不了真实文件里没有别的干扰项。
     real = ISS.read_text(encoding="utf-8-sig")
-    assert "[Files]" in _section(real, "Code"), (
-        "真实 installer.iss 的 [Code] 段注释里应当提到 [Files]——"
-        "这条断言拿它当反例，改注释时留意"
+    # 真实文件里 "[Code]" 三个字还在——在末尾那段解释「为什么故意不写
+    # [Code] 段」的注释里。段切分必须认出它**不是**段名：否则
+    # _section(real, "Code") 会返回文件尾巴，任何针对 [Code] 的断言
+    # 都变成对着一段注释做检查，一路绿到有人真的往里塞 {src}。
+    assert "[Code]" in real, (
+        "installer.iss 末尾应当还留着讲 [Code] 段的注释——这条断言拿它当反例"
+    )
+    assert not re.search(r"^\[Code\][ \t]*$", real, re.MULTILINE), (
+        "installer.iss 现在没有 [Code] 段，这条断言才拿注释里的 [Code] 当"
+        "反例。真要加回来，请换一个只出现在注释里的段名当反例"
+    )
+    assert _section(real, "Code") == "", (
+        "注释里提到的 [Code] 被当成了真段——用 text.split('[Code]')[-1] "
+        "切就会切出文件尾巴"
     )
     assert "recursesubdirs" in _directives(real, "Files"), (
         "段切分在真实文件上失效：没从 [Files] 段取到 recursesubdirs"
     )
-    assert "function InitializeSetup" not in _section(real, "Files"), (
-        "段切分被注释里的段名带偏：[Files] 段里混进了 [Code] 的内容"
+    assert "check_installer.py" not in _section(real, "Files"), (
+        "段切分被带偏：[Files] 段里混进了文件末尾的注释"
     )
 
 
@@ -381,37 +392,62 @@ def test_ci_waits_for_the_installer_process():
     )
 
 
-def test_code_paths_do_not_double_the_dist_prefix():
-    """``[Code]`` 里 ``{src}`` 和 ``{#BuildDir}`` 不能直接拼在一起。
+def test_artifacts_are_checked_at_build_time_not_install_time():
+    """产物齐不齐全要在**构建期**查，不能放进安装器里查。
 
-    两者的基准不同：
+    installer.iss 曾经有个 ``[Code]`` 段，在 ``InitializeSetup()`` 里用
+    ``{src}`` 拼出产物目录找主程序，找不到就 ``Result := False`` 中止
+    安装。本意是「别让产物不全的安装器流出去」，但 ``{src}`` 是
+    **安装器 exe 所在的目录**：
 
-    - ``{src}`` = 安装器 exe 所在目录，也就是 ``dist\\``
-    - ``[Files]`` 的 ``Source`` = 相对于 ``.iss`` 所在目录，也就是仓库根
+    - CI 上：``setup.exe`` 就在 ``dist\\`` 下，拼出来正好是产物目录 → 通过
+    - 用户机器上：``setup.exe`` 在「下载」文件夹里，于是去找
+      ``下载\\bilibili-submit-gui\\bilibili-submit-gui.exe`` —— 当然没有
+      → 弹框「找不到打包产物」并中止
 
-    所以 ``'{src}\\' + '{#BuildDir}'`` 拼出来是 ``dist\\dist\\bilibili-
-    submit-gui\\``，文件当然不存在。CI 上真踩过：``InitializeSetup``
-    返回 False 让安装中止，而 ``/SUPPRESSMSGBOXES`` 又把 MsgBox 压掉了，
-    表现为**无声挂起**——没有报错，job 就那么卡着。
+    于是 CI 永远绿、每个下载者都装不上，而这句报错对下载者毫无意义
+    （他是来装程序的人，不是打包的人）。
 
-    正确写法是用 ``ExtractFileName('{#BuildDir}')`` 取末段。
+    顺带一提，``{src}`` 和 ``{#BuildDir}`` 还不能直接拼：``[Files]`` 的
+    Source 基准是 ``.iss`` 所在目录（仓库根），``{src}`` 的基准是
+    ``dist\\``，拼出来是 ``dist\\dist\\bilibili-submit-gui\\``。两个坑
+    长在同一行代码里。
+
+    所以那段代码整个删了，校验挪到 ``tools/check_installer.py``——那里
+    才有 ``dist\\`` 可看。这条守卫盯两头：安装器里别再冒出运行期的
+    文件系统检查；构建期的校验真的接进了两条打包路径，否则它就是个
+    没人调用的死脚本。
     """
-    code = _section(ISS.read_text(encoding="utf-8-sig"), "Code")
-    for line in code.splitlines():
-        if "ExpandConstant" not in line:
-            continue
-        assert not (
-            "{src}" in line and "{#BuildDir}" in line
-            and "ExtractFileName" not in line
-        ), (
-            f"[Code] 把 {{#BuildDir}} 直接拼在 {{src}} 后面：{line.strip()[:60]}"
-            "——{src} 已经是 dist\\，会拼成 dist\\dist\\..."
+    text = ISS.read_text(encoding="utf-8-sig")
+    code = _section(text, "Code")
+    assert "{src}" not in code, (
+        "[Code] 段里出现了 {src}——它是**安装器 exe 所在目录**，在用户机器上"
+        "是「下载」文件夹而不是 dist\\。拿它拼路径做运行期检查，会让每个"
+        "下载者都装不上，而 CI 上永远绿。产物校验属于构建期，"
+        "见 tools/check_installer.py"
+    )
+
+    checker = (ROOT / "tools" / "check_installer.py").read_text(encoding="utf-8")
+    assert "_check_built_artifacts" in checker, (
+        "tools/check_installer.py 里应当有产物校验（_check_built_artifacts）——"
+        "没有它，产物目录空着也能编出一个「装完双击闪退」的安装器"
+    )
+
+    for label, path in (("build_windows.bat", ROOT / "build_windows.bat"),
+                        ("release.yml", RELEASE_YML)):
+        # 只看非注释行：说明这段坑的注释里就得写 installer.iss 长什么样
+        body = "\n".join(
+            line for line in path.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith(("#", "::", "REM", "rem"))
         )
-        # 反过来也要成立：既然要取末段，就得真的取
-        if "{src}" in line:
-            assert "ExtractFileName" in line, (
-                f"[Code] 用 {{src}} 拼路径却没取末段：{line.strip()[:60]}"
-            )
+        assert "check_installer.py" in body, (
+            f"{label} 编译安装器前没跑 check_installer.py——产物缺主程序时"
+            "ISCC 照样编得出来，只是装完闪退"
+        )
+        assert body.index("check_installer.py") < body.index("installer.iss"), (
+            f"{label} 里 check_installer.py 跑在 installer.iss 之后——"
+            "校验必须在编译**之前**，编出来再查就晚了"
+        )
 
 
 def test_installer_uses_correct_event_prototypes():
@@ -425,16 +461,34 @@ def test_installer_uses_correct_event_prototypes():
     这两个最容易混：``InitializeSetup`` 是 function（返回 False 可以
     拒绝安装），``InitializeWizard`` 是 procedure（只做初始化，没有
     返回值）。名字像，写法不一样。
-    """
-    code = _section(ISS.read_text(encoding="utf-8-sig"), "Code")
-    assert code, "installer.iss 应当有 [Code] 段"
 
-    declared = {
-        name: kind
-        for kind, name in re.findall(
-            r"^\s*(function|procedure)\s+(\w+)\s*[\(:;]", code, re.MULTILINE
-        )
-    }
+    本文件现在**没有** ``[Code]`` 段（产物校验已迁到构建期），所以真实
+    文件那一半是空的。光查真实文件的话这条测试会变成一条谁都红不了的
+    空断言——因此先拿一段故意写错的样本证明判据本身有效，再拿它去扫
+    真文件：将来有人重新引入 ``[Code]`` 段时它才会真的响。
+    """
+    def declared_kinds(source: str) -> dict[str, str]:
+        return {
+            name: kind
+            for kind, name in re.findall(
+                r"^\s*(function|procedure)\s+(\w+)\s*[\(:;]", source, re.MULTILINE
+            )
+        }
+
+    # 先证明判据有效：这段里 InitializeWizard 写成 function，必须被认出来
+    sample = "\n".join([
+        "[Code]",
+        "function InitializeSetup(): Boolean;",
+        "begin Result := True; end;",
+        "function InitializeWizard(): Boolean;",
+        "begin Result := True; end;",
+    ])
+    assert declared_kinds(sample).get("InitializeWizard") == "function", (
+        "判据失效：样本里写错的 function InitializeWizard 没被识别出来，"
+        "下面对真实文件的检查就只是一条空断言"
+    )
+
+    declared = declared_kinds(_section(ISS.read_text(encoding="utf-8-sig"), "Code"))
     for name, expect in (("InitializeSetup", "function"),
                          ("InitializeWizard", "procedure")):
         if name in declared:

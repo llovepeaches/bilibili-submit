@@ -87,6 +87,11 @@ jobs:
         shell: pwsh
         run: choco install innosetup --yes --no-progress --limit-output
 
+      # 编译前先跑静态检查：产物缺主程序/_internal 时 ISCC 照样编得出来，
+      # 但装完双击就是闪退。本地 build_windows.bat 也是同样的顺序。
+      - name: 检查安装器配置与产物
+        run: python tools/check_installer.py
+
       - name: 编译安装器
         shell: pwsh
         run: |

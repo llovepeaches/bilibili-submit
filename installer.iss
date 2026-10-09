@@ -121,50 +121,22 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 ; 几十 KB，比让人丢 cookie 好得多。
 Type: filesandordirs; Name: "{app}\_internal"
 
-[Code]
-// 校验装进去的 exe 真的存在。
-// 少了这一步，「安装成功但双击闪退」要等到用户手动去找日志才发现。
-//
-// 路径必须由 {#BuildDir} / {#AppExeName} 拼出来，**不要写死**
-// "dist\bilibili-submit-gui\..."：改了 BuildDir 这里会跟着变，
-// 而写死的话只有真正编译失败才看得出问题——ISCC 不检查文件是否存在，
-// 它照抄 [Files] 的通配路径，装出一个缺文件的安装器。
-//
-// 但**不能直接**用 '{#BuildDir}' 拼在 {src} 后面：两者的基准不同——
-//   · {src}            = 安装器 exe 所在目录，也就是 dist\
-//   · [Files] 的 Source = 相对于 .iss 所在目录，也就是仓库根
-// 所以 '{src}\' + '{#BuildDir}' 会拼成 dist\dist\bilibili-submit-gui\，
-// 文件当然不存在。CI 上真挂过：InitializeSetup 返回 False 让安装中止，
-// 而 /SUPPRESSMSGBOXES 又把 MsgBox 压掉了，表现为无声挂起。
-// 用 ExtractFileName 取末段，既避开重复前缀，又和 BuildDir 同源。
-function InitializeSetup(): Boolean;
-var
-  BuiltExe: String;
-begin
-  Result := True;
-  BuiltExe := ExpandConstant('{src}\') + ExtractFileName('{#BuildDir}') + '\{#AppExeName}';
-  if not FileExists(BuiltExe) then
-  begin
-    MsgBox('找不到打包产物：' + BuiltExe + #13#10 +
-           '请先运行 build_windows.bat（或 CI）打包，再编译安装器。' + #13#10#13#10 +
-           '安装器会跳过本次安装。', mbError, MB_OK);
-    Result := False;
-  end;
-end;
-
-// 同上，检查 ffmpeg 在不在。缺了它程序还能跑，只是「cover: auto」
-// 自动抽帧用不了——值得提醒但不必拒绝安装。
-//
-// 注意是 **procedure** 不是 function：Inno Setup 的 InitializeWizard
-// 没有返回值，写成 `function ... : Boolean` 时 ISCC 报
-// "Invalid prototype for 'InitializeWizard'"——而这类错误只有真正跑
-// ISCC 才看得到，本项目的静态检查器查不出来（它不解析 Pascal 原型）。
-procedure InitializeWizard();
-var
-  FFmpegPath: String;
-begin
-  // 同 InitializeSetup：{src} 已经是 dist\，不能再拼一层 dist\
-  FFmpegPath := ExpandConstant('{src}\') + ExtractFileName('{#BuildDir}') + '\ffmpeg.exe';
-  if not FileExists(FFmpegPath) then
-    Log('提示：产物里没有 ffmpeg.exe，自动抽帧将不可用（不影响其他功能）');
-end;
+; ============================================================
+;  这里**故意不写** [Code] 段。
+;
+;  曾经在这里用 InitializeSetup() 检查打包产物是否存在，找不到就让
+;  Result := False 中止安装。本意是好的——「别让产物不全的安装器流出去」，
+;  但它跑在**安装器启动那一刻**，而 {src} 是安装器 exe 所在的目录：
+;
+;    · CI 上：setup.exe 就在 dist\ 下，拼出的路径正好是产物目录 → 通过
+;    · 用户机器上：setup.exe 在「下载」文件夹里，于是去找
+;      下载\bilibili-submit-gui\bilibili-submit-gui.exe —— 当然没有
+;      → 弹框「找不到打包产物，请先运行 build_windows.bat」并中止
+;
+;  结果就是 CI 永远绿、用户永远装不上，而且报的错对用户毫无意义
+;  （他是下载来装的人，不是打包的人）。
+;
+;  产物齐不齐全应该在**构建期**查，那里才有 dist\ 可看：
+;  tools/check_installer.py 会校验 dist\<BuildDir> 下的主程序，
+;  编译安装器之前跑它即可（build_windows.bat 与 release.yml 都已接上）。
+; ============================================================

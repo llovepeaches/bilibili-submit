@@ -239,44 +239,38 @@ def _check_build_layout(text: str, defines: dict[str, str]) -> None:
         )
     print(f"  产物目录: dist\\{dir_name}\\")
     print(f"  主程序  : {exe_name}")
+    # 产物齐不齐全只能在这里（构建期）查——安装器里查不了：{src} 在用户
+    # 机器上是「下载」文件夹，不是 dist\。详见 installer.iss 末尾的说明。
+    _check_built_artifacts(dir_name, exe_name)
 
-    # [Code] 里的路径校验必须由 #define 拼出来，不能写死——写死的话
-    # 改了 BuildDir 只有真编译失败才看得出问题（ISCC 不检查文件存在，
-    # 它照抄 [Files] 的通配路径，装出一个缺文件的安装器）。
-    # 这条是 fail 不是 warn：写死的路径在编译期完全合法，只有等到
-    # 产物目录改名那天才会静默失效。
-    code = _section(text, "Code")
-    if code and "ExpandConstant" in code:
-        # 逐行看，而不是整段一起搜——ffmpeg 那行只该要 BuildDir，
-        # 拿整段搜的话它会替 exe 那行「作证」，等于没查。
-        for line in code.splitlines():
-            if "ExpandConstant" not in line:
-                continue
-            if "{#BuildDir}" not in line and "ExtractFileName" not in line:
-                fail(
-                    f"[Code] 里的路径写死了目录名：{line.strip()[:60]}——"
-                    "改用 {#BuildDir}，否则改了产物目录不会被发现"
-                )
-            if exe_name in line and "{#AppExeName}" not in line:
-                fail(
-                    f"[Code] 里的路径写死了 exe 名：{line.strip()[:60]}——"
-                    "改用 {#AppExeName}，否则改了主程序名不会被发现"
-                )
-            # {src} 已经是 dist\，再拼 {#BuildDir} 会变成 dist\dist\...。
-            # 这个坑 CI 上真踩过：InitializeSetup 返回 False 让安装中止，
-            # 而 /SUPPRESSMSGBOXES 压掉了 MsgBox，表现为无声挂起。
-            #
-            # 判据是「{src} 与 {#BuildDir} 同时出现、且没用
-            # ExtractFileName 取末段」——不能靠目录名字面量去匹配，
-            # 坏写法里写的是宏名 {#BuildDir} 而不是展开后的路径。
-            if "{src}" in line and "{#BuildDir}" in line \
-                    and "ExtractFileName" not in line:
-                fail(
-                    f"[Code] 把 {{#BuildDir}} 直接拼在 {{src}} 后面了："
-                    f"{line.strip()[:60]}——{{src}} 已经是 dist\\，"
-                    "会拼成 dist\\dist\\...。用 ExtractFileName('{#BuildDir}')"
-                    "取末段"
-                )
+
+def _check_built_artifacts(dir_name: str, exe_name: str) -> None:
+    r"""产物目录里的主程序与运行时在不在。
+
+    ISCC 不检查 [Files] 的通配路径，产物目录空着它也照样编出一个
+    「装完双击闪退」的安装器。所以这一步必须在编译**之前**跑。
+
+    只有 ``dist\`` 存在时才查——从没打包过的机器上不该因为缺产物而失败。
+    """
+    dist_dir = ROOT / "dist" / dir_name
+    if not dist_dir.exists():
+        print(f"  （dist\\{dir_name}\\ 不存在，跳过产物校验——请先打包）")
+        return
+
+    exe = dist_dir / exe_name
+    if not exe.exists():
+        fail(
+            f"产物里没有主程序：{exe}——现在编译会得到一个装完闪退的安装器。"
+            "先跑 build_windows.bat（或 CI 的打包步骤）"
+        )
+        return
+    # _internal 是 PyInstaller 的运行时目录，少了 exe 起不来
+    if not (dist_dir / "_internal").exists():
+        fail(f"产物里缺 _internal\\（Python 运行时）：{dist_dir}")
+    # ffmpeg 缺了只影响自动抽帧，程序本身能跑，所以是警告不是失败
+    if not (dist_dir / "ffmpeg.exe").exists():
+        warn("产物里没有 ffmpeg.exe，自动抽帧（cover: auto）将不可用")
+    print("  产物校验: 主程序与 _internal 齐全")
 
 
 def _check_files_section(text: str) -> None:
