@@ -322,7 +322,9 @@ jobs:
         # lzma2 压缩，明文不落盘（细节见脚本头部注释）。
         #
         # {tmp} 在安装器里展开成 %TEMP%，CI runner 上就是这个路径。
-        run: ./tools/verify_installer_zh.ps1 -ReportPath "$env:TEMP\lang-report.txt"
+        # 报告写在 {app}（安装目录）而不是 %TEMP%：Inno 的 {tmp} 是它自己的
+        # 安装临时目录（%TEMP%\is-XXXXX\），安装一结束就删掉了。
+        run: ./tools/verify_installer_zh.ps1 -ReportPath "$env:LOCALAPPDATA\Programs\bilibili-submit\lang-report.txt"
 
       - name: 组装两个分发包
         shell: pwsh

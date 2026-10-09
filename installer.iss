@@ -229,7 +229,12 @@ begin
   { 第三个参数 Append 必须显式给 False——SaveStringToFile 是三参数的
     形式，省掉它编译期就报 "Invalid number of parameters"（CI 上真报在
     这一行，报错文案完全指不到「少了第三个参数」上）。}
-  SaveStringToFile(ExpandConstant('{tmp}\lang-report.txt'), F, False);
+  { 落在 {app} 而不是 {tmp}：**{tmp} 是 Inno 自己的安装临时目录**
+    （%TEMP%\is-XXXXX\），安装一结束就被删掉。写到那儿的话，CI 读的时候
+    文件已经没了，而报错是「找不到语言报告」——指向「探针没跑起来」，
+    而真原因是「跑了，但写到了会被删掉的地方」。
+    {app} 在卸载之前一直存在，CI 装完立刻读得到。 }
+  SaveStringToFile(ExpandConstant('{app}\lang-report.txt'), F, False);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -262,7 +267,7 @@ begin
       当「有没有出错」的信号，不指望读到内容。要看原文得让安装器
       带 /LOG，那会另开一个日志文件。 }
     Err := GetExceptionMessage;
-    SaveStringToFile(ExpandConstant('{tmp}\lang-report.txt'),
+    SaveStringToFile(ExpandConstant('{app}\lang-report.txt'),
       'lang=' + ActiveLanguage + #13#10 + 'probe_error=1' + #13#10
       + 'probe_error_len=' + IntToStr(Length(Err)) + #13#10, False);
   end;

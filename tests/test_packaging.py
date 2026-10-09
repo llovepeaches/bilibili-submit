@@ -1291,7 +1291,7 @@ def test_installer_ships_a_language_probe_for_ci():
     # 报告内容必须全是 ASCII：写出去的是「有没有汉字」这个 0/1，
     # 不是文案原文。
     report = re.search(
-        r"SaveStringToFile\(\s*ExpandConstant\('\{tmp\}[^)]*\)\s*,\s*(\w+)\s*"
+        r"SaveStringToFile\(\s*ExpandConstant\('\{app\}[^)]*\)\s*,\s*(\w+)\s*"
         r",\s*(?:True|False)\s*\)",
         code)
     assert report, "[Code] 段里找不到 SaveStringToFile 的完整调用"
@@ -1358,6 +1358,17 @@ def test_installer_ships_a_language_probe_for_ci():
     assert "probe_error=1" in body, (
         "except 分支的**代码**里没有写 probe_error=1——异常被吞掉后没人知道，"
         "校验脚本只会报「找不到语言报告」，排查方向照样跑偏"
+    )
+
+    # 报告必须落在 {app}，**不能**是 {tmp}。
+    # {tmp} 是 Inno 自己的安装临时目录（%TEMP%\is-XXXXX\），安装一结束
+    # 就被删掉——CI 读的时候文件早没了，而报错是「找不到语言报告」，
+    # 指向「探针没跑起来」，真原因却是「跑了，但写到了会被删掉的地方」。
+    # CI 上真栽过这一轮。
+    assert not re.search(r"SaveStringToFile\(\s*ExpandConstant\('\{tmp\}", body), (
+        "探针把报告写到了 {tmp}——那是 Inno 的安装临时目录"
+        "（%TEMP%\\is-XXXXX\\），安装结束就删。CI 读不到，"
+        "且报错会指向「探针没跑起来」而不是真原因。写 {app}。"
     )
 
     # [Code] 段的**最后一个** end; 之后不许再有任何内容。
