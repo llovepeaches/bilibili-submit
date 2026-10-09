@@ -15,6 +15,7 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from ..config import DefaultsConfig
 from ..multipart import GROUP_MODES
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,10 @@ SCHEMA_VERSION = 1
 
 #: 分区回退值（日常）。文件里存了个不认识的分区号时用它，
 #: 总比让用户对着一个空下拉框猜发生了什么强。
-DEFAULT_TID = 21
+#:
+#: 从 ``DefaultsConfig`` 取而不是再写一遍 21：这两处是同一个「默认分区」，
+#: 分开写就意味着改默认值时要记得改两个地方——而没人会记得。
+DEFAULT_TID = DefaultsConfig().tid
 
 #: 主题模式。``system`` 跟随系统（读注册表），另两个是强制。
 APP_THEME_MODES = ("system", "light", "dark")
