@@ -50,6 +50,13 @@
   注入违规 import，确认守卫真的变红）。
 - **默认分区号不再两处各写一遍**：`DEFAULT_TID` 改从
   `DefaultsConfig().tid` 取。
+- **README 重写成门面型**（590 行 → 362 行）。原先第一屏是 70 行的
+  下载资产表，18 张截图全埋在第 267 行的折叠块里。现在：首屏放截图 +
+  一句话定位 + 特性，快速开始前移，下载并成一张表加一句「怎么选」。
+  打包细节迁到新的 `docs/BUILD.md`，投稿链路的踩坑并入
+  `docs/ARCHITECTURE.md`。另加徽章（Release / CI / 平台 / Python / License）。
+- **新增 MIT LICENSE**。此前仓库没有许可证文件，GitHub 上无 License 的
+  项目别人默认不能合法使用。
 
 ## [0.2.7-rc.1] - 2026-10-07
 
