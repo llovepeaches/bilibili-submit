@@ -281,6 +281,50 @@ jobs:
           # 不显式归零的话，check 的 1 会让整个 step 判为失败。
           exit 0
 
+      # 静默安装全程不渲染界面，所以上面的「装 + 启动 + 卸载」证明不了
+      # 「安装向导是中文的」——而这正是 0.2.7 之前长期存在的状态：
+      # [Languages] 里 Name 写着 chinese，MessagesFile 却指向英文的
+      # Default.isl，装出来全是英文，而且没有任何检查能发现。
+      #
+      # 所以这里扫编译产物：安装器把消息文本编进 exe，Unicode 版
+      # （Inno Setup 6 只有 Unicode 版）按 UTF-16LE 存。中文在、英文
+      # 原文不在，就证明 MessagesFile 真的生效了。发出去之前最后一道，
+      # 别让一个全英文的向导挂在 Release 上。
+      - name: 验证安装器里编进的是中文向导
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 刻意不叫 $setup：上面安装步骤的 $setup 是「拷到中立目录后
+          # 准备安装的那一份」，这里指「刚编出来的产物」，路径含义相反。
+          # 同名会让 test_ci_installs_setup_from_a_neutral_directory 的
+          # 判据误以为安装也用了 dist\。
+          $built = ".\dist\bilibili-submit-setup.exe"
+          $bytes = [System.IO.File]::ReadAllBytes($built)
+          $either = [System.Text.Encoding]::Unicode.GetString($bytes) + "`n" +
+                    [System.Text.Encoding]::UTF8.GetString($bytes)
+
+          # 自证扫描手段有效：连自己的文件名都找不到的话，下面的断言
+          # 就是拿坏尺子量东西。
+          if (-not $either.Contains("bilibili-submit")) {
+            throw "在安装器里连程序名都找不到——UTF-16/UTF-8 扫描方法不对"
+          }
+
+          # 刻意挑长的、只在向导里出现的句子。
+          $mustHave = @("选择目标位置", "完成 [name] 安装向导", "点击“下一步”继续")
+          foreach ($phrase in $mustHave) {
+            if (-not $either.Contains($phrase)) {
+              throw "安装器里找不到中文文案「$phrase」——向导多半还是英文的"
+            }
+            Write-Host "找到中文文案: $phrase"
+          }
+          $mustNot = @("Select Destination Directory", "Choose Setup Install Language")
+          foreach ($phrase in $mustNot) {
+            if ($either.Contains($phrase)) {
+              throw "安装器里出现了英文向导文案「$phrase」——MessagesFile 没生效？"
+            }
+          }
+          Write-Host "安装器向导文案已是中文（反向断言也通过）"
+
       - name: 组装两个分发包
         shell: pwsh
         run: |

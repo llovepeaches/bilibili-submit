@@ -2,7 +2,8 @@
 
 ISCC 只能在 Windows 上跑，所以这里**不是**替代编译，而是把低级错误
 挡在提交之前：段名拼错、指令拼写不对、#define 没定义、每行分号、
-大括号不配对、文件路径对不上仓库实际布局。
+大括号不配对、文件路径对不上仓库实际布局、以及安装向导的消息文件
+是不是真的中文。
 
 真正的验证仍然是 CI 里Windows runner 上跑 ISCC。
 """
@@ -45,6 +46,9 @@ SECTIONS = {
     "[Messages]", "[Code]", "[License]", "[InfoBefore]", "[Wizard]",
     "[WizardImages]", "[Components]", "[Output]",
 }
+
+#: 仓库里的安装器资源目录（[Languages] 引用的消息文件放在这儿）。
+LANG_DIR = "installer_languages"
 
 #: 常见指令（够用了，不追求穷举——目的是抓拼写错误而非完整校验）
 DIRECTIVES = {
@@ -99,7 +103,11 @@ def _check_encoding(raw: bytes) -> None:
 
 
 def _check_sections(lines: list[str]) -> set[str]:
-    """段名拼错在 ISCC 上才报得到，这里提前拦。"""
+    """段名拼错在 ISCC 上才报得到，这里提前拦。
+
+    ``\\r`` 一并吃掉：.gitattributes 把 installer.iss 定成 ``eol=crlf``，
+    Windows 上检出就是 CRLF，不吃 \\r 会把每个段名都当成不合法。
+    """
     seen: set[str] = set()
     for number, line in enumerate(lines, 1):
         stripped = line.strip()
@@ -185,6 +193,8 @@ def _check_code_prototypes(text: str) -> None:
     if not code:
         return
     for line_no, line in enumerate(code.splitlines(), 1):
+        # CRLF 下 splitlines 已经吃掉 \r，协议行的正则不必管它；
+        # 但注释里可能出现 ^ 行尾字符，故 strip 一下再匹配。
         stripped = line.strip()
         match = re.match(r"^(function|procedure)\s+(\w+)\s*(\([^)]*\))?\s*(:\s*\w+)?\s*;", stripped)
         if not match:
@@ -207,15 +217,28 @@ def _section(text: str, name: str) -> str:
     「忘了 [Files] 就会装坏」就会把段名混进搜索结果，切出来的却是
     文件最后一段。本项目真踩过——[Code] 段的注释里提了一句 [Files]，
     于是 recursesubdirs 检查跑去 [Code] 里找，必然报「缺 recursesubdirs」。
+
+    **行尾必须吃 ``\\r``**：``[ \\t]*$`` 在 CRLF 文件上永远不成立
+    （``$`` 只在 ``\\n`` 前匹配，而 ``\\r`` 夹在中间），段会「找不到」——
+    ``_section`` 返回空串，调用方把「段不存在」当成「段里没有违规内容」
+    就放行了。.gitattributes 里 installer.iss 与
+    ``installer_languages/*.isl`` 都写了 ``eol=crlf``，Windows 上检出
+    就是 CRLF，所以这不是假设而是必然。
+
+    实测：当前这份 installer.iss 即使段切分完全失效，输出依然完整、
+    退出码依然是 0——因为它的段首尾都挨着别的段，尾部锚点坏掉不影响
+    段头匹配。所以这里防的是「段名后带空格」或「段在文件末尾」的那类
+    改法。守卫在 tests/test_packaging.py 的
+    test_checker_also_survives_crlf_line_endings。
     """
     pattern = re.compile(
-        rf"^\[{re.escape(name)}\][ \t]*$", re.MULTILINE
+        rf"^\[{re.escape(name)}\][ \t\r]*$", re.MULTILINE
     )
     match = pattern.search(text)
     if not match:
         return ""
     rest = text[match.end():]
-    nxt = re.search(r"^\[[^\]]+\][ \t]*$", rest, re.MULTILINE)
+    nxt = re.search(r"^\[[^\]]+\][ \t\r]*$", rest, re.MULTILINE)
     return rest[: nxt.start()] if nxt else rest
 
 
@@ -301,6 +324,158 @@ def _check_icon(defines: dict[str, str]) -> None:
         fail(f"SetupIconFile 指向的文件不存在：{icon}")
 
 
+#: 装向导上用户一定会看到的那几个键。列在这里不是因为「翻译要全」，
+#: 而是这些键一旦回退成英文，用户立刻能看出向导没汉化。
+#: （实测这份官方中文翻译：281 个 [Messages] 键里只有 5 条不含中文，
+#:   其中 4 条是 "%1 KB"、"%1 (%2)" 这种纯占位符格式，本来就不该译。）
+_WIZARD_SPOT_CHECKS = (
+    "ButtonNext", "ButtonBack", "ButtonCancel", "ButtonInstall", "ButtonFinish",
+    "WizardSelectDir", "WizardReady", "FinishedHeadingLabel", "FinishedLabel",
+)
+
+
+def _parse_section_keys(text: str, section: str) -> dict[str, str]:
+    """切出某段里的 ``键=值``，键名照抄（不规范化大小写）。
+
+    :func:`_section` 按独占一行切段；这里再把 ``;`` 开头的注释行
+    剔掉，免得把注释内容当成「用户写的值」报出去（报 ``LanguageID
+    不是 $0804，实际是 "; The following three entries..."`` 这种
+    话很显然是没读懂的报错）。行尾吃掉 ``\\r``，理由同 :func:`_section`。
+    """
+    match = re.search(rf"^\[{re.escape(section)}\][ \t\r]*$", text, re.MULTILINE)
+    if not match:
+        return {}
+    rest = text[match.end():]
+    nxt = re.search(r"^\[[^\]]+\][ \t\r]*$", rest, re.MULTILINE)
+    body = rest[: nxt.start()] if nxt else rest
+    pairs: dict[str, str] = {}
+    for line in body.splitlines():
+        line = line.strip()
+        if not line or line.startswith(";"):
+            continue
+        item = re.match(r"^([A-Za-z]\w*)\s*=\s*(.*)$", line)
+        if item:
+            pairs[item.group(1)] = item.group(2).strip()
+    return pairs
+
+
+def _parse_messages(isl_text: str) -> dict[str, str]:
+    """从 .isl 文本里抽出 ``[Messages]`` 的键值对。"""
+    return _parse_section_keys(isl_text, "Messages")
+
+
+def _parse_lang_options(isl_text: str) -> dict[str, str]:
+    """从 .isl 文本里抽出 ``[LangOptions]`` 的键值对。"""
+    return _parse_section_keys(isl_text, "LangOptions")
+
+
+def _check_languages(text: str) -> None:
+    """``[Languages]`` 指向的消息文件得存在、得是中文、编码得对。
+
+    这一段是被一个真实 bug 逼出来的：那时的 [Languages] 写着
+    ``Name: "chinese"; MessagesFile: "compiler:Default.isl"``——
+    语言名叫 chinese（所以「语言」这一栏看着是对的），
+    消息文件却是**英文**的 Default.isl，装出来整个向导全是英文，
+    而仓库里没有任何一个检查能发现「向导不是中文的」。
+
+    ISCC 对这两种错法的态度都是沉默的：不存在的路径在部分环境下
+    会被 fallback 到默认语言，Default.isl 更是合法得不能更合法。
+    所以只能自己查。
+    """
+    languages = _section(text, "Languages")
+    if not languages:
+        fail("缺 [Languages] 段：安装向导会退回英文")
+        return
+
+    entries = re.findall(
+        r'^\s*Name\s*:\s*"([^"]*)"\s*;\s*MessagesFile\s*:\s*"([^"]*)"',
+        languages,
+        re.MULTILINE,
+    )
+    if not entries:
+        fail("[Languages] 里没有成对的 Name/MessagesFile 指令")
+        return
+
+    for name, messages_file in entries:
+        # 路径里可能带 compiler: 前缀，取 basename 前要先剥掉——
+        # 否则 "compiler:Default.isl" 的 basename 还是整串，
+        # 下面的英文判断就永远不成立（这个 bug 原本就是
+        # compiler:Default.isl，所以它必须是能被抓住的那一个）。
+        bare = messages_file.lower().split(":", 1)[-1]
+        if Path(bare.replace("\\", "/")).name == "default.isl":
+            fail(
+                f"[Languages] 的 {name!r} 指向 Default.isl（英文）——"
+                "装出来会是英文向导。指向 installer_languages\\ 下的中文翻译"
+            )
+            continue
+        # 官方写法 compiler:xxx.isl 会去 ISCC 安装目录里找；本项目刻意
+        # vendored 到仓库里，好处就是能对着它做检查（编码、键集、内容）。
+        if messages_file.lower().startswith("compiler:"):
+            fail(
+                f"[Languages] 的 {name!r} 指向 compiler: 前缀"
+                "（依赖构建机上 Inno Setup 的安装布局）；"
+                f"改用仓库内的 {LANG_DIR}\\ChineseSimplified.isl"
+            )
+            continue
+        _check_isl_file(messages_file, name)
+
+
+def _check_isl_file(relative: str, language_name: str) -> None:
+    """消息文件本身：存在、UTF-8 带 BOM、有 LanguageID、真的是中文。"""
+    path = ROOT / relative.replace("\\", "/")
+    if not path.is_file():
+        fail(f"[Languages] 的 {language_name!r} 指向的文件不存在：{relative}")
+        return
+
+    raw = path.read_bytes()
+    if not raw.startswith(b"\xef\xbb\xbf"):
+        fail(
+            f"{relative} 必须存为 UTF-8 with BOM，否则 ISCC 按 ANSI 读，"
+            "中文会乱码而且不报错"
+        )
+
+    text = raw.decode("utf-8-sig", errors="replace")
+    lang_options = _parse_lang_options(text)
+    # 只问 LanguageID：写成 $804 也算对。判据不能连带要求
+    # LanguageName 含中文——LanguageName 只是语言下拉框里的显示名，
+    # 而本项目只有一种语言，Inno Setup 压根不显示那个下拉框。
+    # 它的唯一用户是「有人把 LanguageID 配错了」的时候。
+    language_id = lang_options.get("LanguageID", "")
+    if language_id.lower().replace(" ", "") not in ("$0804", "$804"):
+        fail(
+            f"{relative} 的 LanguageID 不是 $0804（简体中文），"
+            f"实际是 {language_id or '（没写）'}"
+        )
+
+    messages = _parse_messages(text)
+    if not messages:
+        fail(f"{relative} 里没有 [Messages] 段的消息条目")
+        return
+    missing = [k for k in _WIZARD_SPOT_CHECKS if k not in messages]
+    if missing:
+        fail(f"{relative} 缺这些向导文案键：{', '.join(missing)}")
+        return
+
+    # 抽查的键里只要有没中文的，用户就能一眼看出向导没汉化。
+    english = [k for k in _WIZARD_SPOT_CHECKS if not _has_cjk(messages[k])]
+    if english:
+        detail = "，".join(f"{k}={messages[k]!r}" for k in english)
+        fail(f"{relative} 里这些向导文案还是英文：{detail}")
+
+    untranslated = sum(
+        1 for v in messages.values() if not _has_cjk(v) and re.search(r"%\d", v)
+    )
+    print(
+        f"  语言 {language_name}: {relative}"
+        f"（{len(messages)} 条消息，含占位符的纯格式串 {untranslated} 条不译）"
+    )
+
+
+def _has_cjk(text: str) -> bool:
+    """有没有中日韩统一表意文字。"""
+    return bool(re.search(r"[\u4e00-\u9fff]", text))
+
+
 def main() -> int:
     _force_utf8_output()
     if not ISS.is_file():
@@ -327,6 +502,7 @@ def main() -> int:
     _check_files_section(text)
     _check_code_prototypes(text)
     _check_icon(defines)
+    _check_languages(text)
 
     for message in warnings:
         print(f"[warn] {message}")

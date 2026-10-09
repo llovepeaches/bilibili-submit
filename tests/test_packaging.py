@@ -18,10 +18,14 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from unittest import mock
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -217,12 +221,20 @@ def _section(text: str, name: str) -> str:
     文件最后一段。本项目真踩过——``[Code]`` 段的注释里提了一句
     ``[Files]``，于是断言跑去 ``[Code]`` 里找 ``recursesubdirs``，
     报出一个和真实原因毫无关系的失败。
+
+    ``[ \\t]*$`` 里必须吃掉 ``\\r``：``$`` 只在 ``\\n`` 前成立，CRLF
+    文件的行尾是 ``\\r\\n``，于是这个锚点在 CRLF 上**永远不匹配**，
+    ``_section`` 返回空串、调用方以为段不存在而**静默放行**。
+    ``.gitattributes`` 把 ``installer.iss`` 定成 ``eol=crlf``，
+    Windows 上检出就是 CRLF——所以这不是假想。
+    tools/check_installer.py 里有同一个函数、同一个修法，
+    由 test_section_parsing_survives_crlf_line_endings 钉住。
     """
-    match = re.search(rf"^\[{re.escape(name)}\][ \t]*$", text, re.MULTILINE)
+    match = re.search(rf"^\[{re.escape(name)}\][ \t\r]*$", text, re.MULTILINE)
     if not match:
         return ""
     rest = text[match.end():]
-    nxt = re.search(r"^\[[^\]]+\][ \t]*$", rest, re.MULTILINE)
+    nxt = re.search(r"^\[[^\]]+\][ \t\r]*$", rest, re.MULTILINE)
     return rest[: nxt.start()] if nxt else rest
 
 
@@ -291,6 +303,165 @@ def test_section_parsing_ignores_section_names_inside_comments():
     assert "check_installer.py" not in _section(real, "Files"), (
         "段切分被带偏：[Files] 段里混进了文件末尾的注释"
     )
+
+
+def test_section_parsing_survives_crlf_line_endings():
+    """段切分在 CRLF 文件上必须照样работа——否则**所有**段相关断言静默放行。
+
+    这是本轮给``[Languages]`` 加检查时才撞出来的：``[ \\t]*$`` 这个锚点
+    里，``$`` 只在 ``\\n`` 前成立，而 CRLF 的行尾是 ``\\r\\n``——中间夹着
+    一个 ``\\r``，锚点在 CRLF 上永远不匹配。于是 ``_section`` 返回空串，
+    调用方把「段不存在」当成「段里没有违规内容」放过去了：
+    ``_check_files_section``、``_check_code_prototypes``、
+    ``_check_languages`` 一次性全部失效，而且没有任何报错。
+
+    为什么会踩到：``.gitattributes`` 里 ``installer.iss`` 是
+    ``eol=crlf``，Windows 上检出就是 CRLF。也就是说这些检查在作者
+    自己的Linux 上绿着，在每个人 Windows 上都是空转。
+
+    这条守卫用内联的 CRLF 文本做样本，顺带把真实的 ``installer.iss``
+    换成 CRLF 再切一遍——后者才是「真的有人这么干」的形态。
+    """
+    crlf = "\r\n".join([
+        "[Setup]",
+        "AppId={{X}",
+        "[Files]",
+        "; 注释里提到 recursesubdirs，但 _directives 会滤掉它",
+        'Source: "x"; Flags: recursesubdirs',
+        "[Code]",
+        "procedure Foo;",
+    ]) + "\r\n"
+
+    files = _section(crlf, "Files")
+    assert "Source" in files, (
+        "CRLF 下 _section 切不出 [Files]——[ \\t]*$ 不匹配，段名锚点失效"
+    )
+    assert "procedure" not in files, "CRLF 下段尾判定失效，切到了下一个段"
+    assert "procedure" in _section(crlf, "Code")
+    # _directives 走的是 strip()，本来就不受行尾影响，这里一并确认
+    assert "recursesubdirs" in _directives(crlf, "Files"), (
+        "CRLF 下 _directives 把指令当成注释滤掉了"
+    )
+
+    # 真实文件换成 CRLF 再切一遍：内联样本证明不了真实段名带空格之类。
+    # 比较的是「能不能切出**非空的段**」而不是逐字相等——CRLF 版每行
+    # 尾部都多一个 \r，两边内容本来就不该一样；这里要守的是段名锚点在
+    # CRLF 上匹配得上（切空了就等于该段的检查静默放行）。
+    real_lf = ISS.read_text(encoding="utf-8-sig")
+    real_crlf = real_lf.replace("\n", "\r\n")
+    for section in ("Files", "Languages", "Tasks", "Icons", "Run"):
+        for label, text in (("LF", real_lf), ("CRLF", real_crlf)):
+            assert _section(text, section), (
+                f"{label} 下切不出 [{section}] 段——段名锚点不认 \\r，"
+                "该段的检查会全部静默失效"
+            )
+        # 切出来的内容除行尾外应当一致（段尾边界没跑偏）
+        assert _strip_cr(_section(real_crlf, section)) == _section(real_lf, section), (
+            f"CRLF 与 LF 下 [{section}] 段的内容不同——段尾判定跑偏了"
+        )
+
+
+def test_checker_also_survives_crlf_line_endings():
+    """``check_installer.py`` 的段解析同样必须吃 ``\\r``。
+
+    与上面那条是同一个 bug 的两处副本（检查器与测试各一份 ``_section``）。
+    少改一处就等于留了个只在另一边复现的坑。
+
+    ⚠️ 这条断言改过两版，两版都是**假守卫**，记下来免得再犯：
+
+      第一版：只比「CRLF 上是否仍退出 0」。可installer.iss 当时恰好
+      没有任何违规，``_section`` 整个失效也照样绿。
+
+      第二版：造一份缺 ``recursesubdirs`` 的脚本，比退出码。可``[Files]``
+      **后面还有别的段**，所以尾部锚点失效并不影响段头匹配，
+      ``_section`` 照样切得出 ``[Files]``，两版都非 0，绿得毫无意义。
+
+    现在的判据是**输出逐字比对**：把 ``installer.iss`` 换成 CRLF 之后，
+    检查器该看到的段一个都不能少。段切分若在 CRLF 上失效，
+    ``_check_files_section`` / ``_check_languages`` 拿到的就是空串，
+    会被 ``if files_section:`` 短路掉，对应的信息行随之消失。
+
+    说清严重性的边界：实测这份 installer.iss 即使段切分完全失效，
+    输出依然完整、退出码依然是 0——因为它的段**首尾都有别的段**，
+    尾部锚点坏掉不影响段头匹配。所以这里防的不是「现在正在流血」，
+    而是「段名后面带空格、或者段在文件末尾时才会暴露」的那类改法。
+    但 ``.gitattributes`` 明明把 installer.iss 声明成 ``eol=crlf``，
+    守卫与声明必须一致——否则这个声明就是一句没人执行的承诺。
+    """
+    def _run(workdir: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(workdir / "tools" / "check_installer.py")],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(workdir),
+        )
+
+    outputs: dict[str, str] = {}
+    codes: dict[str, int] = {}
+    for label, eol in (("LF", "\n"), ("CRLF", "\r\n")):
+        workdir = tmp_installer_copy(eol=eol)
+        try:
+            done = _run(workdir)
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+        assert done.returncode == 0, (
+            f"{label} 版上检查器就失败了，这说明副本本身有问题：\n{done.stdout}"
+        )
+        outputs[label] = done.stdout
+        codes[label] = done.returncode
+
+    assert outputs["LF"] == outputs["CRLF"], (
+        "检查器在 CRLF 与 LF 下的输出不同——段切分不认 \\r，"
+        "至少有一个基于段的检查被静默跳过了：\n"
+        f"--- LF ---\n{outputs['LF']}\n--- CRLF ---\n{outputs['CRLF']}"
+    )
+
+    # 光「输出相同」还不够：两份输出都可能是「什么都没查」的残缺输出。
+    # 所以钉住几个只有真的读到了段才会出现的关键行。
+    for expected in ("产物目录", "主程序", "语言 chinese", "静态检查通过"):
+        assert expected in outputs["CRLF"], (
+            f"CRLF 版的检查器输出里没有「{expected}」——"
+            "检查什么都没查到，等于没跑"
+        )
+    assert codes["CRLF"] == codes["LF"] == 0
+
+
+def _strip_cr(text: str) -> str:
+    """去掉行尾的 ``\\r``，让 CRLF 与 LF 的内容可比。
+
+    切段的结果里每行都带着原样的行尾，所以直接比大小会永远不等——
+    而「不等」是换行符造成的，不是段边界跑偏。这里只抹掉 ``\\r``，
+    不动别的东西：真要是段切多了一行少了一行，照样比不出来。
+    """
+    return text.replace("\r\n", "\n")
+
+
+def tmp_installer_copy(eol: str = "\r\n") -> Path:
+    """把仓库复制成一份指定换行的最小副本，返回临时目录。
+
+    复制的是**最小可用集**：检查器会去 ``ROOT/dist/`` 下找产物，
+    而 dist\\ 不存在时它会打印「跳过产物校验」并正常退出，所以
+    不需要 PyInstaller 的真实输出。
+
+    ``eol`` 决定 ``installer.iss`` 的行尾——``.gitattributes`` 把它
+    定成 ``eol=crlf``，所以 Windows 上检出就是 CRLF（而不是 CI 上
+    这个 Linux runner 看到的 LF）。BOM 必须带上，检查器会查这一条。
+    """
+    workdir = Path(tempfile.mkdtemp(prefix="iss-crlf-"))
+    (workdir / "tools").mkdir()
+    (workdir / "installer_languages").mkdir()
+    shutil.copy(
+        ROOT / "tools" / "check_installer.py", workdir / "tools" / "check_installer.py"
+    )
+    text = ISS.read_text(encoding="utf-8-sig")
+    # 源文件本身是 LF（.gitattributes 让 git 在检出时才展开成 CRLF），
+    # 所以先统一成 LF 再按需替换成目标行尾。
+    normalized = text.replace("\r\n", "\n")
+    (workdir / "installer.iss").write_bytes(
+        b"\xef\xbb\xbf" + normalized.replace("\n", eol).encode("utf-8")
+    )
+    for isl in (ROOT / "installer_languages").glob("*.isl"):
+        shutil.copy(isl, workdir / "installer_languages" / isl.name)
+    return workdir
 
 
 def test_installer_copies_the_whole_directory_recursively():
@@ -390,6 +561,200 @@ def test_ci_waits_for_the_installer_process():
         "build-installer.yml 应当设 timeout-minutes——"
         "脚本内的超时是第二道，job 级兜底才是最后一道"
     )
+
+
+# ---------------------------------------------------------------------------
+# 安装向导的语言
+# ---------------------------------------------------------------------------
+
+ISL = ROOT / "installer_languages" / "ChineseSimplified.isl"
+
+
+def test_installer_wizard_is_chinese():
+    """安装向导必须是中文的。
+
+    这是一条**回归守卫**，钉的是一个真实存在了整个0.2.x 生命周期的
+    bug：``[Languages]`` 里写着 ``Name: "chinese"``（语言名叫 chinese，
+    所以语言这一栏看着是对的），``MessagesFile`` 却指向
+    ``compiler:Default.isl``——那是**英文**文件。装出来整个向导全是
+    英文，而仓库里没有任何一个检查能发现「向导不是中文的」。
+
+    ``Name`` 与 ``MessagesFile`` 各管一件事：前者是语言下拉框里显示的
+    名字，后者决定实际文案。所以「语言名对」不代表「语言对」——
+    这正是它能潜伏这么久的原因。
+    """
+    directives = _directives(ISS.read_text(encoding="utf-8-sig"), "Languages")
+    assert directives, (
+        "installer.iss 缺 [Languages] 段——Inno Setup 会退回英文向导"
+    )
+
+    # 逐个语言条目查，而不是只搜字符串：注释里提一句 MessagesFile
+    # 就能骗过 `in`，而那正是 bug 的藏身处（注释解释了它）。
+    entries = re.findall(
+        r'Name\s*:\s*"([^"]*)"\s*;\s*MessagesFile\s*:\s*"([^"]*)"',
+        directives,
+    )
+    assert entries, (
+        "[Languages] 里没有成对的 Name/MessagesFile 指令："
+        f"{directives!r}"
+    )
+    for name, messages_file in entries:
+        bare = messages_file.lower().split(":", 1)[-1]
+        assert bare != "default.isl", (
+            f"语言 {name!r} 的消息文件是 Default.isl（英文）——"
+            "装出来会是英文向导。指向 installer_languages\\ 下的中文翻译"
+        )
+        assert not messages_file.lower().startswith("compiler:"), (
+            f"语言 {name!r} 用了 compiler: 前缀（{messages_file}）——"
+            "它依赖构建机上 Inno Setup 的安装布局；本项目刻意把翻译"
+            "vendored 进仓库，就是为了能对着它做检查"
+        )
+        assert "\\" in messages_file, (
+            f"MessagesFile 应用相对路径指向仓库里的文件，实际是 {messages_file!r}"
+        )
+
+    # 光有配置还不够：那个文件必须真的在、真的是中文。
+    assert ISL.is_file(), (
+        f"翻译文件不在：{ISL.relative_to(ROOT)}。"
+        "MessagesFile 指向一个不存在的文件时，ISCC 的表现取决于环境，"
+        "本项目见过的最坏情况是静默退回英文"
+    )
+
+
+def test_installer_language_file_is_utf8_with_bom():
+    """翻译文件必须是 UTF-8 **带 BOM**。
+
+    与 ``installer.iss`` 同一个坑：ISCC 靠 BOM 认出 UTF-8，不带 BOM
+    就按 ANSI（GBK / 1252）读，中文变成乱码——**而且不报错**，只在你
+    用户眼前发生。官方那份``ChineseSimplified.isl`` 本身是不带 BOM 的
+    （UTF-8 无 BOM），直接用就是坑，所以落库时必须补上。
+    """
+    raw = ISL.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf"), (
+        "installer_languages/ChineseSimplified.isl 必须是 UTF-8 with BOM，"
+        "否则 ISCC 按 ANSI 读，中文乱码且不报错"
+    )
+    text = raw.decode("utf-8-sig")
+    assert "\ufffd" not in text, (
+        "翻译文件里有 U+FFFD 替换字符——解码时丢了字节（真出现乱码了）"
+    )
+
+
+def test_installer_language_file_covers_the_wizard_keys():
+    """抽查的向导文案键必须存在，且真的是中文。
+
+    键的挑法：只用**用户一定会看到**的那几个（下一步/上一步/取消/
+    安装/完成、选目录、准备安装、完成页标题）。不是要「翻译得完整」，
+    而是这几条一旦回退成英文，用户一眼就看出向导没汉化。
+
+    纯占位符格式串（``%1 KB``、``%1 (%2)``）不算漏——那种东西译了
+    反而更糟，所以抽查里也不含它们。
+    """
+    text = ISL.read_text(encoding="utf-8-sig")
+    messages = _parse_isl_section(text, "Messages")
+    assert messages, "翻译文件里没有 [Messages] 段的条目"
+
+    spot_checks = (
+        "ButtonNext", "ButtonBack", "ButtonCancel", "ButtonInstall", "ButtonFinish",
+        "WizardSelectDir", "WizardReady", "FinishedHeadingLabel", "FinishedLabel",
+    )
+    missing = [k for k in spot_checks if k not in messages]
+    assert not missing, f"翻译文件缺这些向导文案键：{', '.join(missing)}"
+
+    english = [k for k in spot_checks if not _has_cjk(messages[k])]
+    assert not english, (
+        "这些向导文案还是英文："
+        + "，".join(f"{k}={messages[k]!r}" for k in english)
+    )
+
+    # LanguageID 得是简体中文：文件里全是中文但LanguageID 写着繁体，
+    # 用户看到的是繁体字——同样是「不是中文」。
+    lang_options = _parse_isl_section(text, "LangOptions")
+    assert lang_options.get("LanguageID", "").lower().replace(" ", "") in (
+        "$0804", "$804",
+    ), f"LanguageID 不是简体中文：{lang_options.get('LanguageID')!r}"
+
+
+def test_installer_language_keys_match_the_default_english_set():
+    """翻译的键集不该与Inno Setup 的默认英文集脱节太多。
+
+    少键不是立刻致命（Inno Setup 会退回英文那条），但意味着向导上
+    会**零星**冒出英文，比全英文更难看——用户会以为装坏了。
+
+    上限放在「不许超过5%」，是刻意留的余量：官方翻译与 Default.isl
+    各自独立演进，某个 Inno Setup 小版本加几条键是正常的。同时把
+    当前实测值写进注释，好让下一个人知道基线是多少。
+
+    实测（落库时）：中文翻译 281 键、Default.isl 281 键，**完全对齐**
+    （零缺失、零多余）。所以这条守卫当下是「零缺口通过」——一旦变红
+    就是真的脱节了，不是「本来就有一点缺」。
+    """
+    isl_keys = set(_parse_isl_section(
+        ISL.read_text(encoding="utf-8-sig"), "Messages"))
+    default_path = ROOT / "installer_languages" / "Default.isl"
+    if not default_path.is_file():
+        pytest.skip(
+            "installer_languages/Default.isl 不见了——它只为键集比对而落库，"
+            "见该文件头部的说明。拿当前 Inno Setup 版本对应的 Default.isl "
+            "放回去即可（要带 UTF-8 BOM）"
+        )
+    default_keys = set(_parse_isl_section(
+        default_path.read_text(encoding="utf-8-sig"), "Messages"))
+    assert default_keys, "Default.isl 里没有 [Messages] 条目"
+
+    missing = default_keys - isl_keys
+    ratio = len(missing) / len(default_keys)
+    assert ratio <= 0.05, (
+        f"翻译缺 {len(missing)}/{len(default_keys)} 个键"
+        f"（{ratio:.1%} > 5%）：{sorted(missing)[:10]}"
+        "——这些位置会显示英文"
+    )
+
+
+def test_ci_proves_the_built_installer_is_chinese():
+    """两个 workflow 都必须真的扫一遍编译产物里的中文。
+
+    ``installer.iss``、翻译文件、检查器全对，只说明「配置写对了」，
+    说明不了「编出来是这个样子」——静默安装全程不渲染界面，谁也没看过
+    那个向导一眼。只有扫产物里的消息文本才算端到端。
+
+    两个 workflow 都要有：``build-installer.yml`` 是改安装相关时的
+    验证，``release.yml`` 是真正发出去的那次——只加前者的话，
+    「改了没触发 build workflow」时会一路发出去。
+    """
+    for path in (INSTALLER_YML, RELEASE_YML):
+        body = path.read_text(encoding="utf-8")
+        assert "选择目标位置" in body, (
+            f"{path.name} 没有校验安装器里的中文向导文案——"
+            "扫编译产物是唯一能证明 MessagesFile 生效的手段"
+        )
+        assert "Select Destination Directory" in body, (
+            f"{path.name} 缺反向断言：出现英文向导文案才说明 MessagesFile 失效"
+        )
+
+
+def _parse_isl_section(text: str, section: str) -> dict[str, str]:
+    """从 .isl 文本里抽出某段的 ``键=值``。
+
+    与 :func:`_section` 一样按独占一行切段（理由同那里），多一步是
+    **剔掉注释行**：``.isl`` 里``[LangOptions]`` 上方全是注释说明，
+    不剔掉就会把注释内容当成「用户写的值」。
+    """
+    body = _section(text, section)
+    pairs: dict[str, str] = {}
+    for line in body.splitlines():
+        line = line.strip()
+        if not line or line.startswith(";"):
+            continue
+        item = re.match(r"^([A-Za-z]\w*)\s*=\s*(.*)$", line)
+        if item:
+            pairs[item.group(1)] = item.group(2).strip()
+    return pairs
+
+
+def _has_cjk(text: str) -> bool:
+    """有没有中日韩统一表意文字。"""
+    return bool(re.search(r"[\u4e00-\u9fff]", text))
 
 
 def test_ci_installs_setup_from_a_neutral_directory():

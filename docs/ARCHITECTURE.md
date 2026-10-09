@@ -54,6 +54,7 @@ config / scheduler / cli     编排：配置、任务执行、命令行
 | `ui/app.py` | 主窗口、导航、状态栏 | 业务判断 |
 | `bili_submit.spec` | 打包配置。`INSTALLER=1` 走 onedir（安装版），否则 onefile | 业务代码 |
 | `installer.iss` | Inno Setup 安装器脚本（只装文件，不含代码逻辑） | 运行时行为 |
+| `installer_languages/` | 安装向导的中文翻译 + 英文原文（只为逐键比对） | 运行时行为 |
 
 ## 关键设计决策
 
@@ -812,6 +813,16 @@ onedir 把 ffmpeg 放 exe 同目录，`ffmpeg.py` 本来就优先找那个位置
 
 **运行期（ISCC 不报，装出来才炸）**
 
+- **`[Languages]` 的 `MessagesFile` 必须指向中文翻译**。整个 0.2.x
+  都在这里：`Name: "chinese"` 让语言名显示得对，`MessagesFile` 却指向
+  英文的 `Default.isl`。两者各管一件事——`Name` 是下拉框里显示的名字，
+  `MessagesFile` 决定实际文案，**「语言名对」不代表「语言对」**。装出来
+  全英文，而没有任何一个检查关心语言。
+
+  翻译 vendored 在 `installer_languages/` 而不用官方推荐的
+  `compiler:Languages\ChineseSimplified.isl`：后者依赖「构建机上 Inno Setup
+  装没装、装的哪一版、语言文件在不在那个目录」。放进仓库才能对着它检查。
+
 - **`[Files]` 必须 `recursesubdirs`**。onedir 的绝大部分内容在
   `_internal\`（Python 运行时、tkinter 的 tcl/tk 数据）。漏了这个
   flag 时安装器只装顶层 exe，界面能出现、点一下就闪退——因为
@@ -819,10 +830,16 @@ onedir 把 ffmpeg 放 exe 同目录，`ffmpeg.py` 本来就优先找那个位置
 - **`AppId` 必须有**。缺了它 Inno Setup 认不出是同一个程序：装新版
   时不覆盖而是并排装第二份，开始菜单出现两个图标，卸载时互删错文件。
 
-还有一条不算坑但容易忽略：**`installer.iss` 里的 `#define` 名字要与
-`EXE_NAME` 对得上**（`BuildDir` 末段 = `EXE_NAME`）。对不上时 ISCC
-**不会报错**——它照抄 `[Files]` 的通配路径，装出一个缺文件的安装器，
-用户双击闪退才发现。
+还有两条不算坑但容易忽略：
+
+- **`installer.iss` 里的 `#define` 名字要与 `EXE_NAME` 对得上**
+  （`BuildDir` 末段 = `EXE_NAME`）。对不上时 ISCC **不会报错**——它照抄
+  `[Files]` 的通配路径，装出一个缺文件的安装器，用户双击闪退才发现；
+- **段名正则必须吃 `\r`**。`.gitattributes` 里 `installer.iss` 是
+  `eol=crlf`，Windows 上检出就是 CRLF，而 `[ \t]*$` 里的 `$` 只在 `\n`
+  前成立。锚点在 CRLF 上永远不匹配 → 段被当成不存在 → 所有基于段的
+  检查静默失效。检查器与测试里各有一份 `_section`，`[Languages]`、
+  `[Files]`、`[Code]` 三个段的检查都建在它上面。
 
 ### CI 上验证安装器的坑（PowerShell 侧）
 

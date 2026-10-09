@@ -15,6 +15,10 @@ on:
       # 后面全跳过了（CI 上真发生过——见 check_installer.py 的注释）
       - tools/check_installer.py
       - tests/test_packaging.py
+      # 语言文件与安装器同等重要：MessagesFile 指错了/丢文件，
+      # 装出来就是英文向导。这两个也在 watch 里。
+      - installer_languages/**
+      - .gitattributes
   pull_request:
     branches: [main, master]
     paths:
@@ -27,6 +31,8 @@ on:
       # 后面全跳过了（CI 上真发生过——见 check_installer.py 的注释）
       - tools/check_installer.py
       - tests/test_packaging.py
+      - installer_languages/**
+      - .gitattributes
   workflow_dispatch:
 
 jobs:
@@ -218,6 +224,72 @@ jobs:
           }
 
           exit 0
+
+      # 静默安装全程不渲染界面，所以上面的冒烟测试**证明不了**
+      # 「安装向导是中文的」——而这正是 v0.2.7 之前长期存在的状态：
+      # [Languages] 里Name 写着 chinese，MessagesFile 却指向英文的
+      # Default.isl，装出来全是英文，而且没有任何检查能发现。
+      #
+      # 这里直接扫编译产物：安装器把消息文本编进 exe，Unicode 版
+      # （Inno Setup 6 只有 Unicode 版）按 UTF-16LE 存。
+      # 所以只要中文文案在、英文向导文案不在，就证明 MessagesFile
+      # 真的生效了。这是唯一能拿到端到端证据的地方——CI 之外的
+      # 任何检查（包括 tools/check_installer.py）都只能证明
+      # 「配置写对了」，证明不了「编出来是这个样子」。
+      #
+      # ⚠️ 两处编码都试：万一某个 Inno Setup 版本把消息放在压缩块里，
+      #    UTF-16 读不到，至少 ASCII(=UTF-16LE 的英文部分)还能命中英文
+      #    侧的反向断言，两边都空才报错——宁可误报也不漏报。
+      - name: 验证安装器里编进的是中文向导
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 刻意**不叫 $setup**：安装步骤里 $setup 是「拷到中立目录后
+          # 准备安装的那一份」，而这里是「刚编出来的产物」，两者路径
+          # 含义完全相反。同名会让 test_ci_installs_setup_from_a_
+          # neutral_directory 的判据（扫 $setup 赋值里有没有 dist）
+          # 以为安装也用了 dist\，那条防的正是 {src} 碰巧正确的bug。
+          $built = "dist\bilibili-submit-setup.exe"
+          $bytes = [System.IO.File]::ReadAllBytes($built)
+
+          # 先转成字符串再 Contains，避免自己拼字节数组（那样看不出
+          # 是哪一段文案在，检查失败时报不出可读的原因）。
+          $u16 = [System.Text.Encoding]::Unicode.GetString($bytes)
+          $u8 = [System.Text.Encoding]::UTF8.GetString($bytes)
+          $either = $u16 + "`n" + $u8
+
+          # 先自证扫描手段本身有效：安装器里必然能找到自己的文件名
+          # （版本信息里就有），两种编码都找不到的话说明扫描方法不对，
+          # 那下面的断言就是拿一把坏尺子量东西。
+          if (-not $either.Contains("bilibili-submit")) {
+            throw "在安装器里连自己的文件名都找不到——UTF-16/UTF-8 扫描方法不对，下面的断言不作数"
+          }
+          Write-Host "扫描手段自检通过（能在安装器里找到程序名）"
+
+          # 刻意挑长的、只在向导里出现的句子。「下一步」这种两三个字的
+          # 不行——它在别处也可能命中（比如用户指南的目录），捡到一次
+          # 假阳性就等于这个检查废了。
+          $mustHave = @(
+            "选择目标位置",                # WizardSelectDir
+            "完成 [name] 安装向导",         # FinishedHeadingLabel
+            "点击“下一步”继续"            # SelectDirBrowseLabel
+          )
+          foreach ($phrase in $mustHave) {
+            if (-not $either.Contains($phrase)) {
+              throw "安装器里找不到中文文案「$phrase」——向导多半还是英文的"
+            }
+            Write-Host "找到中文文案: $phrase"
+          }
+
+          # 反向断言：这几条是向导第一页与语言页的英文原文，出现即说明
+          # 消息文件没生效（Default.isl 被读了回去）。
+          $mustNot = @("Select Destination Directory", "Choose Setup Install Language")
+          foreach ($phrase in $mustNot) {
+            if ($either.Contains($phrase)) {
+              throw "安装器里出现了英文向导文案「$phrase」——MessagesFile 没生效？"
+            }
+          }
+          Write-Host "安装器向导文案已是中文（反向断言也通过）"
 
       - name: 上传安装器
         uses: actions/upload-artifact@v4
