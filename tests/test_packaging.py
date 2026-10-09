@@ -760,10 +760,31 @@ def test_ci_proves_the_built_installer_is_chinese():
             f"{path.name} 没有调用 tools/verify_installer_zh.ps1——"
             "只在一个 workflow 里验证的话，「改了没触发另一个」时照样发出去"
         )
-        assert re.search(
-            r"run:[^\n]*verify_installer_zh\.ps1[^\n]*lang-report\.txt", body), (
-            f"{path.name} 没把探针报告的路径传给校验脚本——"
-            "读不到文件等于没验"
+        # 只要求「校验脚本被调用时，路径指向 lang-report.txt」。
+        # 不要求写在同一行：那个 run: 块里还带了「找不到就搜一遍」的
+        # 诊断逻辑，路径是先进变量再传的。
+        # 挑**真正调用**的那行。带 `./` 前缀且不在 paths: 列表里——
+        # 注释里也写着脚本名（讲清楚为什么放在 tools/ 下），而
+        # paths: 下的两行是「改动触发条件」，不是调用。
+        calls = [ln for ln in body.splitlines()
+                 if "./tools/verify_installer_zh.ps1" in ln]
+        assert calls, (
+            f"{path.name} 没有真正调用 tools/verify_installer_zh.ps1"
+            "（要写成 ./tools/verify_installer_zh.ps1 -ReportPath ...）"
+        )
+        call = calls[0]
+        assert re.search(r"-ReportPath\s+\$expected\b", call), (
+            f"{path.name} 调用校验脚本时传的路径不是 $expected——"
+            "读不到文件等于没验。$expected 必须由 lang-report.txt 拼出来"
+        )
+        assert re.search(r"\$expected\s*=\s*\S*lang-report\.txt", body), (
+            f"{path.name} 没把 $expected 指向 lang-report.txt"
+        )
+        # 找不到时要能把报告搜出来贴到日志里。「探针没跑」与「跑到了
+        # 别的目录」是两回事，日志里能一眼看出是哪种就少一轮往返。
+        assert re.search(r"-Filter\s+\"lang-report\.txt\"", body), (
+            f"{path.name} 找不到报告时没有全盘搜一遍——"
+            "这两种情况的修法完全不同，日志里必须能一眼分开"
         )
 
 

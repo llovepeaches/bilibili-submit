@@ -324,7 +324,20 @@ jobs:
         # {tmp} 在安装器里展开成 %TEMP%，CI runner 上就是这个路径。
         # 报告写在 {app}（安装目录）而不是 %TEMP%：Inno 的 {tmp} 是它自己的
         # 安装临时目录（%TEMP%\is-XXXXX\），安装一结束就删掉了。
-        run: ./tools/verify_installer_zh.ps1 -ReportPath "$env:LOCALAPPDATA\Programs\bilibili-submit\lang-report.txt"
+        run: |
+          $expected = "$env:LOCALAPPDATA\Programs\bilibili-submit\lang-report.txt"
+          if (-not (Test-Path $expected)) {
+            # 找不到就把它搜出来贴到日志里。「探针没跑」和「跑到了别的
+            # 地方」是两回事，日志里能一眼看出是哪种，省一轮往返。
+            Write-Host "预期位置没有报告，全盘搜一下 lang-report.txt："
+            Get-ChildItem -Path $env:LOCALAPPDATA, $env:TEMP, "$env:USERPROFILE" `
+              -Filter "lang-report.txt" -Recurse -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "  找到: $($_.FullName)" }
+            Write-Host "安装目录内容："
+            Get-ChildItem "$env:LOCALAPPDATA\Programs\bilibili-submit" -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "  $($_.Name)" }
+          }
+          ./tools/verify_installer_zh.ps1 -ReportPath $expected
 
       - name: 组装两个分发包
         shell: pwsh
