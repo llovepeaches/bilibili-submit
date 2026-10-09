@@ -6,6 +6,62 @@
 所有值得记录的变更都会写进这里。格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.7-rc.7] - 2026-10-09
+
+代码层的术语对齐。**程序行为没有任何变化**——上一版把界面换成了
+Material 3 的样子，这一版让代码说出同一种语言。升级不会动你的配置与
+投稿历史。
+
+### 内部整理
+
+- **组件类名换成 Material 3 的术语**：上一版界面已经是药丸按钮、整行反白
+  的导航高亮，但代码还叫 `FluentButton` / `PrimaryButton` /
+  `Collapsible`——文档说 Filled、界面说 Primary、代码说 Fluent，三套
+  语言。现在统一成 Material 的叫法：
+
+  | 原名 | 新名 |
+  |---|---|
+  | `FluentButton` | `MaterialButton`（基类） |
+  | `PrimaryButton` | `FilledButton`（实心） |
+  | `SecondaryButton` | `OutlinedButton`（描边） |
+  | `TertiaryButton` | `TextButton`（文字） |
+  | `NavItem` | `NavRailItem`（Navigation rail） |
+  | `StatusPill` | `AssistChip` |
+  | `Collapsible` | `ExpansionPanel` |
+
+  共 87 处引用、跨 20 个文件。MD3 的三档按钮恰好一一对应现有的
+  实心/描边/文字，所以这是术语对齐，不是重新设计。**不留旧名别名**——
+  这些名字只在包内使用，留一个兼容名字等于让两套术语长期共存。
+
+- **视图的 `app` 参数改用 Protocol 而非裸 `object`**：新增
+  `views/_host.py` 里的 `AppHost`，只要求 `ctx` 与 `refresh_status()`。
+  裸 `object` 的问题是它骗得过一切——`self.app.ctx.proxy` 拼错了、
+  `ctx` 其实叫 `context`，类型检查器都不会吭声。
+
+- 类型标注去掉冗余引号（42 处，文件顶部本来就有
+  `from __future__ import annotations`）；`_fmt_offset` →
+  `_format_offset`、`tid_option` → `_tid_option`。
+
+- 新增 5 条结构守卫（按钮三档变体不错位、旧名彻底消失、AssistChip 的
+  记号必须与语义色配套、展开面板悬停色不许退化成通用 HOVER、视图的 app
+  标注不许再写裸 object）。每条都做了双向验证——注入错误写法确认真的会
+  红，还原确认转绿。
+
+### 故意没改的
+
+- **`tid` 与 `dtime`**：它们是 B 站接口的字段名（投稿分区号、延时投稿），
+  展开成 `type_id` 反而与接口脱节。已在代码注释里写明，免得下一个人
+  「统一命名」时顺手改掉。
+- **`theme.py` 里的 ttk 样式字符串**（`"Primary.TButton"` 等）：那是 ttk
+  引擎的命名，与 Python 类名零耦合。
+- **`ACCENT` / `STANDARD` / `TEXT` 变体常量**：它们描述「档位」，与类名
+  Filled/Outlined/Text 是两个维度。
+- **文件结构**：`widgets.py`（1630 行 20 个类）与 `TasksView`（21 个薄封装
+  方法）都没拆。术语对齐与结构拆分同时做，出问题无法二分定位——留到
+  下一轮。
+
+六个产物与 rc.6 功能一致，只有界面内部的类名与文档变了。
+
 ## [0.2.7-rc.6] - 2026-10-09
 
 第六个预发布候选。两件事：**界面整体换成 Material 3 风格**，以及
