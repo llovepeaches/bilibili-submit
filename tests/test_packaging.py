@@ -540,3 +540,38 @@ def test_ci_uploads_the_installer():
         "release.yml 没有静默安装测试——编译成功不等于装出来能用"
     )
     assert "unins000.exe" in release, "release.yml 没验证卸载器"
+
+
+def test_release_notes_survive_powershell_escaping():
+    """Release 说明的 here-string 是可展开的（@\"...\"@），反引号会被
+    PowerShell 当**转义字符**处理。
+
+    `` `b `` 是退格、`` `f `` 是换页——v0.2.7-rc.2 的 Release 说明里，
+    所有 ``bilibili-`` 的首字母 b、``full`` 的 f、``ffmpeg.exe`` 的 f
+    都被吃掉了，页面上显示 ``ilibili-submit-setup.exe``。Markdown 行内
+    代码要写字面反引号，在 PowerShell 里必须写成两个（展开后还原成一个）。
+    """
+    release = RELEASE_YML.read_text(encoding="utf-8")
+    m = re.search(r'\$notes = @"(.*?)"@', release, re.S)
+    assert m, "release.yml 里找不到 notes here-string"
+
+    # 转义发生在 PowerShell 解析的时候：先把「正确的双反引号」剔除，
+    # 剩下还挨着转义字符的单反引号才是风险。展开后的文本里 `` `b ``
+    # 反而是正常内容（行内代码的开头），不能在那一层查。
+    residual = m.group(1).replace("``", "")
+    bad = re.findall(r"`[bfntrva0u]", residual)
+    assert not bad, (
+        f"notes 里还有会被 PowerShell 转义的反引号序列: {bad}——"
+        "Markdown 行内代码的反引号在 here-string 里必须写成两个"
+    )
+    # 再按 PowerShell 的规则展开，验证最终文本里文件名是完整的
+    expanded = m.group(1).replace("``", "`")
+    for name in (
+        "bilibili-submit-setup.exe",
+        "bilibili-submit-gui-portable.exe",
+        "bilibili-submit-standalone.exe",
+        "bilibili-submit.exe",
+        "bilibili-submit-full-windows.zip",
+        "bilibili-submit-mini-windows.zip",
+    ):
+        assert name in expanded, f"展开后的 notes 里文件名不完整: {name}"

@@ -307,24 +307,24 @@ jobs:
 
           | 资产 | 大小 | 说明 |
           |---|---|---|
-          | `bilibili-submit-setup.exe` | ~33 MB | **图形界面安装版**，推荐。双击安装，开始菜单有入口，能干净卸载 |
-          | `bilibili-submit-gui-portable.exe` | ~72 MB | 图形界面单文件便携版，拷走即用，无需安装 |
-          | `bilibili-submit-standalone.exe` | ~70 MB | 命令行单文件版，ffmpeg 已内置 |
-          | `bilibili-submit.exe` | ~11 MB | 命令行轻量 exe，需自备 ffmpeg |
-          | `bilibili-submit-full-windows.zip` | ~41 MB | 命令行 exe + 外置 ffmpeg.exe，启动最快 |
-          | `bilibili-submit-mini-windows.zip` | ~10 MB | 命令行 exe + config，不含 ffmpeg |
+          | ``bilibili-submit-setup.exe`` | ~33 MB | **图形界面安装版**，推荐。双击安装，开始菜单有入口，能干净卸载 |
+          | ``bilibili-submit-gui-portable.exe`` | ~72 MB | 图形界面单文件便携版，拷走即用，无需安装 |
+          | ``bilibili-submit-standalone.exe`` | ~70 MB | 命令行单文件版，ffmpeg 已内置 |
+          | ``bilibili-submit.exe`` | ~11 MB | 命令行轻量 exe，需自备 ffmpeg |
+          | ``bilibili-submit-full-windows.zip`` | ~41 MB | 命令行 exe + 外置 ffmpeg.exe，启动最快 |
+          | ``bilibili-submit-mini-windows.zip`` | ~10 MB | 命令行 exe + config，不含 ffmpeg |
 
           ## 怎么选
 
           **用图形界面**（大部分人）：
-          - 自己的电脑长期用 → `bilibili-submit-setup.exe`（安装版）。
+          - 自己的电脑长期用 → ``bilibili-submit-setup.exe``（安装版）。
             装完在开始菜单里有，升级直接覆盖，不会弄乱系统；
-          - 临时用、U 盘、别人的机器 → `bilibili-submit-gui-portable.exe`，
+          - 临时用、U 盘、别人的机器 → ``bilibili-submit-gui-portable.exe``，
             不用装，双击就开。
 
           **用命令行**：
-          - 想单文件开箱即用 → `standalone`
-          - 在意启动速度 → `full`，让 `ffmpeg.exe` 跟着 exe 走
+          - 想单文件开箱即用 → ``standalone``
+          - 在意启动速度 → ``full``，让 ``ffmpeg.exe`` 跟着 exe 走
 
           ## 图形界面版
 
@@ -342,10 +342,10 @@ jobs:
           | 卸载 | 「设置 → 应用」里可卸载 | 直接删文件 |
 
           图形界面版的用户数据（登录状态、界面偏好、投稿历史）存在
-          用户目录下的 `.config\bilibili_submit\`，**卸载不会删除**——
+          用户目录下的 ``.config\bilibili_submit\``，**卸载不会删除**——
           重装后不用重新扫码。
 
-          ffmpeg 只影响 `cover: auto` 自动抽帧，其他功能不依赖它。
+          ffmpeg 只影响 ``cover: auto`` 自动抽帧，其他功能不依赖它。
 
           ## 使用
 
@@ -355,9 +355,9 @@ jobs:
           命令行版：
 
           1. 解压（下载 exe 的话跳过这步）
-          2. `bilibili-submit.exe login` 手机扫码登录
-          3. `bilibili-submit.exe upload 视频.mp4 --title "标题" --tid 21 --tag "标签"`
-          4. `bilibili-submit.exe check` 自检
+          2. ``bilibili-submit.exe login`` 手机扫码登录
+          3. ``bilibili-submit.exe upload 视频.mp4 --title "标题" --tid 21 --tag "标签"``
+          4. ``bilibili-submit.exe check`` 自检
 
           ## 注意事项
 
@@ -365,7 +365,7 @@ jobs:
             请在 Windows Defender 里添加白名单。安装版把程序放在
             Program Files 下、且不往临时目录解压文件，被拦的概率比
             单文件版低一些。
-          - 安装版默认装到 `C:\Program Files\bilibili-submit`。
+          - 安装版默认装到 ``C:\Program Files\bilibili-submit``。
             安装时可以选择「仅为我安装」装到用户目录，不需要管理员权限。
           - 建议用 Windows Terminal 打开命令行版以正确显示二维码；
             传统 cmd 显示乱码时，复制链接到手机打开同样可以登录。
