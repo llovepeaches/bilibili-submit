@@ -4,7 +4,7 @@ from .client import BiliClient
 from .exceptions import BiliError, ConfigError, NotLoggedInError
 from .wbi import WbiKey, WbiSigner, get_mixin_key
 
-__version__ = "0.2.7-rc.7"
+__version__ = "0.2.7"
 
 __all__ = [
     "BiliClient",

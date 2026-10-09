@@ -32,7 +32,7 @@ del _stream_name, _stream
 BASE = Path(SPECPATH)
 
 APP_NAME = "bilibili-submit"
-VERSION = "0.2.7-rc.7"
+VERSION = "0.2.7"
 
 # 同一份 spec 要产出两个 exe（轻量版 + 内置 ffmpeg 版），名字靠环境变量区分。
 # 不设 EXE_NAME 时沿用 APP_NAME。
