@@ -6,6 +6,24 @@
 所有值得记录的变更都会写进这里。格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.7-rc.3] - 2026-10-09
+
+第三个预发布候选。修的是**发出去的 Release 说明文字本身**：rc.1、rc.2
+的说明表里所有文件名都少一个首字母——`ilibili-submit-setup.exe`。
+程序本身与 rc.2 完全一致，下载哪个都一样。
+
+**rc 版不会推给已安装用户**——`update.py` 默认不把预发布版本当作
+可升级目标，要试这个版本得手动下载。
+
+### 修复
+
+- **Release 说明里的文件名不再被吃掉首字母**。说明文字用的是
+  PowerShell 可展开 here-string（`@"..."@`），反引号在里面是**转义字符**：
+  `` `b `` 是退格、`` `f `` 是换页，于是 Markdown 行内代码的 `` `bilibili- ``
+  进去就变成退格符加 `ilibili-`。现在行内代码的反引号写成两个，
+  PowerShell 展开时还原成一个。新增守卫
+  `test_release_notes_survive_powershell_escaping` 防再犯。
+
 ## [0.2.7-rc.2] - 2026-10-09
 
 第二个预发布候选。rc.1 的打包流水线（安装器 + 便携版 + 内置版）已跑通，
