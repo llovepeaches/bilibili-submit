@@ -36,6 +36,7 @@ SPEC = ROOT / "bili_submit.spec"
 ISS = ROOT / "installer.iss"
 RELEASE_YML = ROOT / ".github" / "workflows" / "release.yml"
 INSTALLER_YML = ROOT / ".github" / "workflows" / "build-installer.yml"
+VERIFY_ZH_PS1 = ROOT / "tools" / "verify_installer_zh.ps1"
 BUILD_BAT = ROOT / "build_windows.bat"
 
 
@@ -728,42 +729,107 @@ def test_ci_proves_the_built_installer_is_chinese():
     排查方向会被带偏。
     """
     zh_keys = _parse_isl_section(ISL.read_text(encoding="utf-8-sig"), "Messages")
+    # 断言文案住在 tools/verify_installer_zh.ps1 里（内联在两个 workflow
+    # 各一份的话，改一边忘了另一边就会漂移），所以校验文案的来源时
+    # 要连脚本一起看。
+    script = VERIFY_ZH_PS1.read_text(encoding="utf-8")
+    assert "选择目标位置" in script, (
+        "verify_installer_zh.ps1 没有校验安装器里的中文向导文案——"
+        "扫编译产物是唯一能证明 MessagesFile 生效的手段"
+    )
+    assert "Select Destination Directory" in script, (
+        "verify_installer_zh.ps1 缺反向断言：出现英文向导文案才说明 MessagesFile 失效"
+    )
+
+    # CI 里断言的每句中文都必须真能在翻译文件里找到
+    for phrase in _asserted_phrases(script):
+        assert any(phrase in v for v in zh_keys.values()), (
+            f"verify_installer_zh.ps1 断言了「{phrase}」，但翻译文件里没有这句——"
+            "改了翻译就会让 CI 报「安装器坏了」，而真原因是断言过时了"
+        )
+
+    # 两个 workflow 都得真的调这个脚本，且传的是 dist\ 下**刚编出来**
+    # 的那份产物。
     for path in (INSTALLER_YML, RELEASE_YML):
         body = path.read_text(encoding="utf-8")
-        assert "选择目标位置" in body, (
-            f"{path.name} 没有校验安装器里的中文向导文案——"
-            "扫编译产物是唯一能证明 MessagesFile 生效的手段"
+        assert "verify_installer_zh.ps1" in body, (
+            f"{path.name} 没有调用 tools/verify_installer_zh.ps1——"
+            "只在一个 workflow 里验证的话，「改了没触发另一个」时照样发出去"
         )
-        assert "Select Destination Directory" in body, (
-            f"{path.name} 缺反向断言：出现英文向导文案才说明 MessagesFile 失效"
+        # 只认真正传给脚本的那个路径。注意这里是**行内**匹配而不是全文
+        # 搜文件名：上传 artifact 那步也写着 dist\bilibili-submit-setup.exe，
+        # 全文搜会把它当成「校验脚本扫的是产物」，而实际上传的是目录。
+        assert re.search(
+            r"run:[^\n]*verify_installer_zh\.ps1[^\n]*dist\\+bilibili-submit-setup\.exe",
+            body,
+        ), (
+            f"{path.name} 没把 dist\\ 下刚编出来的产物传给校验脚本——"
+            "扫错文件等于没扫（比如扫成安装步骤里拷去中立目录的那份）"
         )
 
-        # CI 里断言的每句中文都必须真能在翻译文件里找到
-        for phrase in _ci_asserted_phrases(body):
-            assert any(phrase in v for v in zh_keys.values()), (
-                f"{path.name} 断言了「{phrase}」，但翻译文件里没有这句——"
-                "改了翻译就会让 CI 报「安装器坏了」，而真原因是断言过时了"
-            )
 
-    # 两个 workflow 断言的文案必须一致：改一边忘了另一边，
-    # 会出现「build 绿着、release 红着」而没人知道该信谁。
-    build_phrases = _ci_asserted_phrases(INSTALLER_YML.read_text(encoding="utf-8"))
-    release_phrases = _ci_asserted_phrases(RELEASE_YML.read_text(encoding="utf-8"))
-    assert build_phrases == release_phrases, (
-        f"两个 workflow 断言的中文文案不一致：build={build_phrases}、"
-        f"release={release_phrases}"
+def test_zh_verifier_searches_bytes_rather_than_decoding():
+    """校验脚本必须做**字节级**子序列搜索，不能整流解码再 ``Contains``。
+
+    这不是风格偏好，是正确性：``[System.Text.Encoding]::Unicode
+    .GetString($bytes)`` 只在偏移 0 对齐时才解得出正确字符，而 setup.exe
+    里 UTF-16LE 文本的起始偏移是任意的（PE 资源段的对齐决定的）。
+    落在奇数偏移时解出来是逐字错位的乱码，``Contains`` 永远匹配不上。
+
+    CI 上真踩过：自证锚点是纯 ASCII 的程序名 ``bilibili-submit``，
+    它在字节里明明存在，只因整流解码错位，脚本第一步就抛了
+    「连自己的文件名都找不到」——而这句话把方向带偏到「产物不对」，
+    真原因（解码方式）是这段代码自己的毛病。
+    """
+    script = VERIFY_ZH_PS1.read_text(encoding="utf-8")
+
+    assert "Encoding]::Unicode.GetString" not in script, (
+        "校验脚本里出现了整流解码（Encoding]::Unicode.GetString）——"
+        "偏移不对齐时解出来是乱码，Contains 必然匹配不上；改用字节搜索"
+    )
+    assert "Test-ByteSubsequence" in script, (
+        "校验脚本没有字节级子序列搜索——与偏移无关，是这里唯一可靠的读法"
+    )
+    # 自证锚点：坏尺子量东西，比不量更糟。
+    # 判据是**真的会因为锚点全灭而抛错**，不是「脚本里出现过 anchors
+    # 这个词」——把 `if (-not $anchorHit)` 改成 `if ($false)` 就能
+    # 让一个只查关键词的守卫变绿，而那正是「尺子坏了却当量到了」
+    # 的改法。逐行找那个 throw 才抓得住。
+    anchor_lines = script.splitlines()
+    branch = [
+        i for i, line in enumerate(anchor_lines)
+        if "$anchorHit" in line and line.strip().startswith("if")
+    ]
+    assert branch, "校验脚本里找不到检查 $anchorHit 的分支"
+    idx = branch[0]
+    assert "not" in anchor_lines[idx], (
+        "锚点检查被短路了（没有 not）——自证锚点失效时脚本会静默"
+        "得出「没找到中文」的结论，把排查方向带偏到产物上"
+    )
+    # throw 必须在**这个分支里面**（下一个同缩进的非空行之前）。
+    # 只查「脚本里有没有 throw」太松：脚本里有三处 throw，
+    # 把锚点分支整个删掉都照样绿。
+    tail = []
+    body_indent = " " * (len(anchor_lines[idx]) - len(anchor_lines[idx].lstrip()) + 1)
+    for line in anchor_lines[idx + 1:]:
+        if line.strip() and not line.startswith(body_indent):
+            break
+        tail.append(line)
+    assert any("throw" in line for line in tail), (
+        "锚点全灭的分支里没有 throw——脚本会继续往下跑，"
+        "拿着失效的尺子把「没找到中文」当成结论报出去"
     )
 
 
-def _ci_asserted_phrases(workflow_body: str) -> list[str]:
-    """从 workflow 里取出 ``$mustHave = @(...)`` 那几条中文。
+def _asserted_phrases(script_body: str) -> list[str]:
+    """从校验脚本里取出 ``$mustHave = @(...)`` 那几条中文。
 
     只认数组字面量的内容，不扫全文里所有中文——否则注释里解释
     「为什么不能带引号」的中文也会被当成断言。
     """
-    match = re.search(r"\$mustHave\s*=\s*@\((.*?)\)", workflow_body, re.DOTALL)
-    assert match, "workflow 里找不到 $mustHave 数组"
-    return re.findall(r'"([^"]+)"', match.group(1))
+    match = re.search(r"\$mustHave\s*=\s*@\((.*?)\)", script_body, re.DOTALL)
+    assert match, "校验脚本里找不到 $mustHave 数组"
+    return re.findall(r"'([^']+)'", match.group(1))
 
 
 #: PowerShell 里的字符串定界符只有 ASCII 的单/双引号。
@@ -785,17 +851,17 @@ def test_ci_chinese_assertions_survive_powershell_parsing():
     同时把「断言文案里没有 ASCII 双引号」一起钉住：那会让
     ``"..."`` 提前闭合，症状一样但更隐蔽。
     """
-    for path in (INSTALLER_YML, RELEASE_YML):
-        for phrase in _ci_asserted_phrases(path.read_text(encoding="utf-8")):
-            bad = [c for c in _FULLWIDTH_QUOTES if c in phrase]
-            assert not bad, (
-                f"{path.name} 的断言文案「{phrase}」含全角引号 {bad}——"
-                "PowerShell 不把它当字符串定界符，会让整个 step 语法报错"
-            )
-            assert '"' not in phrase and "'" not in phrase, (
-                f"{path.name} 的断言文案「{phrase}」含 ASCII 引号，"
-                "会提前闭合字符串字面量"
-            )
+    script = VERIFY_ZH_PS1.read_text(encoding="utf-8")
+    for phrase in _asserted_phrases(script):
+        bad = [c for c in _FULLWIDTH_QUOTES if c in phrase]
+        assert not bad, (
+            f"verify_installer_zh.ps1 的断言文案「{phrase}」含全角引号 {bad}——"
+            "PowerShell 不把它当字符串定界符，会让整个 step 语法报错"
+        )
+        assert '"' not in phrase and "'" not in phrase, (
+            f"verify_installer_zh.ps1 的断言文案「{phrase}」含 ASCII 引号，"
+            "会提前闭合字符串字面量"
+        )
 
 
 def test_ci_chinese_assertions_avoid_placeholders():
@@ -806,12 +872,12 @@ def test_ci_chinese_assertions_avoid_placeholders():
     「找不到中文文案」，而真正的原因是断言写错了，不是安装器坏了。
     排查方向会被直接带偏。
     """
-    for path in (INSTALLER_YML, RELEASE_YML):
-        for phrase in _ci_asserted_phrases(path.read_text(encoding="utf-8")):
-            assert "[" not in phrase and "]" not in phrase, (
-                f"{path.name} 的断言文案「{phrase}」含占位符方括号——"
-                "编译时会被替换掉，拿原文匹配不上；取占位符之外的那一段"
-            )
+    script = VERIFY_ZH_PS1.read_text(encoding="utf-8")
+    for phrase in _asserted_phrases(script):
+        assert "[" not in phrase and "]" not in phrase, (
+            f"verify_installer_zh.ps1 的断言文案「{phrase}」含占位符方括号——"
+            "编译时会被替换掉，拿原文匹配不上；取占位符之外的那一段"
+        )
 
 
 def _parse_isl_section(text: str, section: str) -> dict[str, str]:
@@ -1214,3 +1280,82 @@ def test_release_notes_survive_powershell_escaping():
         "bilibili-submit-mini-windows.zip",
     ):
         assert name in expanded, f"展开后的 notes 里文件名不完整: {name}"
+
+
+def _replica_subseq(hay: bytes, needle: bytes) -> bool:
+    """Python 复刻 ``Test-ByteSubsequence``：首字节筛候选 + 逐字节比。"""
+    if not needle or len(hay) < len(needle):
+        return False
+    i = hay.find(needle[0])
+    while i != -1 and i <= len(hay) - len(needle):
+        if hay[i:i + len(needle)] == needle:
+            return True
+        i = hay.find(needle[0], i + 1)
+    return False
+
+
+def _replica_any_utf(hay: bytes, text: str) -> bool:
+    """Python 复刻 ``Test-AnyUtf``：UTF-8 与 UTF-16LE 任一命中即可。"""
+    return _replica_subseq(hay, text.encode("utf-8")) or _replica_subseq(
+        hay, text.encode("utf-16-le"))
+
+
+def _fake_setup(messages: list[str]) -> bytes:
+    """造一个 UTF-16LE 落在**奇数偏移**的假 setup.exe。
+
+    长度刻意取奇数（MZ 头 8 字节 + 99 字节填充 = 107），
+    整流解码必然错位——这正是 CI 上那次失败的场景。
+    """
+    body = b"MZ" + b"\x90\x00" * 3 + b"\xAB" * 99
+    assert len(body) % 2 == 1, "样本必须是奇数长度，否则测不到错位"
+    for s in messages:
+        body += s.encode("utf-16-le") + b"\x00\x00"
+    return body
+
+
+def test_zh_verifier_finds_messages_at_odd_byte_offsets():
+    """字节搜索在 UTF-16LE 落在**奇数偏移**时照样找得到——这正是 CI 上翻车的那次。
+
+    这里用 Python 精确复刻 ``tools/verify_installer_zh.ps1`` 里的
+    ``Test-ByteSubsequence`` / ``Test-AnyUtf``（同样的首字节筛选 +
+    逐字节比），在两种编造的 ``setup.exe`` 上跑：
+
+    * 中文版：三条 mustHave 全中、mustNot 全不中 → 判定「是中文向导」
+    * 英文版：mustHave 全不中、mustNot 命中英文向导页 → 判定「不是」
+
+    为什么不只在 CI 上验：那边只能拿到「绿/红」，红的时候也只有一句
+    throw 文案，分不清是搜索逻辑坏了、产物不对、还是安装器真是英文的。
+    这里能把三种情况在本地就分开。
+    """
+    script = VERIFY_ZH_PS1.read_text(encoding="utf-8")
+    must_have = _asserted_phrases(script)
+    must_not = _asserted_phrases_in(script, "mustNot")
+    assert must_have and must_not, "断言文案不能是空的，否则这条测试是空断言"
+
+    zh_exe = _fake_setup(must_have)
+    for phrase in must_have:
+        assert _replica_any_utf(zh_exe, phrase), f"字节搜索在奇数偏移下漏了「{phrase}」"
+    for phrase in must_not:
+        assert not _replica_any_utf(zh_exe, phrase), f"中文产物里不该出现「{phrase}」"
+
+    en_exe = _fake_setup(["Select Destination Directory"])
+    for phrase in must_have:
+        assert not _replica_any_utf(en_exe, phrase), f"英文产物里不该命中「{phrase}」"
+    assert _replica_any_utf(en_exe, "Select Destination Directory"), (
+        "反向断言失效：英文向导页没被检出，这条检查就只会单向通过"
+    )
+
+    # 旧做法的对照：同一份字节，整流解码必然失败
+    decoded = zh_exe.decode("utf-16-le", errors="replace")
+    assert not any(p in decoded for p in must_have), (
+        "样本没能复现错位——CI 上那次失败的前提（奇数偏移）已经不成立了，"
+        "这条测试就变成了空断言"
+    )
+
+
+def _asserted_phrases_in(script_body: str, array_name: str) -> list[str]:
+    """取出 ``$mustNot = @(...)`` 这类数组里的字符串字面量。"""
+    match = re.search(
+        r"\$" + array_name + r"\s*=\s*@\((.*?)\)", script_body, re.DOTALL)
+    assert match, f"校验脚本里找不到 ${array_name} 数组"
+    return re.findall(r"'([^']+)'", match.group(1))

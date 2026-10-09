@@ -292,49 +292,15 @@ jobs:
       # 别让一个全英文的向导挂在 Release 上。
       - name: 验证安装器里编进的是中文向导
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # 刻意不叫 $setup：上面安装步骤的 $setup 是「拷到中立目录后
-          # 准备安装的那一份」，这里指「刚编出来的产物」，路径含义相反。
-          # 同名会让 test_ci_installs_setup_from_a_neutral_directory 的
-          # 判据误以为安装也用了 dist\。
-          $built = ".\dist\bilibili-submit-setup.exe"
-          $bytes = [System.IO.File]::ReadAllBytes($built)
-          $either = [System.Text.Encoding]::Unicode.GetString($bytes) + "`n" +
-                    [System.Text.Encoding]::UTF8.GetString($bytes)
-
-          # 自证扫描手段有效：连自己的文件名都找不到的话，下面的断言
-          # 就是拿坏尺子量东西。
-          if (-not $either.Contains("bilibili-submit")) {
-            throw "在安装器里连程序名都找不到——UTF-16/UTF-8 扫描方法不对"
-          }
-
-          # 刻意挑三条**不含引号、不含 [name] 占位符**的完整句子：
-          #   · 不含引号——全角引号「」在 PowerShell 里不是字符串定界符，
-          #     写进双引号字符串里会被解析成结束引号，整个 step ParserError
-          #     （build-installer.yml 上真踩过一次这个）；
-          #   · 不含 [name]——编译时会被替换成实际应用名，拿带占位符的
-          #     原文去 Contains 永远匹配不上；
-          #   · 够长——「下一步」这种两三个字的在别处也可能命中，捡到
-          #     一次假阳性这个检查就废了。
-          $mustHave = @(
-            "选择目标位置",          # WizardSelectDir
-            "选择开始菜单文件夹",     # WizardSelectProgramGroup
-            "正在创建目录"           # StatusCreateDirs
-          )
-          foreach ($phrase in $mustHave) {
-            if (-not $either.Contains($phrase)) {
-              throw "安装器里找不到中文文案「$phrase」——向导多半还是英文的"
-            }
-            Write-Host "找到中文文案: $phrase"
-          }
-          $mustNot = @("Select Destination Directory", "Choose Setup Install Language")
-          foreach ($phrase in $mustNot) {
-            if ($either.Contains($phrase)) {
-              throw "安装器里出现了英文向导文案「$phrase」——MessagesFile 没生效？"
-            }
-          }
-          Write-Host "安装器向导文案已是中文（反向断言也通过）"
+        # 逻辑放在 tools/verify_installer_zh.ps1 而不是内联在这里：
+        # release.yml 也要跑同一段，两份内联副本迟早漂移。
+        #
+        # 刻意传 dist\ 下的**产物路径**，而不是复用安装步骤里的 $setup
+        # 变量——那个是「拷到中立目录后准备安装的那一份」，两者路径
+        # 含义完全相反。同名会让 test_ci_installs_setup_from_a_neutral_
+        # directory 的判据（扫 $setup 赋值里有没有 dist）以为安装也用了
+        # dist\，而那条防的正是 {src} 碰巧正确的 bug。
+        run: ./tools/verify_installer_zh.ps1 -Path "dist\bilibili-submit-setup.exe"
 
       - name: 组装两个分发包
         shell: pwsh

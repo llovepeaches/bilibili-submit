@@ -55,6 +55,7 @@ config / scheduler / cli     编排：配置、任务执行、命令行
 | `bili_submit.spec` | 打包配置。`INSTALLER=1` 走 onedir（安装版），否则 onefile | 业务代码 |
 | `installer.iss` | Inno Setup 安装器脚本（只装文件，不含代码逻辑） | 运行时行为 |
 | `installer_languages/` | 安装向导的中文翻译 + 英文原文（只为逐键比对） | 运行时行为 |
+| `tools/verify_installer_zh.ps1` | CI 扫产物确认向导是中文（字节搜索 + 自证锚点） | 仅 CI |
 
 ## 关键设计决策
 
@@ -844,6 +845,26 @@ onedir 把 ffmpeg 放 exe 同目录，`ffmpeg.py` 本来就优先找那个位置
 ### CI 上验证安装器的坑（PowerShell 侧）
 
 这一组是 Windows runner 上真实踩出来的，本地（Linux）一个都测不到：
+
+- **扫编译产物里的中文向导只能用字节搜索，不能整流解码**。
+  `[Encoding]::Unicode.GetString($bytes)` 只在偏移 0 对齐时解得出正确
+  字符，而 `setup.exe` 里 UTF-16LE 文本的起始偏移是任意的（PE 资源段
+  的对齐要求决定的）。落在奇数偏移时解出来是逐字错位的乱码，
+  `Contains` 必然匹配不上——表现是自证锚点先报「连程序名都找不到」，
+  而程序名（纯 ASCII）在字节里明明存在。报错指向「产物不对」，
+  真原因是那段代码自己的解码方式，排查方向会被带偏。
+  正确做法是字节级子序列搜索（首字节筛候选 + 逐字节比），与偏移无关。
+  逻辑在 `tools/verify_installer_zh.ps1`，两个 workflow 共用一份——
+  内联两份必然漂移，改一边忘了另一边就会「build 绿着、release 红着」。
+  本地 `tests/test_packaging.py::test_zh_verifier_finds_messages_at_odd_byte_offsets`
+  用 Python 复刻同一套逻辑，在奇数偏移的样本上验过两个方向。
+- **PowerShell 的字符串定界符只有 ASCII 单/双引号**。中文文案里的
+  全角引号不是定界符，写进双引号字符串里会让后续内容被当成代码，
+  整个 step `ParserError`——而且报错行号指向那句中文，看起来像
+  「脚本怎么有语法问题」，不会立刻想到是引号。
+- **断言文案不能含 `[name]` 这类编译期占位符**。编译时它会被替换成
+  实际应用名，拿带占位符的**原文**去比对永远匹配不上，报出来的是
+  「找不到中文文案」——把「断言过时了」误报成「安装器坏了」。
 
 - **静默安装不能靠 `$LASTEXITCODE`**。安装器是 GUI 程序，
   `& $setup /VERYSILENT` 会立即返回，`$LASTEXITCODE` **从不被赋值**，
