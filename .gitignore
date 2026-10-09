@@ -13,3 +13,6 @@ vendor/
 
 # 分发产物（由 tools/make_source_zip.py 生成）
 bilibili-submit-source.zip
+
+# 本地界面截图（起 Xvfb 跑 GUI 时抓的，不进仓库）
+preview/
