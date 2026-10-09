@@ -16,7 +16,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +27,13 @@ from .exceptions import BiliError
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["FfmpegInfo", "find_ffmpeg", "app_dir", "ffmpeg_status"]
+__all__ = [
+    "FfmpegInfo",
+    "find_ffmpeg",
+    "app_dir",
+    "ffmpeg_status",
+    "video_meta",
+]
 
 _EXE_NAMES = ("ffmpeg.exe", "ffmpeg", "ffmpeg-win.exe", "avconv.exe")
 
@@ -168,3 +176,80 @@ def ffmpeg_version(info: FfmpegInfo | None = None) -> str:
     except Exception as exc:  # noqa: BLE001
         logger.debug("读取 ffmpeg 版本失败: %s", exc)
         return "未知"
+
+
+def video_meta(path: str | Path) -> dict[str, str]:
+    """读视频文件的基础元信息，给投稿页的五格元信息条用。
+
+    走 ``ffmpeg -i``：它不产出文件、只把流信息打到 stderr 后立即退出
+    （退出码 1 是正常路径，不是错误）。之所以不用 ffprobe，是因为打包
+    只带 ffmpeg 一个二进制——为了五个数字再塞一个 exe 不划算。
+
+    返回的键是五格要显示的：``resolution`` / ``duration`` / ``size`` /
+    ``codec`` / ``bitrate``。拿不到的键给 ``"—"``：格子空着看起来像
+    没加载完，占位符反而说明「这里本来有数」。
+
+    Raises:
+        BiliError: 文件不存在时。调用方（界面）应在此之前已拦住，
+            这里再拦一道是给 CLI/测试留个明确出口。
+    """
+    file = Path(path).expanduser()
+    if not file.is_file():
+        raise BiliError(f"视频文件不存在: {file}")
+
+    meta = {key: "—" for key in ("resolution", "duration", "codec", "bitrate")}
+    try:
+        meta["size"] = _human_size(file.stat().st_size)
+    except OSError:
+        meta["size"] = "—"
+
+    info = ffmpeg_status()
+    if info is None:
+        return meta
+    try:
+        proc = subprocess.run(
+            [info.path, "-i", str(file)],
+            capture_output=True, text=True, timeout=15,
+            encoding="utf-8", errors="replace",
+        )
+        # ffmpeg 的元信息在 stderr（它没有输出文件可写）
+        text = proc.stderr or ""
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("读取视频信息失败: %s", exc)
+        return meta
+
+    # Duration: 00:12:34.56, start: ..., bitrate: 5200 kb/s
+    _parse_ffmpeg_streams(text, meta)
+    return meta
+
+
+def _parse_ffmpeg_streams(text: str, meta: dict[str, str]) -> None:
+    """从 ``ffmpeg -i`` 的 stderr 里抠出时长 / 码率 / 分辨率 / 编码。
+
+    抽成纯函数是为了单测可以直接喂样例输出，不用真跑子进程。
+    输出格式 ffmpeg 多年未变，但一旦上游改格式，改这一个函数就够了。
+    """
+    if m := re.search(r"Duration:\s*(\d+):(\d+):(\d+)", text):
+        h, mnt, sec = m.group(1), m.group(2), m.group(3)
+        meta["duration"] = f"{h}:{mnt}:{sec}" if h != "00" else f"{mnt}:{sec}"
+    if m := re.search(r"bitrate:\s*(\d+)\s*kb/s", text):
+        meta["bitrate"] = f"{m.group(1)} kbps"
+    # 分辨率出现在「Video: 编码, 像素格式, 1920x1080」里——编码后面
+    # 可能还挂着 (High) 这类 profile，所以用非贪婪跳到第一个 WxH
+    if m := re.search(r"Video:.*?,\s*(\d{2,5})x(\d{2,5})", text):
+        meta["resolution"] = f"{m.group(1)}×{m.group(2)}"
+    if m := re.search(r"Video:\s*([a-zA-Z0-9]+)", text):
+        codec = m.group(1)
+        meta["codec"] = {"h264": "H.264", "hevc": "H.265", "av1": "AV1"}.get(
+            codec.lower(), codec.upper()
+        )
+
+
+def _human_size(num: int) -> str:
+    """字节数 → 人读的大小，一位小数就够。"""
+    size = float(num)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return f"{size:.1f} GB"

@@ -541,9 +541,12 @@ def _round_rect_points(
     ``smooth=True``：把角上的点**重复一遍**，样条就会在那里拐出一个角
     而不是切掉它——每个角给三个点（入角、角、出角）刚好得到圆角。
 
-    半径会被 clamp 到「边长的一半」：Material 的按钮与导航高亮传
-    :data:`~.theme.RADIUS_PILL`（999），实际画出来就是药丸形——
-    32/40px 高的控件两端全圆。
+    半径会被 clamp 到「边长的一半」：
+
+    - 传 :data:`~.theme.RADIUS_CONTROL`（7）得到设计稿那种小圆角矩形，
+      按钮、导航高亮、卡片序号徽标都走这一档；
+    - 传 :data:`~.theme.RADIUS_PILL`（999）则被 clamp 成胶囊，
+      只有状态点、导航角标这类真要画成胶囊的地方才用。
     """
     r = max(0.0, min(radius, (x2 - x1) / 2, (y2 - y1) / 2))
     return [
@@ -579,12 +582,12 @@ def _state_wants_disabled(name: object) -> bool | None:
 
 
 class MaterialButton(tk.Canvas):
-    """Material 3 按钮基类：Canvas 自绘药丸 + 文字，三档形态的共同实现。
+    """按钮基类：Canvas 自绘圆角矩形 + 文字，三档形态的共同实现。
 
     为什么不直接用 ``ttk.Button``：clam 主题（这里统一用的跨平台上观感
-    一致的那个）画的是**直角**，而 Material 3 的按钮是**药丸形**
-    （圆角 = 高度一半）。ttk 没有「圆角」这个选项，边框宽度再怎么调
-    也只能是方的。自绘才能把药丸形、32/40px 高度、五态配色都精确控住。
+    一致的那个）画的是**直角**，而设计稿的按钮是 **7px 小圆角**。ttk
+    没有「圆角」这个选项，边框宽度再怎么调也只能是方的。自绘才能把
+    圆角、36/40px 高度、五态配色都精确控住。
 
     五态（对应 Material 的 Rest / Hover / Pressed / Disabled / Focus）：
     默认、悬停、按下、禁用、聚焦（聚焦画主色环）。
@@ -596,7 +599,7 @@ class MaterialButton(tk.Canvas):
     .. note::
        画布比可见按钮上下左右各多 :data:`_RING` 像素，留给聚焦环；
        ``winfo_reqheight()`` 因此是 ``height + 4``，可见按钮本身仍是
-       精确的 32 / 40px。
+       精确的 36 / 40px。
     """
 
     #: 强调型（实心主色），一个视图里最多一个
@@ -846,7 +849,7 @@ class MaterialButton(tk.Canvas):
         if self._focused and not self._disabled:
             # 聚焦环用深梅不用粉：粉在纸白上只有 2.64:1，等于没有
             self.create_polygon(
-                _round_rect_points(0, 0, width - 1, height - 1, theme.RADIUS_PILL),
+                _round_rect_points(0, 0, width - 1, height - 1, theme.RADIUS_CONTROL),
                 smooth=True,
                 fill=theme.FOCUS_RING,
                 outline=theme.FOCUS_RING,
@@ -855,7 +858,7 @@ class MaterialButton(tk.Canvas):
         outline = self._outline_for(fill)
         self.create_polygon(
             _round_rect_points(
-                ring, ring, width - 1 - ring, height - 1 - ring, theme.RADIUS_PILL
+                ring, ring, width - 1 - ring, height - 1 - ring, theme.RADIUS_CONTROL
             ),
             smooth=True,
             fill=fill,
@@ -925,11 +928,14 @@ class TextButton(MaterialButton):
 class BrandMark(tk.Canvas):
     """品牌徽标：圆角方块 + 一个字。
 
-    Material 3 的应用标识一律带圆角（沿用控件圆角体系），而 ``tk.Frame``
-    只能是直角——和旁边的圆角按钮摆在一起时很扎眼，所以这里也自绘。
+    应用标识一律带圆角（沿用控件圆角体系），而 ``tk.Frame`` 只能是
+    直角——和旁边的圆角按钮摆在一起时很扎眼，所以这里也自绘。
+
+    26px 是设计稿给的尺寸：侧栏里它和 13.5px 的品牌名并排，32px 会把
+    那一行撑得比导航项还高。
     """
 
-    SIZE = 32
+    SIZE = 26
 
     def __init__(self, master: tk.Misc, text: str = "B") -> None:
         super().__init__(
@@ -941,7 +947,9 @@ class BrandMark(tk.Canvas):
             background=theme.NAV_BG,
         )
         self.create_polygon(
-            _round_rect_points(0, 0, self.SIZE - 1, self.SIZE - 1, theme.RADIUS_CARD),
+            _round_rect_points(
+                0, 0, self.SIZE - 1, self.SIZE - 1, theme.RADIUS_CONTROL
+            ),
             smooth=True,
             fill=theme.PINK,
             outline=theme.PINK,
@@ -1000,16 +1008,18 @@ class AssistChip(tk.Label):
 
 
 class NavRailItem(tk.Frame):
-    """导航栏项（Navigation rail item）：Material 的**整行药丸**高亮。
+    """导航栏项：整行小圆角高亮 + 可选的右侧数字角标。
 
-    Material 3 的导航选中指示是一个撑满整行的药丸底（圆角 = 高度
-    一半），不再有左侧竖条。tk.Frame 画不出圆角，所以底座换成
-    Canvas：药丸画在 Canvas 上，图标和文字作为 window item 嵌进
-    画布，垂直居中。
+    选中指示是撑满整行的圆角底（7px），不再有左侧竖条。tk.Frame 画不出
+    圆角，所以底座换成 Canvas：圆角矩形画在 Canvas 上，图标和文字作为
+    window item 嵌进画布，垂直居中。
 
-    未选中/悬停时药丸涂成**当刻该有的底色**（隐形 / 悬停色），选中
-    才浮出反白药丸——选中与否只是底色差异，图标和文字不会左右跳动。
+    未选中/悬停时底色涂成**当刻该有的底色**（隐形 / 悬停色），选中
+    才浮出浅粉底——选中与否只是底色差异，图标和文字不会左右跳动。
     这是竖条版导航「占位不隐藏」的同一条纪律。
+
+    角标（``set_badge``）是**装饰性计数**，不是状态：批量任务页用它
+    显示队列里还有几条没跑完。不传或传 0 就不显示。
 
     .. note::
        文字隐藏用 ``itemconfigure(state="hidden")``：window item 和
@@ -1037,6 +1047,7 @@ class NavRailItem(tk.Frame):
         self._hovered = False
         self._collapsed = False
         self._pill_item: int | None = None  # 药丸的 canvas item id
+        self._badge_count = 0
 
         # 药丸底座。宽度由 pack 拉伸决定，画药丸时才读实际宽度
         self._pill = tk.Canvas(
@@ -1067,9 +1078,20 @@ class NavRailItem(tk.Frame):
             theme.NAV_ITEM_HEIGHT / 2,
             window=self._text, anchor="w",
         )
+        # 角标：粉底墨字的胶囊，右端对齐药丸内侧
+        self._badge = tk.Canvas(
+            self._pill,
+            width=1, height=16,
+            background=theme.NAV_BG,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self._badge_win = self._pill.create_window(
+            0, theme.NAV_ITEM_HEIGHT / 2, window=self._badge, anchor="e"
+        )
         self._pill.bind("<Configure>", self._on_configure)
 
-        self._paintable = (self._pill, self._icon, self._text)
+        self._paintable = (self._pill, self._icon, self._text, self._badge)
         for widget in self._paintable:
             widget.bind("<Button-1>", self._on_click)
             widget.bind("<Enter>", self._on_enter)
@@ -1081,6 +1103,48 @@ class NavRailItem(tk.Frame):
         """切换选中态。"""
         self._active = active
         self._render()
+
+    def set_badge(self, count: int | None) -> None:
+        """在导航项右端显示一个数字角标，``0`` / ``None`` 表示不显示。
+
+        角标是**装饰性计数**（「批量任务」后面那个「3」），不是状态色：
+        它不参与成败语义，所以用品牌粉而不是语义色。底色仍配墨字——
+        粉底白字只有 2.64:1。
+
+        折叠成图标栏时角标也藏起来：56px 里图标居中已经很挤，角标
+        会压到图标上。计数在页面里本来也看得到（批量任务页有汇总行）。
+        """
+        self._badge_count = int(count) if count else 0
+        self._paint_badge()
+        self._relayout()
+
+    @property
+    def badge(self) -> int:
+        """当前角标数字（0 表示不显示）。"""
+        return self._badge_count
+
+    def _paint_badge(self) -> None:
+        canvas = self._badge
+        canvas.delete("all")
+        show = self._badge_count > 0 and not self._collapsed
+        if not show:
+            canvas.configure(width=1)
+            return
+        text = str(self._badge_count) if self._badge_count < 100 else "99+"
+        measure = theme.measure_font("caption-strong")
+        width = max(int(measure.measure(text)) + 12, 18)
+        height = 16
+        canvas.configure(width=width, height=height)
+        canvas.create_polygon(
+            _round_rect_points(0, 0, width - 1, height - 1, theme.RADIUS_PILL),
+            smooth=True,
+            fill=theme.PINK,
+            outline=theme.PINK,
+        )
+        canvas.create_text(
+            width / 2, height / 2,
+            text=text, fill=theme.INK_ON_PINK, font=theme.font("caption-strong"),
+        )
 
     def set_collapsed(self, collapsed: bool) -> None:
         """收成图标栏：只留汉字图标，隐藏文字。
@@ -1125,27 +1189,29 @@ class NavRailItem(tk.Frame):
         return theme.NAV_BG
 
     def _paint_pill(self) -> None:
-        """画药丸底：选中反白、悬停上色、平时与导航条同色（隐形）。
+        """画圆角底：选中浅粉、悬停上色、平时与导航条同色（隐形）。
 
-        只重建药丸这一个 item——``delete("all")`` 会把嵌在画布上的
+        只重建这一个 item——``delete("all")`` 会把嵌在画布上的
         图标/文字 window item 一起删掉（真踩过：恢复展开后文字再也不
-        出现，``winfo_ismapped()`` 恒为 0）。重画的药丸用 ``tag_lower``
+        出现，``winfo_ismapped()`` 恒为 0）。重画的底用 ``tag_lower``
         压回底层，图标和文字才不会被它盖住。
         """
         canvas = self._pill
         if self._pill_item is not None:
             canvas.delete(self._pill_item)
             self._pill_item = None
-        # 底永远是导航底——药丸不满铺（两侧各留 NAV_ITEM_MARGIN），
+        # 底永远是导航底——高亮不满铺（两侧各留 NAV_ITEM_MARGIN），
         # 圆角才读得出来；满铺的选中样式读不出这个「悬空」感。
         canvas.configure(background=theme.NAV_BG)
+        color = self._pill_color()
+        # 角标画布跟着底色走，否则选中/悬停时它会露出一个方块
+        self._badge.configure(background=color)
         width = canvas.winfo_width()
         if width <= 1:
             return  # 还没布局，Configure 马上会再来
-        color = self._pill_color()
         self._pill_item = canvas.create_polygon(
             _round_rect_points(
-                0, 0, width - 1, theme.NAV_ITEM_HEIGHT - 1, theme.RADIUS_PILL
+                0, 0, width - 1, theme.NAV_ITEM_HEIGHT - 1, theme.RADIUS_CONTROL
             ),
             smooth=True,
             fill=color,
@@ -1154,15 +1220,20 @@ class NavRailItem(tk.Frame):
         canvas.tag_lower(self._pill_item)
 
     def _relayout(self, _event: object = None) -> None:
-        """重画药丸并重排图标/文字。
+        """重画圆角底并重排图标/文字/角标。
 
-        折叠态把图标挪到药丸正中；展开态图标靠左、文字跟在后面。
-        坐标现算而不是记死——药丸宽度随折叠/展开变化。
+        折叠态把图标挪到底片正中；展开态图标靠左、文字跟在后面，
+        角标贴右缘。坐标现算而不是记死——宽度随折叠/展开变化。
         """
         self._paint_pill()
         icon_w = self._icon.winfo_reqwidth()
+        pill_w = self._pill.winfo_width()
+        self._pill.coords(
+            self._badge_win,
+            max(pill_w - self._INSET, self._INSET),
+            theme.NAV_ITEM_HEIGHT / 2,
+        )
         if self._collapsed:
-            pill_w = self._pill.winfo_width()
             x = max((pill_w - icon_w) / 2, 0)
             self._pill.coords(self._icon_win, x, theme.NAV_ITEM_HEIGHT / 2)
         else:
@@ -1237,8 +1308,51 @@ class SummaryBar(ttk.Frame):
             button.state(state)
 
 
+class _PreflightItem(tk.Frame):
+    """操作条里的一个预检项：圆点记号 + 一行短文案。
+
+    设计稿的预检是「14px 圆点 + 12px 文字」一串横排。圆点里放的是
+    :data:`~.theme.TONE_GLYPHS` 的形状记号（``✓`` / ``!`` / ``·``），
+    **不是纯色块**——和 :class:`AssistChip` 同样的理由：状态只靠颜色
+    传达的话，色盲用户看到的是一排颜色不同的圆点，读不出哪个是问题。
+
+    圆点的底是语义色的前景（深绿 / 深橙 / 中灰），记号用 :data:`~.theme.FIELD_BG`
+    （浅色下就是纯白）。这样圆点自身也有 5:1 以上的对比度，不是「能看见就行」。
+    """
+
+    #: 圆点直径
+    DOT = 14
+
+    def __init__(
+        self, master: tk.Misc, tone: str = "idle", text: str = "",
+        background: str | None = None,
+    ) -> None:
+        bg = background or theme.PAPER
+        super().__init__(master, background=bg)
+        fg, _chip_bg = _tone_colors(tone)
+
+        dot = tk.Canvas(
+            self,
+            width=self.DOT, height=self.DOT,
+            highlightthickness=0, borderwidth=0, background=bg,
+        )
+        dot.create_oval(0, 0, self.DOT - 1, self.DOT - 1, fill=fg, outline=fg)
+        dot.create_text(
+            self.DOT / 2, self.DOT / 2,
+            text=theme.tone_glyph(tone),
+            fill=theme.FIELD_BG,
+            font=theme.font("caption"),
+        )
+        dot.pack(side="left")
+
+        tk.Label(
+            self, text=text, font=theme.font("caption"),
+            background=bg, foreground=theme.INK_SECOND, anchor="w",
+        ).pack(side="left", padx=(theme.PAD_XS, 0))
+
+
 class ActionBar(tk.Frame):
-    """底部固定操作条：左边说「将要发生什么」，右边放主操作。
+    """底部固定操作条：左边说「将要发生什么」和预检结果，右边放主操作。
 
     这个组件解决的是**「主操作不该需要找」**。之前「开始投稿」按钮
     混在表单中间：表单一长它就被推到屏幕外，折叠区一展开它就换位置，
@@ -1252,22 +1366,29 @@ class ActionBar(tk.Frame):
     - 条件不满足时**就地禁用并说明原因**（「先在「投稿」页登录」），
       而不是让人点下去、再在日志里报错——那是「死后告知」。
 
-    配色用墨色实心块（:style:`Ink.TFrame` 的思路）：界面其余部分都是
-    纸白，只有这一条是深色的，视线自然落到这里。深色下这条反而比卡片
-    **更亮**——深色模式里「更深」等于「更少内容」。
+    设计稿的底部操作条是**白底 + 顶部 1px 分隔线**（和卡片同一张纸，
+    靠分隔线而不是靠深浅「切」出来），左边放**提交前预检**，右边放操作
+    按钮。预检项比「将要发生什么」更贴近用户此刻的问题——他想知道的是
+    「能不能投」，不是「会投什么」——所以两者都留：上面一行是计划，
+    下面一行是体检结果。
 
     用法::
 
         bar = ActionBar(parent)
         bar.set_summary("将投稿 3 个稿件 · 5 个分P组 · 自制")
+        bar.set_checks([("ok", "文件可读取"), ("warn", "标签仅 3 个")])
         bar.set_primary("开始投稿", on_submit)
         bar.block("先在「投稿」页扫码登录")
         bar.pack(fill="x", side="bottom")
     """
 
     def __init__(self, master: tk.Misc) -> None:
-        super().__init__(master, background=theme.INK_SURFACE)
+        super().__init__(master, background=theme.PAPER)
         self.columnconfigure(0, weight=1)
+
+        # 顶部 1px 分隔线：操作条和上方内容区同色，不画线就分不出界
+        self._rule = tk.Frame(self, background=theme.LINE, height=1)
+        self._rule.grid(row=0, column=0, columnspan=4, sticky="ew")
 
         # 快捷键绑在 **master**（整个视图）而不是 self：Tk 的事件不冒泡，
         # 焦点在标题输入框里时，绑在操作条上的 Ctrl+Enter 根本收不到。
@@ -1279,23 +1400,31 @@ class ActionBar(tk.Frame):
         master.bind("<Control-Return>", self._fire_submit, add="+")
         master.bind("<Escape>", self._fire_cancel, add="+")
 
-        # 左侧：标题 + 实时摘要。标题固定不变，摘要随表单变——
-        # 固定的部分提供锚点，变化的部分提供反馈。
-        text_box = tk.Frame(self, background=theme.INK_SURFACE)
-        text_box.grid(row=0, column=0, sticky="w", padx=(theme.PAD_LG, theme.PAD_SM))
+        # 左侧：标题 + 实时摘要 + 提交前预检。标题固定不变，摘要和预检
+        # 随表单变——固定的部分提供锚点，变化的部分提供反馈。
+        text_box = tk.Frame(self, background=theme.PAPER)
+        text_box.grid(
+            row=1, column=0, sticky="w",
+            padx=(theme.PAD_XL, theme.PAD_SM), pady=theme.PAD_MD,
+        )
         self._title = tk.Label(
             text_box, text="", font=theme.font("caption"),
-            background=theme.INK_SURFACE, foreground=theme.INK_SURFACE_MUTED,
+            background=theme.PAPER, foreground=theme.INK_MUTED,
             anchor="w",
         )
         self._title.pack(anchor="w")
 
         self._summary = tk.Label(
             text_box, text="", font=theme.font("body-strong"),
-            background=theme.INK_SURFACE, foreground=theme.INK_SURFACE_FG,
+            background=theme.PAPER, foreground=theme.INK,
             anchor="w",
         )
         self._summary.pack(anchor="w")
+
+        #: 预检行。没调过 :meth:`set_checks` 就整行不占位——批量任务页
+        #: 没有「体检」的概念，不该白占一行高度。
+        self._checks = tk.Frame(text_box, background=theme.PAPER)
+        self._check_items: list[_PreflightItem] = []
 
         # 右侧：原因提示 + 次按钮 + 主按钮。三者**各占一列**。
         #
@@ -1304,10 +1433,10 @@ class ActionBar(tk.Frame):
         # 独占的，调用方不许自己往里塞控件。
         self._reason = tk.Label(
             self, text="", font=theme.font("caption"),
-            background=theme.INK_SURFACE, foreground=theme.INK_SURFACE_MUTED,
+            background=theme.PAPER, foreground=theme.INK_MUTED,
             anchor="e", justify="right",
         )
-        self._reason.grid(row=0, column=1, sticky="e", padx=(0, theme.PAD_MD))
+        self._reason.grid(row=1, column=1, sticky="e", padx=(0, theme.PAD_MD))
 
         self._secondary: OutlinedButton | None = None
         self._primary: FilledButton | None = None
@@ -1333,12 +1462,14 @@ class ActionBar(tk.Frame):
         self._on_submit = command
         self._idle_text = text
         self._primary = FilledButton(self, text, command)
-        self._primary.grid(row=0, column=3, padx=(theme.PAD_XS, theme.PAD_LG))
+        self._primary.grid(
+            row=1, column=3, padx=(theme.PAD_XS, theme.PAD_XL), pady=theme.PAD_MD
+        )
 
         if secondary_text and secondary_command:
             self._on_cancel = secondary_command
             self._secondary = OutlinedButton(self, secondary_text, secondary_command)
-            self._secondary.grid(row=0, column=2, padx=(theme.PAD_XS, theme.PAD_XS))
+            self._secondary.grid(row=1, column=2, padx=(theme.PAD_XS, theme.PAD_XS))
 
     @property
     def secondary(self) -> "OutlinedButton | None":
@@ -1359,6 +1490,39 @@ class ActionBar(tk.Frame):
         """更新说明。``summary`` 是「将要发生什么」那句话。"""
         self._title.configure(text=title)
         self._summary.configure(text=summary)
+
+    def set_checks(self, items: "Iterable[tuple[str, str]]") -> None:
+        """更新提交前预检行，每项 ``(语义色名, 文案)``。
+
+        预检是**提交前的体检报告**：哪些条件已经满足、哪些还差着。
+        它和操作条右侧那句「还差一个视频文件」是两件事——后者是
+        「能不能点」，前者是「点了之后顺不顺」。两者都在用户按下之前
+        说出来，才不用等日志里报错。
+
+        传空序列就把整行收起来（``pack_forget`` 而不是 ``destroy``：
+        下次还能再挂回来）。批量任务页没有「体检」的概念，不调即可。
+
+        语义色名见 :data:`~.theme.TONES`；文案要短——这一行和按钮
+        共享横向空间，写长了会把按钮挤出可视区。
+        """
+        for child in self._checks.winfo_children():
+            child.destroy()
+        self._check_items = []
+
+        pairs = list(items)
+        if not pairs:
+            self._checks.pack_forget()
+            return
+        for tone, text in pairs:
+            item = _PreflightItem(self._checks, tone, text, background=theme.PAPER)
+            item.pack(side="left", padx=(0, theme.PAD_MD))
+            self._check_items.append(item)
+        self._checks.pack(anchor="w", pady=(theme.PAD_XS, 0))
+
+    @property
+    def checks(self) -> "list[_PreflightItem]":
+        """当前预检项，主要给测试看（组件不指望调用方读它）。"""
+        return list(self._check_items)
 
     def block(self, reason: str = "") -> None:
         """禁用主操作并就地说明原因。
@@ -1629,3 +1793,588 @@ class KeyValueList(ttk.Frame):
     def text(self) -> str:
         """全部内容拼成一段文本，便于断言某个词在不在。"""
         return "\n".join(f"{key}{value}" for key, value in self.rows())
+
+
+class PageHeader(ttk.Frame):
+    """页面头：大标题 + 右侧一行弱化副标题。
+
+    设计稿的页面头是「21px 标题 + 12.5px 副标题」贴在同一行基线上：
+    标题告诉用户「我在哪」，副标题告诉用户「这一页能干什么」。
+    两者**不换行**——换行的话副标题会被当成另一段正文，而它是标题的
+    补充说明，不是内容。
+    """
+
+    def __init__(self, master: tk.Misc, title: str, subtitle: str = "") -> None:
+        super().__init__(master, style="TFrame")
+        self.columnconfigure(1, weight=1)
+
+        self._title = tk.Label(
+            self, text=title, font=theme.font("display"),
+            background=theme.SHELL, foreground=theme.INK, anchor="w",
+        )
+        self._title.grid(row=0, column=0, sticky="sw")
+
+        self._subtitle = tk.Label(
+            self, text=subtitle, font=theme.font("caption"),
+            background=theme.SHELL, foreground=theme.INK_MUTED,
+            anchor="sw", justify="left",
+        )
+        self._subtitle.grid(
+            row=0, column=1, sticky="sw", padx=(theme.PAD_MD, 0), pady=(0, 3)
+        )
+
+    def set_subtitle(self, text: str) -> None:
+        self._subtitle.configure(text=text)
+
+
+class StepCard(Card):
+    """带序号的卡片：圆形序号徽标 + 卡名 + 右侧提示语。
+
+    设计稿把投稿流程拆成「① 视频源 / ② 投稿信息」两张编号卡片。编号
+    不是装饰——它把「先选文件、再填信息」这个**顺序**直接画了出来，
+    用户不用读完整个页面才知道该从哪开始。
+
+    徽标是 Canvas 自绘的：``tk.Frame`` 画不出圆角，而 19px 的方块在
+    一堆 7px 圆角控件旁边会很扎眼。
+    """
+
+    #: 序号徽标边长
+    BADGE = 19
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        step: int = 1,
+        title: str = "",
+        hint: str = "",
+        padding: int = theme.PAD_LG,
+    ) -> None:
+        super().__init__(master, padding=padding)
+        self.columnconfigure(0, weight=1)
+
+        head = ttk.Frame(self, style="Card.TFrame")
+        head.grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
+        head.columnconfigure(1, weight=0)
+        head.columnconfigure(2, weight=1)
+
+        badge = tk.Canvas(
+            head,
+            width=self.BADGE, height=self.BADGE,
+            highlightthickness=0, borderwidth=0, background=theme.PAPER,
+        )
+        size = self.BADGE
+        badge.create_polygon(
+            _round_rect_points(0, 0, size - 1, size - 1, theme.RADIUS_BADGE),
+            smooth=True, fill=theme.PINK_TINT, outline=theme.PINK_TINT,
+        )
+        badge.create_text(
+            size / 2, size / 2, text=str(step),
+            fill=theme.PINK_DEEP, font=theme.font("caption-strong"),
+        )
+        badge.grid(row=0, column=0, padx=(0, theme.PAD_SM))
+
+        tk.Label(
+            head, text=title, font=theme.font("title"),
+            background=theme.PAPER, foreground=theme.INK, anchor="w",
+        ).grid(row=0, column=1, sticky="w")
+
+        self._hint = tk.Label(
+            head, text=hint, font=theme.font("caption"),
+            background=theme.PAPER, foreground=theme.INK_MUTED,
+            anchor="e", justify="right",
+        )
+        self._hint.grid(row=0, column=2, sticky="e", padx=(theme.PAD_MD, 0))
+
+        #: 卡片内容挂这里
+        self.body = ttk.Frame(self, style="Card.TFrame")
+        self.body.grid(row=1, column=0, sticky="ew")
+        self.body.columnconfigure(0, weight=1)
+
+    @property
+    def hint(self) -> str:
+        return str(self._hint.cget("text"))
+
+    def set_hint(self, text: str) -> None:
+        """更新右侧提示语（比如「已选 3 / 建议 5-10 个」这种动态提示）。"""
+        self._hint.configure(text=text)
+
+
+class MetaGrid(tk.Frame):
+    """横向元信息网格：一格一个「小标签 + 值」。
+
+    设计稿用它展示视频的分辨率 / 时长 / 大小 / 编码 / 码率——五个数横着
+    排成一带，比竖着的键值表省一半高度，而且「这几个是同一类东西」
+    的关系一眼就看出来了（竖排要读五个键才知道）。
+
+    分隔线靠**容器底色透出来**：容器涂成描边色，格子涂成卡片色，中间
+    留 1px 缝——比给每个格子加边框省事，也不会出现相邻两格边框叠成
+    2px 的那种粗线。
+    """
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master, background=theme.LINE)
+        self._cells: list[tk.Frame] = []
+
+    def set_rows(self, rows: "Iterable[tuple[str, str]]") -> None:
+        """重建网格。
+
+        Args:
+            rows: ``(小标签, 值)`` 序列。值拿不到时传 ``"—"``，
+                别留空字符串——空格子会让整排看起来像没加载完。
+        """
+        for child in self.winfo_children():
+            child.destroy()
+        self._cells.clear()
+
+        pairs = list(rows)
+        for index, (label, value) in enumerate(pairs):
+            # 偶数列是格子，奇数列是 1px 分隔线；首尾各留一条当外框
+            if index == 0:
+                self._separator(column=0)
+            cell = tk.Frame(self, background=theme.PAPER)
+            cell.grid(row=0, column=index * 2 + 1, sticky="nsew", pady=1)
+            self.columnconfigure(index * 2 + 1, weight=1)
+            tk.Label(
+                cell, text=label, font=theme.font("caption"),
+                background=theme.PAPER, foreground=theme.INK_MUTED, anchor="w",
+            ).pack(anchor="w", padx=theme.PAD_MD, pady=(theme.PAD_SM, 0))
+            tk.Label(
+                cell, text=value, font=theme.font("body-strong"),
+                background=theme.PAPER, foreground=theme.INK, anchor="w",
+            ).pack(anchor="w", padx=theme.PAD_MD, pady=(0, theme.PAD_SM))
+            self._cells.append(cell)
+            self._separator(column=index * 2 + 2)
+
+    def _separator(self, column: int) -> None:
+        line = tk.Frame(self, background=theme.LINE, width=1)
+        line.grid(row=0, column=column, sticky="ns")
+
+    def values(self) -> list[tuple[str, str]]:
+        """读回当前内容，``(标签, 值)`` 列表——给测试用。"""
+        result = []
+        for cell in self._cells:
+            labels = cell.winfo_children()
+            if len(labels) == 2:
+                result.append(
+                    (str(labels[0].cget("text")), str(labels[1].cget("text")))
+                )
+        return result
+
+
+class TagChipField(ttk.Frame):
+    """标签输入：已选标签是能点掉的 chips，末尾跟着一个无边框输入框。
+
+    设计稿的标签区是三个可删除的 chips + 一个「输入后回车添加」的输入
+    框，下面再挂一排虚线的常用标签。相比之前「逗号分隔的一行文本」：
+
+    - **标签是**一个一个的对象，不是一串字符——点 ``×`` 就能删掉一个，
+      不用在文本框里做字符串手术；
+    - 已选数量、上限直接显示出来，不用自己数逗号；
+    - 常用标签点一下就加上，省一次输入。
+
+    输入框**无边框**（融进标签盒）：它和 chips 共处一个带边框的容器里，
+    容器已经是那个「框」了，再给输入框加一个框就成了框套框。
+    """
+
+    #: 单个 chip 的高度
+    CHIP_H = 24
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        max_tags: int = 10,
+        on_change: Callable[[list[str]], None] | None = None,
+    ) -> None:
+        super().__init__(master, style="Card.TFrame")
+        self.columnconfigure(0, weight=1)
+        self._max = max(1, int(max_tags))
+        self._on_change = on_change
+        self._tags: list[str] = []
+
+        # 标签盒：1px 描边，chips 和输入框都装在里面
+        self._box = tk.Frame(
+            self,
+            background=theme.PAPER,
+            highlightthickness=1,
+            highlightbackground=theme.LINE_STRONG,
+        )
+        self._box.grid(row=0, column=0, sticky="ew")
+        self._box.columnconfigure(0, weight=1)
+
+        self._chips = tk.Frame(self._box, background=theme.PAPER)
+        self._chips.grid(row=0, column=0, sticky="w")
+
+        self._entry = tk.Entry(
+            self._box,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+            background=theme.PAPER,
+            foreground=theme.INK,
+            insertbackground=theme.INK,
+            font=theme.font("body"),
+        )
+        self._entry.grid(row=0, column=1, sticky="ew", padx=(theme.PAD_XS, 0))
+        self._entry.bind("<Return>", self._commit)
+        self._entry.bind("<BackSpace>", self._maybe_pop)
+
+        self._quick = ttk.Frame(self, style="Card.TFrame")
+        self._quick.grid(row=1, column=0, sticky="w", pady=(theme.PAD_XS, 0))
+
+    # ---------- 对外 ----------
+
+    @property
+    def tags(self) -> list[str]:
+        """当前已选标签。"""
+        return list(self._tags)
+
+    @property
+    def text(self) -> str:
+        """逗号分隔的标签串——提交时用的格式（和 B 站接口一致）。"""
+        return ",".join(self._tags)
+
+    def set_tags(self, tags: "Iterable[str]") -> None:
+        """整体替换已选标签。返回时不会触发 ``on_change``。"""
+        self._tags = []
+        for raw in tags:
+            self._add_tag(raw, notify=False)
+        self._render()
+
+    def add(self, text: str) -> bool:
+        """加一个标签，返回是否真的加进去了。
+
+        被拒的三种情况：空、重复、超上限。**去重要悄悄做**——用户手滑
+        回车了两次，不该弹一个「标签重复」的错误框。
+        """
+        added = self._add_tag(text, notify=True)
+        if added:
+            self._render()
+        return added
+
+    def set_quick(self, tags: "Iterable[str]") -> None:
+        """挂一排常用标签，点一下就加。
+
+        用虚线描边的弱化 chip 表示「这是建议，不是已选」——和已选的
+        实色 chip 在形状上就要能分开。
+        """
+        for child in self._quick.winfo_children():
+            child.destroy()
+        if not tags:
+            self._quick.grid_remove()
+            return
+        self._quick.grid()
+        tk.Label(
+            self._quick, text="常用：", font=theme.font("caption"),
+            background=theme.PAPER, foreground=theme.INK_MUTED,
+        ).pack(side="left", padx=(0, theme.PAD_XS))
+        for tag in tags:
+            chip = tk.Label(
+                self._quick, text=tag, font=theme.font("caption"),
+                background=theme.PAPER, foreground=theme.INK_MUTED,
+                padx=theme.PAD_SM, pady=1, cursor="hand2",
+                highlightthickness=1, highlightbackground=theme.LINE_STRONG,
+            )
+            chip.pack(side="left", padx=(0, theme.PAD_XS))
+            chip.bind("<Button-1>", lambda _e, value=tag: self._pick_quick(value))
+
+    def set_disabled(self, disabled: bool) -> None:
+        state = "disabled" if disabled else "normal"
+        self._entry.configure(state=state)
+
+    # ---------- 内部 ----------
+
+    def _pick_quick(self, value: str) -> None:
+        self.add(value)
+
+    def _commit(self, _event: object = None) -> str:
+        raw = self._entry.get().strip()
+        self._entry.delete(0, "end")
+        if raw:
+            # 允许一次输入多个：「校园, 日常」和逐个回车一样
+            for piece in raw.replace("，", ",").split(","):
+                self._add_tag(piece, notify=False)
+            self._render()
+            self._notify()
+        return "break"
+
+    def _maybe_pop(self, _event: object = None) -> None:
+        """输入框空着时按退格，删掉最后一个标签。
+
+        这是「chips 输入框」的通用约定：光标在最前面再按退格，用户想
+        的是「删掉上一个」，不是「什么都没发生」。
+        """
+        if self._entry.get() or not self._tags:
+            return
+        self._tags.pop()
+        self._render()
+        self._notify()
+
+    def _add_tag(self, raw: str, notify: bool) -> bool:
+        text = (raw or "").strip()
+        if not text or text in self._tags or len(self._tags) >= self._max:
+            return False
+        self._tags.append(text)
+        if notify:
+            self._notify()
+        return True
+
+    def _remove(self, tag: str) -> None:
+        if tag in self._tags:
+            self._tags.remove(tag)
+            self._render()
+            self._notify()
+
+    def _notify(self) -> None:
+        if self._on_change is not None:
+            self._on_change(self.tags)
+
+    def _render(self) -> None:
+        for child in self._chips.winfo_children():
+            child.destroy()
+        for tag in self._tags:
+            chip = tk.Frame(self._chips, background=theme.PINK_TINT)
+            chip.pack(side="left", padx=(0, theme.PAD_XS), pady=theme.PAD_XS)
+            tk.Label(
+                chip, text=tag, font=theme.font("caption"),
+                background=theme.PINK_TINT, foreground=theme.PINK_DEEP,
+            ).pack(side="left", padx=(theme.PAD_XS, 0))
+            closer = tk.Label(
+                chip, text="×", font=theme.font("caption"),
+                background=theme.PINK_TINT, foreground=theme.PINK_DEEP,
+                cursor="hand2",
+            )
+            closer.pack(side="left", padx=(theme.PAD_XS, theme.PAD_XS))
+            closer.bind("<Button-1>", lambda _e, value=tag: self._remove(value))
+        # 空了就把输入框挪到最左边，否则它会孤零零挂在中间
+        self._chips.grid_configure(padx=0)
+
+
+class SegmentedControl(tk.Canvas):
+    """分段控件：一组互斥的选项横着排，选中的那一段反白浮起。
+
+    设计稿用它替代「自制 / 转载」的下拉框。为什么值得换：这两个值是
+    **互斥且穷尽**的，总共就两个——下拉框要点开、要看、要选三步，
+    分段控件一眼看到全部选项、一步点完。
+
+    自绘的理由和 :class:`MaterialButton` 一样：clam 画不出圆角，而
+    「槽 + 浮起的选中段」这个形态全靠圆角和底色差。
+
+    键盘可用：左右方向键在选项间移动，和 radiobutton 的预期一致。
+    """
+
+    #: 槽的内边距（设计稿 ``padding: 3px``）
+    _PAD = 3
+    #: 两段之间的缝
+    _GAP = 2
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        options: "Sequence[str]",
+        on_change: Callable[[str], None] | None = None,
+    ) -> None:
+        self._choices = [str(option) for option in options] or [""]
+        self._index = 0
+        self._on_change = on_change
+        self._hovered: int | None = None
+
+        measure = theme.measure_font("body")
+        # 每段宽度 = 文字宽 + 两侧各 16px，够放下四个汉字
+        seg = max(int(measure.measure(text)) + 32 for text in self._choices)
+        width = seg * len(self._choices) + self._GAP * (len(self._choices) - 1) + 6
+        height = theme.CONTROL_HEIGHT
+
+        super().__init__(
+            master,
+            width=width, height=height,
+            highlightthickness=0, borderwidth=0,
+            background=theme.PAPER,
+            takefocus=1,
+            cursor="hand2",
+        )
+        self._bind_events()
+        self._paint()
+
+    # ---------- 对外 ----------
+
+    @property
+    def value(self) -> str:
+        return self._choices[self._index]
+
+    @property
+    def index(self) -> int:
+        return self._index
+
+    def set(self, value: str) -> bool:
+        """按文字选中，认不出就不动（返回 ``False``）。
+
+        不抛异常是因为调用方常拿它回显外部数据（配置里的 ``copyright``），
+        认不出时**保持现状**比崩掉好——界面还在，用户能自己改。
+        """
+        if value in self._choices:
+            self._index = self._choices.index(value)
+            self._paint()
+            return True
+        return False
+
+    def set_disabled(self, disabled: bool) -> None:
+        self._disabled = bool(disabled)
+        self._paint()
+
+    # ---------- 内部 ----------
+
+    def _bind_events(self) -> None:
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", lambda _e: self._set_hovered(None))
+        self.bind("<Left>", self._on_key)
+        self.bind("<Right>", self._on_key)
+
+    def _set_hovered(self, index: "int | None") -> None:
+        if self._hovered != index:
+            self._hovered = index
+            self._paint()
+
+    def _on_motion(self, event: tk.Event) -> None:
+        self._set_hovered(self._hit(event.x))
+
+    def _on_click(self, event: tk.Event) -> None:
+        index = self._hit(event.x)
+        if index is None or index == self._index:
+            return
+        self._index = index
+        self._paint()
+        if self._on_change is not None:
+            self._on_change(self.value)
+
+    def _on_key(self, event: tk.Event) -> str:
+        step = -1 if event.keysym == "Left" else 1
+        index = (self._index + step) % len(self._choices)
+        if index != self._index:
+            self._index = index
+            self._paint()
+            if self._on_change is not None:
+                self._on_change(self.value)
+        return "break"
+
+    def _hit(self, x: float) -> "int | None":
+        """横坐标 → 落在第几段（落在缝里返回 ``None``）。"""
+        seg = self._segment_geometry()
+        for index, (left, right) in enumerate(seg):
+            if left <= x <= right:
+                return index
+        return None
+
+    def _segment_geometry(self) -> list[tuple[float, float]]:
+        count = len(self._choices)
+        width = int(float(self["width"]))
+        inner = width - 2 * self._PAD - self._GAP * (count - 1)
+        seg = inner / count
+        return [
+            (
+                self._PAD + i * (seg + self._GAP),
+                self._PAD + i * (seg + self._GAP) + seg,
+            )
+            for i in range(count)
+        ]
+
+    def _paint(self) -> None:
+        width = int(float(self["width"]))
+        height = int(float(self["height"]))
+        self.delete("all")
+        disabled = getattr(self, "_disabled", False)
+
+        self.create_polygon(
+            _round_rect_points(0, 0, width - 1, height - 1, theme.RADIUS_CONTROL),
+            smooth=True,
+            fill=theme.FILL,
+            outline=theme.FILL,
+        )
+        for index, (left, right) in enumerate(self._segment_geometry()):
+            if index == self._index:
+                # 选中的一段反白浮起：设计稿给它一层浅阴影，tkinter 画不出，
+                # 用「比槽更亮的底 + 描边」表达同样的层次
+                self.create_polygon(
+                    _round_rect_points(
+                        left, self._PAD, right - 1, height - 1 - self._PAD,
+                        theme.RADIUS_CONTROL,
+                    ),
+                    smooth=True,
+                    fill=theme.PAPER if not disabled else theme.DISABLED_BG,
+                    outline=theme.LINE,
+                )
+            self.create_text(
+                (left + right) / 2, height / 2,
+                text=self._choices[index],
+                fill=(
+                    theme.DISABLED_FG if disabled
+                    else theme.INK if index == self._index
+                    else theme.INK_MUTED
+                ),
+                font=theme.font("body-strong" if index == self._index else "body"),
+            )
+
+
+class StatusBar(tk.Frame):
+    """顶部状态条：左边一串状态，右边一句补充。
+
+    设计稿把它放在标题栏下方、侧栏和内容区**上方**，通栏。位置是这一版
+    的关键改动：状态（登录态 / ffmpeg）从底部挪到了顶部——它们回答的是
+    「这台机器现在能不能干活」，属于**开工前的检查**，该在眼睛第一落点
+    就看到，而不是干完活低头才发现。
+
+    每一项都是「形状记号 + 文字」双通道（记号见
+    :data:`~.theme.TONE_GLYPHS`），不靠颜色单独传达——色盲用户看不出
+    「绿点 = 正常」。
+    """
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(
+            master, background=theme.PAPER, height=theme.STATUS_BAR_H
+        )
+        # 高度是设计稿定死的 30px，别让内容把它顶高
+        self.grid_propagate(False)
+        self.columnconfigure(1, weight=1)
+
+        self._groups = tk.Frame(self, background=theme.PAPER)
+        self._groups.grid(row=0, column=0, sticky="w", padx=(theme.PAD_XL, 0))
+
+        self._note = tk.Label(
+            self, text="", font=theme.font("caption"),
+            background=theme.PAPER, foreground=theme.INK_MUTED, anchor="e",
+        )
+        self._note.grid(row=0, column=2, sticky="e", padx=(0, theme.PAD_XL))
+
+        # 底边 1px：状态条和下方内容区要分开，否则它只是「一条灰」
+        self._rule = tk.Frame(self, background=theme.LINE, height=1)
+        self._rule.grid(row=1, column=0, columnspan=3, sticky="sew")
+
+        self._items: list[tk.Label] = []
+
+    def set_groups(self, groups: "Iterable[tuple[str, str]]") -> None:
+        """更新左侧状态组，每项 ``(语义色名, 文案)``。
+
+        语义色名见 :data:`~.theme.TONES`；``busy`` 用来表示「正在检测」。
+        """
+        for child in self._groups.winfo_children():
+            child.destroy()
+        self._items.clear()
+
+        for tone, text in groups:
+            fg, _bg = _tone_colors(tone)
+            label = tk.Label(
+                self._groups,
+                text=f"{theme.tone_glyph(tone)} {text}",
+                font=theme.font("caption"),
+                background=theme.PAPER, foreground=fg, anchor="w",
+            )
+            label.pack(side="left", padx=(0, theme.PAD_LG))
+            self._items.append(label)
+
+    def set_note(self, text: str) -> None:
+        """更新右侧那句补充（「上次同步 2 分钟前」这类）。"""
+        self._note.configure(text=text)
+
+    def texts(self) -> list[str]:
+        """读回左侧各项文字——给测试用（探测是异步的，断言要读控件）。"""
+        return [str(item.cget("text")) for item in self._items]

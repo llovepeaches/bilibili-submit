@@ -28,7 +28,7 @@ from ...client import BiliClient
 from ...exceptions import BiliError
 from .. import theme
 from ..qr import draw_placeholder, draw_qr
-from ..widgets import Card, LogConsole, FilledButton, OutlinedButton, SectionTitle
+from ..widgets import Card, LogConsole, FilledButton, OutlinedButton, PageHeader
 from ..workers import Cancelled, Worker
 
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
@@ -75,11 +75,11 @@ class LoginView(ttk.Frame):
     # ---------- 布局 ----------
 
     def _build_header(self) -> None:
-        SectionTitle(
+        PageHeader(
             self,
             "扫码登录",
             "用手机 B 站 App 扫描下方二维码，扫完还要在手机上点「确认登录」。",
-        ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
+        ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_LG))
 
     def _build_body(self) -> None:
         card = Card(self)

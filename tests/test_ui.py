@@ -43,8 +43,8 @@ def test_theme_font_family_is_platform_specific():
         assert "PingFang" in theme.FAMILY
 
 
-def test_theme_material_metrics():
-    """Material 化的关键度量：栅格、药丸圆角、控件高度。
+def test_theme_design_metrics():
+    """设计稿承诺的关键度量：栅格、圆角、控件高度。
 
     这些数字是设计规范的承诺，不是随便填的——改了要连同所有视图
     一起重排，所以在这里钉死。
@@ -53,13 +53,21 @@ def test_theme_material_metrics():
     for name in ("PAD_XS", "PAD_SM", "PAD_MD", "PAD_LG", "PAD_XL", "PAD_2XL"):
         assert getattr(theme, name) % (theme.GRID // 2) == 0, name
     assert theme.RADIUS_PILL == 999, (
-        "Material 的按钮/导航高亮是药丸形——半径传 999，绘制时被 "
-        "clamp 到高度一半（ttk 画不了圆角的输入框另用 RADIUS_CONTROL 降级）"
+        "真正要画成胶囊的地方（状态点、徽标圆点）用 999，绘制时被 "
+        "clamp 到高度一半。按钮和导航高亮在改版后走 RADIUS_CONTROL 小圆角"
     )
-    assert 4 <= theme.RADIUS_CONTROL <= 8, "ttk 降级描边的圆角参考仍是 4~8px"
-    assert theme.CONTROL_HEIGHT == 32, "按钮/输入框标准高度 32px"
+    assert 4 <= theme.RADIUS_CONTROL <= 8, "控件圆角 7px，落在 4~8px 内"
+    assert theme.RADIUS_CARD == 11, "卡片圆角 11px"
+    assert theme.RADIUS_BADGE == 5, "序号徽标 / 版本胶囊圆角 5px"
+    assert theme.CONTROL_HEIGHT == 36, "按钮/输入框标准高度 36px（设计稿 36~38）"
     assert theme.PRIMARY_BUTTON_HEIGHT == 40, "主要操作按钮 40px"
     assert theme.PRIMARY_BUTTON_HEIGHT > theme.CONTROL_HEIGHT
+    assert theme.STATUS_BAR_H == 30, "顶部状态条 30px"
+    assert (theme.THUMB_W, theme.THUMB_H) == (200, 113), "缩略图 200×113（16:9）"
+    assert theme.NAV_WIDTH_EXPANDED == 212, "侧栏展开 212px"
+
+    # 缩略图必须是 16:9，否则卡片里会留黑边
+    assert abs(theme.THUMB_W / theme.THUMB_H - 16 / 9) < 0.01
 
 
 def test_theme_has_both_light_and_dark_palettes():
@@ -587,7 +595,7 @@ def test_nav_collapses_at_compact():
         assert nav.winfo_width() == theme.NAV_WIDTH_COLLAPSED
         assert not text_label.winfo_ismapped(), "图标栏里不该还留着导航文字"
         assert not app._brand_text.winfo_ismapped(), "图标栏塞不下品牌名"
-        assert not app._nav_version.winfo_ismapped(), "图标栏塞不下版本号"
+        assert not app._brand_version.winfo_ismapped(), "图标栏塞不下版本号"
         # 图标必须还在——不然整条导航是空的
         assert app._brand_mark.winfo_ismapped()
 
@@ -597,7 +605,7 @@ def test_nav_collapses_at_compact():
         assert nav.winfo_width() == theme.NAV_WIDTH_EXPANDED
         assert text_label.winfo_ismapped(), "宽窗口下导航文字该回来了"
         assert app._brand_text.winfo_ismapped()
-        assert app._nav_version.winfo_ismapped()
+        assert app._brand_version.winfo_ismapped()
 
         # —— 来回切三次：配置不能被 forget 掉
         for _ in range(3):
@@ -1140,9 +1148,12 @@ def test_upload_view_inputs_do_not_overlap():
     from bilibili_submit.ui.app import App
 
     def collect(widget, out):
-        """递归找出所有输入控件。层级会随布局调整而变，别写死。"""
+        """递归找出所有输入控件。层级会随布局调整而变，别写死。
+
+        简介在本次改版后从 ttk.Entry 换成了多行 tk.Text，也算输入控件。
+        """
         for child in widget.winfo_children():
-            if child.winfo_class() in ("TEntry", "TCombobox"):
+            if child.winfo_class() in ("TEntry", "TCombobox", "Text"):
                 out.append(child)
             collect(child, out)
 

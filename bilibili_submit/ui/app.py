@@ -1,17 +1,24 @@
-"""GUI 主窗口：侧边导航 + 内容区 + 底部状态栏。
+"""GUI 主窗口：顶部状态条 + 侧边导航 + 内容区。
 
-窗口结构::
+窗口结构（2026-10 按设计稿重排）::
 
-    ┌──────────┬──────────────────────────┐
-    │  导航    │                          │
-    │  登录    │        内容区            │
-    │  投稿    │   （各视图叠放切换）     │
-    │  任务    │                          │
-    │  历史    │                          │
-    │  设置    │                          │
-    ├──────────┴──────────────────────────┤
-    │ 状态栏：登录态 · ffmpeg · 版本      │
-    └─────────────────────────────────────┘
+    ┌─────────────────────────────────────────┐
+    │ 状态条 30px：登录态 · ffmpeg · 最后检测 │
+    ├──────────┬──────────────────────────────┤
+    │ 品牌+版本│                              │
+    │  登录    │        内容区                │
+    │  投稿    │    （各视图叠放切换）        │
+    │  批量 ③ │                              │
+    │  历史    │                              │
+    │  设置    │                              │
+    │ ────────│                              │
+    │  底注    │                              │
+    └──────────┴──────────────────────────────┘
+
+状态条从底部挪到了顶部：登录态和 ffmpeg 回答的是「这台机器现在能不能
+干活」，属于**开工前的检查**，该在眼睛第一落点就看到，而不是干完活
+低头才发现。内容区的可用高度只少了 30px，换来的是每次进界面先看一眼
+就知道要不要去扫码。
 
 多页切换用「所有视图叠在同一 grid 单元格，切换时 tkraise」——
 比销毁重建快，也能保住每个页已经填好的表单内容。
@@ -21,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
+from datetime import datetime
 from tkinter import ttk
 from pathlib import Path
 from typing import Callable
@@ -36,7 +44,7 @@ from ..client import BiliClient
 from . import layout, theme, win_effects
 from .environment import EnvironmentSnapshot, probe_environment
 from .state import load_app_state, resolve_theme_mode
-from .widgets import BrandMark, NavRailItem
+from .widgets import BrandMark, NavRailItem, StatusBar
 from .views import (
     HistoryView,
     LoginView,
@@ -98,12 +106,24 @@ class App(ttk.Frame):
         #: 重入闸。改侧栏宽度会引发一串 ``<Configure>``，递归进来就死循环
         self._applying_layout = False
 
-        self.columnconfigure(1, weight=1)
-        self.rowconfigure(0, weight=1)
+        #: 导航角标数字。key -> 数量，0 表示不显示角标。
+        #: 角标是**待办计数**（批量队列里还有几个），不是装饰。
+        self._nav_badges: dict[str, int] = {}
+        #: 状态条右侧那句话的两个来源：任务进度优先，跑完退回检测时间。
+        self._task_progress = ""
+        self._last_check = ""
+        #: 状态条两组内容。分开存是因为它们**由两次探测分别写入**
+        #: （登录态可能单独被换 cookie 路径触发），渲染时才合成。
+        self._login_pair: tuple[str, str] = ("busy", "登录态检测中…")
+        self._ffmpeg_pair: tuple[str, str] = ("busy", "ffmpeg 检测中…")
 
+        self.columnconfigure(1, weight=1)
+        # row0 是 30px 状态条（固定高），row1 才是会长的主体
+        self.rowconfigure(1, weight=1)
+
+        self._build_statusbar()
         self._build_nav()
         self._build_content()
-        self._build_statusbar()
 
         # 断点响应绑在**根窗口**上：Tk 的事件不冒泡，绑在 self 上收不到
         # root 的尺寸变化。放在所有视图建完之后——档位要分发给它们。
@@ -137,7 +157,7 @@ class App(ttk.Frame):
     def _build_nav(self) -> None:
         self._nav = ttk.Frame(self, style="Nav.TFrame", width=theme.NAV_WIDTH)
         nav = self._nav
-        nav.grid(row=0, column=0, sticky="nsew")
+        nav.grid(row=1, column=0, sticky="nsew")
         nav.grid_propagate(False)
         nav.columnconfigure(0, weight=1)
         nav.rowconfigure(99, weight=1)
@@ -167,21 +187,37 @@ class App(ttk.Frame):
             self._nav_buttons[label] = item
             self._views_info.append((label, view_cls))
 
-        # 底部版本号。折叠成图标栏时藏起来——56px 里塞不下版本号，
-        # 而版本号在设置页也有，藏掉不丢信息。
-        self._nav_version = ttk.Label(
-            nav,
-            text=f"v{__version__}",
-            style="Nav.Secondary.TLabel",
+        # 底部注脚。设计稿这里是「本地运行 · 珠海 2026」——后半句是
+        # 编的地点年份，丢掉；前半句是真的（数据都在本机，不上传），
+        # 留着并补完。折叠成图标栏时整条藏起来——56px 塞不下两句话。
+        self._nav_foot = ttk.Frame(nav, style="Nav.TFrame")
+        self._nav_foot.grid(row=101, column=0, sticky="sew", padx=theme.PAD_MD)
+        self._nav_foot.columnconfigure(1, weight=1)
+
+        rule = tk.Frame(self._nav_foot, background=theme.LINE, height=1)
+        rule.grid(row=0, column=0, columnspan=2, sticky="ew")
+
+        self._nav_foot_left = tk.Label(
+            self._nav_foot, text="本地运行", font=theme.font("caption"),
+            background=theme.NAV_BG, foreground=theme.INK_MUTED, anchor="w",
         )
-        self._nav_version.grid(
-            row=100, column=0, sticky="sw", padx=theme.PAD_LG, pady=theme.PAD_MD
+        self._nav_foot_left.grid(
+            row=1, column=0, sticky="w", pady=(theme.PAD_SM, theme.PAD_SM)
         )
+        self._nav_foot_right = tk.Label(
+            self._nav_foot, text="数据不出本机", font=theme.font("caption"),
+            background=theme.NAV_BG, foreground=theme.INK_MUTED, anchor="e",
+        )
+        self._nav_foot_right.grid(row=1, column=1, sticky="e")
 
     def _build_brand(self, nav: tk.Misc) -> None:
-        """品牌区：主色方块 + 应用名。
+        """品牌区：主色方块 + 应用名 + 版本号胶囊。
 
         导航顶部有个视觉锚点，整块侧栏才不像一串裸按钮。
+
+        版本号做成**胶囊**而不是裸文字：它是「这是个什么版本」的元信息，
+        不是导航的一部分——用填充底色和圆角把它从旁边那行可点的导航项
+        里摘出来，免得被当成第六个入口。
         """
         self._brand = ttk.Frame(nav, style="Nav.TFrame")
         brand = self._brand
@@ -204,9 +240,19 @@ class App(ttk.Frame):
             background=theme.NAV_BG, foreground=theme.INK_MUTED,
         ).pack(anchor="w")
 
+        self._brand_version = tk.Label(
+            brand, text=f"v{__version__}", font=theme.font("caption"),
+            background=theme.FILL, foreground=theme.INK_MUTED,
+            padx=6, pady=2,
+        )
+        self._brand_version.grid(row=0, column=2, padx=(theme.PAD_SM, theme.PAD_LG))
+
     def _build_content(self) -> None:
         holder = ttk.Frame(self, style="TFrame")
-        holder.grid(row=0, column=1, sticky="nsew", padx=theme.PAD_MD, pady=theme.PAD_MD)
+        holder.grid(
+            row=1, column=1, sticky="nsew",
+            padx=theme.PAD_XL, pady=(theme.PAD_LG + theme.PAD_XS, theme.PAD_MD),
+        )
         holder.rowconfigure(0, weight=1)
         holder.columnconfigure(0, weight=1)
 
@@ -219,40 +265,31 @@ class App(ttk.Frame):
         self.show("登录")
 
     def _build_statusbar(self) -> None:
-        # 墨色条：和底部 ActionBar 同一套配色。状态栏和操作条一深一浅地
-        # 夹住内容区，视线自然被上下两条边「收」住——这是用底色分层
-        # 代替阴影的又一处应用。
-        bar = ttk.Frame(self, style="Ink.TFrame")
-        bar.grid(row=1, column=0, columnspan=2, sticky="ew")
-        bar.columnconfigure(0, weight=1)
+        """顶部状态条：**通栏**，在侧栏和内容区之上。
 
-        # 顶部分隔线：状态栏和上方内容区要有明确分界
-        ttk.Separator(bar, orient="horizontal").grid(
-            row=0, column=0, columnspan=3, sticky="ew"
-        )
+        底色用卡片色而不是墨色：它和内容区只隔一条 1px 线，做成深色块
+        会在视觉上把窗口横向切成两半，而这两件事（登录态 / ffmpeg）只是
+        要被看见，不是要被强调。
+        """
+        self._statusbar = StatusBar(self)
+        self._statusbar.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self._statusbar.set_groups([])
+        self._statusbar.set_note("")
 
-        cells = ttk.Frame(bar, style="Ink.TFrame")
-        cells.grid(row=1, column=0, columnspan=3, sticky="ew")
-        cells.columnconfigure(1, weight=1)
+    def set_nav_badge(self, key: str, count: int) -> None:
+        """给某个导航项挂数字角标（0 或负数表示摘掉）。
 
-        self._status_login = tk.Label(
-            cells, text="", font=theme.font("caption"), background=theme.INK_SURFACE,
-            foreground=theme.INK_SURFACE_FG, anchor="w",
-        )
-        self._status_login.grid(row=0, column=0, sticky="w", padx=theme.PAD_MD, pady=theme.PAD_SM)
+        角标是**待办计数**——批量队列里还剩几个。它回答的是「别的页上
+        有活等着我」，所以用户待在投稿页时也该看见：切不切换是下一步的
+        事，先得知道有这回事。
 
-        # 中间段留给任务进度，由批量任务页通过 set_task_progress 写入
-        self._status_task = tk.Label(
-            cells, text="", font=theme.font("caption"), background=theme.INK_SURFACE,
-            foreground=theme.INK_SURFACE_MUTED, anchor="center",
-        )
-        self._status_task.grid(row=0, column=1, sticky="ew")
-
-        self._status_ffmpeg = tk.Label(
-            cells, text="", font=theme.font("caption"), background=theme.INK_SURFACE,
-            foreground=theme.INK_SURFACE_MUTED, anchor="e",
-        )
-        self._status_ffmpeg.grid(row=0, column=2, sticky="e", padx=theme.PAD_MD)
+        由各视图自己调（``getattr`` 防御式取，和 ``set_task_progress``
+        一样）——主窗口不该知道「队列还剩几个」是怎么算出来的。
+        """
+        self._nav_badges[key] = max(0, int(count))
+        item = self._nav_buttons.get(key)
+        if item is not None:
+            item.set_badge(self._nav_badges[key])
 
     # ---------- 响应式 ----------
 
@@ -325,24 +362,36 @@ class App(ttk.Frame):
 
         if spec.nav_collapsed:
             self._brand_text.grid_remove()
-            self._nav_version.grid_remove()
+            self._brand_version.grid_remove()
+            self._nav_foot.grid_remove()
             self._brand.columnconfigure(0, weight=1)
             self._brand.columnconfigure(1, weight=0)
+            self._brand.columnconfigure(2, weight=0)
             self._brand_mark.grid_configure(padx=0)
         else:
             self._brand_text.grid()
-            self._nav_version.grid()
+            self._brand_version.grid()
+            self._nav_foot.grid()
             self._brand.columnconfigure(0, weight=0)
             self._brand.columnconfigure(1, weight=1)
+            self._brand.columnconfigure(2, weight=0)
             self._brand_mark.grid_configure(padx=(theme.PAD_LG, theme.PAD_SM))
 
     def set_task_progress(self, text: str) -> None:
-        """在状态栏中段显示任务进度，供批量任务页调用。
+        """在状态条右侧显示任务进度，供批量任务页调用。
 
-        执行任务时用户可能切到别的页看历史，状态栏是唯一一直可见的
+        执行任务时用户可能切到别的页看历史，状态条是唯一一直可见的
         地方——把进度放这里，不用切回来也知道跑到第几个了。
+
+        进度和「最后检测」抢同一个位置，**进度优先**：跑任务时用户关心
+        的是第几个了，传空串就退回显示检测时间。
         """
-        self._status_task.configure(text=text)
+        self._task_progress = text
+        self._render_note()
+
+    def _render_note(self) -> None:
+        """状态条右侧那句话：有任务进度就说进度，否则说检测时间。"""
+        self._statusbar.set_note(self._task_progress or self._last_check)
 
     # ---------- 行为 ----------
 
@@ -391,9 +440,9 @@ class App(ttk.Frame):
         generation = self._status_generation
         ctx = self.ctx
 
-        login_fg, _bg = theme.tone("busy")
-        self._status_login.configure(text="◌ 登录态检测中…", foreground=login_fg)
-        self._status_ffmpeg.configure(text="◌ ffmpeg 检测中…", foreground=login_fg)
+        self._login_pair = ("busy", "登录态检测中…")
+        self._ffmpeg_pair = ("busy", "ffmpeg 检测中…")
+        self._render_status()
 
         worker: Worker[EnvironmentSnapshot] = Worker(self)
         self._status_worker = worker
@@ -417,39 +466,48 @@ class App(ttk.Frame):
         if generation != self._status_generation:
             return
 
-        # 墨底上要用亮色版状态色（theme.tone 的深色前景压上来会糊）
-        fg = theme.tone_on_ink("ok" if snapshot.logged_in else "idle")
         if snapshot.login_error:
-            self._status_login.configure(
-                text="○ 未登录（cookie 读取失败）", foreground=fg
-            )
+            self._login_pair = ("warn", "未登录（cookie 读取失败）")
+        elif snapshot.logged_in:
+            self._login_pair = ("ok", "已登录")
         else:
-            self._status_login.configure(
-                text="● 已登录" if snapshot.logged_in else "○ 未登录",
-                foreground=fg,
-            )
+            self._login_pair = ("idle", "未登录")
 
         info = snapshot.ffmpeg
         if info is None:
-            self._status_ffmpeg.configure(
-                text="ffmpeg 未找到（不影响投稿，仅自动抽帧不可用）",
-                foreground=theme.tone_on_ink("warn"),
-            )
+            self._ffmpeg_pair = ("warn", "ffmpeg 未找到")
         else:
-            self._status_ffmpeg.configure(
-                text=f"ffmpeg 就绪（{info.source}）",
-                foreground=theme.INK_SURFACE_MUTED,
-            )
+            self._ffmpeg_pair = ("ok", f"ffmpeg 就绪 · {info.source}")
+
+        self._last_check = f"最后检测 {_clock_text()}"
+        self._render_status()
+
+    def _render_status(self) -> None:
+        """把两组状态合成写进状态条。
+
+        分开存、一起写：登录态和 ffmpeg 是**两次探测里的两个字段**，
+        但它们同属一次快照，一起到达也一起显示——合成这一步放在这儿，
+        调用方就不用凑齐两组才能刷。
+        """
+        self._statusbar.set_groups([self._login_pair, self._ffmpeg_pair])
+        self._render_note()
 
     def _apply_status_failed(self, generation: int, reason: str) -> None:
-        """探测炸了要显示出来。状态栏不能永远停在「检测中…」。"""
+        """探测炸了要显示出来。状态条不能永远停在「检测中…」。"""
         if generation != self._status_generation:
             return
-        idle_fg = theme.tone_on_ink("idle")
-        self._status_login.configure(text="○ 登录态未知", foreground=idle_fg)
-        self._status_ffmpeg.configure(
-            text=f"环境检测失败：{reason}", foreground=idle_fg
-        )
+        self._login_pair = ("idle", "登录态未知")
+        self._ffmpeg_pair = ("error", f"环境检测失败：{reason}")
+        self._last_check = ""
+        self._render_status()
+
+
+def _clock_text() -> str:
+    """当前时间 ``HH:MM``，给「最后检测」用。
+
+    只到分钟：状态条上写秒会让人以为它在跳动，而它其实几分钟才变一次。
+    """
+    return datetime.now().strftime("%H:%M")
 
 
 def _set_dpi_aware() -> None:

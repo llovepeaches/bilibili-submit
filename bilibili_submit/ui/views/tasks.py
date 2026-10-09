@@ -66,7 +66,7 @@ from ..widgets import (
     ProgressBar,
     ScrollArea,
     OutlinedButton,
-    SectionTitle,
+    PageHeader,
     AssistChip,
     SummaryBar,
     TextButton,
@@ -248,11 +248,11 @@ class TasksView(ttk.Frame):
     # ---------- 布局 ----------
 
     def _build(self) -> None:
-        SectionTitle(
+        PageHeader(
             self,
             "批量任务",
             "选一个视频文件夹，顶部参数填一次，下面就是全部待投稿任务。",
-        ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
+        ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_LG))
 
         # 最小窗口下这一页纵向缺 480px（实测 reqh=946 vs 可用 465）：
         # 进度条直接越界、日志区被压成 1px 高。包进滚动区兜住。
@@ -1247,6 +1247,11 @@ class TasksView(ttk.Frame):
     def _update_summary(self) -> None:
         """刷新汇总条：共多少、选了多少、成败各多少。"""
         total = len(self._tree.get_children())
+        # 导航角标同步：批量队列里还有几件没跑完的事，用户在别的页
+        # 也该看见。getattr 防御——主窗口不一定有这个钩子（测试替身）。
+        setter = getattr(self.app, "set_nav_badge", None)
+        if setter is not None:
+            setter("批量任务", total)
         if not total:
             self._summary.set_stats("")
             self._retry_button.state(["disabled"])

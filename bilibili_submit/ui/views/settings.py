@@ -46,7 +46,7 @@ from ..widgets import (
     FormRow,
     KeyValueList,
     ScrollArea,
-    SectionTitle,
+    PageHeader,
     OutlinedButton,
 )
 
@@ -89,9 +89,9 @@ class SettingsView(ttk.Frame):
         self._build()
 
     def _build(self) -> None:
-        SectionTitle(
+        PageHeader(
             self, "设置", "改动立即生效；主题一项需重启客户端。"
-        ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
+        ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_LG))
 
         # 最小窗口下这一页装不下（实测 reqh=730 vs 可用 595），底部
         # 「更新」那一块会被整个裁掉。包进滚动区兜住。

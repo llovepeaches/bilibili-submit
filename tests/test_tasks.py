@@ -899,11 +899,11 @@ def test_progress_bar_never_exceeds_total(tmp_path, monkeypatch):
 
         view._on_progress(Event("done", index=3, position=1, total=2, status="成功"))
         assert view._progress._bar.cget("value") == pytest.approx(50, abs=0.5)
-        assert view.app._status_task.cget("text") == "1/2"
+        assert view.app._task_progress == "1/2"
 
         view._on_progress(Event("done", index=5, position=2, total=2, status="成功"))
         assert view._progress._bar.cget("value") == pytest.approx(100, abs=0.5)
-        assert view.app._status_task.cget("text") == "2/2"
+        assert view.app._task_progress == "2/2"
     finally:
         root.destroy()
 

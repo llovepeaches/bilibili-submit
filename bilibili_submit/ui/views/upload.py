@@ -3,6 +3,10 @@
 这是 GUI 的主功能页。表单字段与 CLI 的 ``upload`` 命令一一对应，
 提交时构造 :class:`~bilibili_submit.config.TaskConfig` 走同一条
 ``run_task`` 链路——GUI 不自己实现投稿，避免两套逻辑走偏。
+
+2026-10 按设计稿重排：页面拆成**两张编号卡片**——①视频源、②投稿信息。
+编号不是装饰，它把「先选文件、再填信息」的顺序直接画了出来；五格元
+信息条让用户选完文件立刻确认「选对了吗」，不用再打开资源管理器核对。
 """
 
 from __future__ import annotations
@@ -21,13 +25,16 @@ from .. import theme
 from ..widgets import (
     ActionBar,
     ExpansionPanel,
-    FormRow,
+    MetaGrid,
     OptionSwitches,
     LogConsole,
+    PageHeader,
     ProgressBar,
     ScrollArea,
+    SegmentedControl,
+    StepCard,
     OutlinedButton,
-    SectionTitle,
+    TagChipField,
 )
 from ..workers import Cancelled, Worker
 
@@ -45,6 +52,12 @@ __all__ = [
 
 #: 标签上限，B 站硬性限制
 MAX_TAGS = 10
+#: 标题字数上限，B 站硬性限制
+MAX_TITLE = 80
+#: 简介字数上限
+MAX_DESC = 2000
+#: 建议标签数下限。低于它预检行会提示——标签太少影响推荐，但不算错误
+SUGGESTED_TAGS = 3
 
 #: 分区下拉的选项，格式 ``"21 - 日常"``。投稿页和批量任务页共用同一份，
 #: 免得两个页面的分区列表哪天不一样，用户要重新适应。
@@ -58,6 +71,10 @@ COPYRIGHT_OPTIONS = ["自制", "转载"]
 #: 直接失败；反之若认不出就当转载，用户会撞上「缺 source」被服务端
 #: 打回（21004），却看不出是自己没选还是程序弄错了。
 COPYRIGHT_SELF_MADE = 1
+
+#: 常用标签快捷项。给的是 B 站覆盖面最广的泛用标签——这里的目的是
+#: 「点一下就补够推荐数」，具体选题标签该由用户自己想。
+QUICK_TAGS = ["日常", "生活", "原创"]
 
 
 def parse_tid(text: str, default: int = 21) -> int:
@@ -79,6 +96,112 @@ def copyright_option(value: int) -> str:
     return COPYRIGHT_OPTIONS[1] if int(value) == 2 else COPYRIGHT_OPTIONS[0]
 
 
+class _ThumbPlaceholder(tk.Canvas):
+    """视频缩略图占位：粉渐变 + 播放钮 + 右下角时长。
+
+    真正的视频封面要等平台转码后才有，投稿阶段谁都画不出缩略图——
+    设计稿在这里放的是一张粉渐变占位图，本组件照做。渐变用 40 条
+    竖条插值模拟（tkinter 的 Canvas 没有渐变 API）。
+
+    时长角标的内容随元信息探测更新（``set_duration``）；没探测到就
+    保持 ``—``，不要空着——空角标看起来像渲染漏了一块。
+    """
+
+    #: 渐变条数。40 条在 200px 宽度上肉眼已是连续过渡，再多只是白算
+    _STEPS = 40
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(
+            master,
+            width=theme.THUMB_W, height=theme.THUMB_H,
+            highlightthickness=0, borderwidth=0,
+        )
+        self._paint()
+
+    def _paint(self) -> None:
+        w, h = theme.THUMB_W, theme.THUMB_H
+        # 三段渐变（0%~40%~100%），逐条线性插值
+        stops = (theme.THUMB_FROM, theme.THUMB_MID, theme.THUMB_TO)
+        for i in range(self._STEPS):
+            t = i / (self._STEPS - 1)
+            if t < 0.4:
+                color = _mix(stops[0], stops[1], t / 0.4)
+            else:
+                color = _mix(stops[1], stops[2], (t - 0.4) / 0.6)
+            x0 = int(w * i / self._STEPS)
+            x1 = int(w * (i + 1) / self._STEPS)
+            self.create_rectangle(x0, 0, x1 + 1, h, outline="", fill=color)
+
+        # 播放钮：墨色圆 + 白三角。tkinter 画不出半透明，用实色近似；
+        # 设计稿里它是 rgba(0,0,0,.32)，在粉底上观感就是「深一档」。
+        cx, cy, r = w / 2, h / 2, 19
+        self.create_oval(
+            cx - r, cy - r, cx + r, cy + r,
+            fill=theme.INK, outline="", width=0,
+        )
+        # 三角形往右偏 2px 才视觉居中（几何中心≠视觉中心）
+        s = 12
+        self.create_polygon(
+            cx - s / 2 + 2, cy - s / 2,
+            cx - s / 2 + 2, cy + s / 2,
+            cx + s / 2 + 2, cy,
+            fill=theme.FIELD_BG, outline="", width=0,
+        )
+
+        # 角标底：tkinter 文字没有背景色，先垫一个墨色矩形——
+        # 后创建的图元盖住先创建的，所以矩形必须在文字**之前**
+        self.create_rectangle(
+            w - 62, h - 26, w, h,
+            fill=theme.INK, outline="", width=0,
+        )
+        self._dur = self.create_text(
+            w - 8, h - 8, text="—", anchor="se",
+            font=theme.font("caption"), fill=theme.FIELD_BG,
+        )
+
+    def set_duration(self, text: str) -> None:
+        """更新右下角时长角标。"""
+        self.itemconfigure(self._dur, text=text)
+
+
+def _mix(a: str, b: str, t: float) -> str:
+    """两个 ``#RRGGBB`` 之间线性插值，``t=0`` 返回 a、``t=1`` 返回 b。"""
+    ar, ag, ab = int(a[1:3], 16), int(a[3:5], 16), int(a[5:7], 16)
+    br, bg, bb = int(b[1:3], 16), int(b[3:5], 16), int(b[5:7], 16)
+    return "#{:02X}{:02X}{:02X}".format(
+        round(ar + (br - ar) * t),
+        round(ag + (bg - ag) * t),
+        round(ab + (bb - ab) * t),
+    )
+
+
+class _FieldBody(ttk.Frame):
+    """字段格的控件槽：``add`` 语义与 :meth:`FormRow.add` 一致。
+
+    控件必须以本槽为父容器创建——Tk 的 ``grid()`` 始终作用于
+    ``widget.master``，父容器拿错了控件会被排到格子的外层去叠在一起。
+    """
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master, style="Card.TFrame")
+        # 唯一列吃满宽度：窗口拉宽时输入框跟着变宽，而不是在槽里
+        # 缩成一小截、右侧留一块裸底色
+        self.columnconfigure(0, weight=1)
+
+    def add(
+        self,
+        widget: "type[tk.Misc] | tk.Misc",
+        *,
+        column: int = 0,
+        sticky: str = "ew",
+        padx: "int | tuple[int, int]" = 0,
+        **options: object,
+    ) -> tk.Misc:
+        created = widget(self, **options) if isinstance(widget, type) else widget
+        created.grid(row=0, column=column, sticky=sticky, padx=padx)
+        return created
+
+
 class UploadView(ttk.Frame):
     """单文件投稿页。"""
 
@@ -94,121 +217,29 @@ class UploadView(ttk.Frame):
     # ---------- 布局 ----------
 
     def _build(self) -> None:
-        SectionTitle(
-            self, "投稿", "选一个视频文件，填好标题和分区，底部会实时显示将要提交什么。"
-        ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
+        PageHeader(
+            self, "投稿", "填写信息后可直接投稿，或加入批量队列定时发布"
+        ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_LG))
 
         # 窗口压到最小尺寸时表单装不下，用滚动区兜住，
         # 否则日志区会被挤出可视范围。
         area = ScrollArea(self)
         area.grid(row=1, column=0, sticky="nsew")
-        card = area.body
+        body = area.body
+        body.columnconfigure(0, weight=1)
 
-        form = ttk.Frame(card, style="Card.TFrame")
-        form.grid(row=0, column=0, sticky="ew")
-        # FormRow 全部 grid 在第 0 列，权重给这一列，窗口拉宽时输入框才跟着变宽
-        form.columnconfigure(0, weight=1)
+        self._meta_generation = 0
+        self._build_source_card(body)
+        self._build_info_card(body)
 
-        # 视频文件：输入框 + 「选择文件…」按钮
-        self._file_var = tk.StringVar()
-        row = FormRow(
-            form, "视频文件", hint="支持 mp4 / flv / mov / mkv 等常见格式", required=True
-        )
-        row.grid(row=0, column=0, sticky="ew", pady=theme.PAD_XS)
-        row.add(ttk.Entry, textvariable=self._file_var, padx=(0, theme.PAD_SM))
-        row.add(
-            OutlinedButton,
-            text="选择文件…",
-            command=self._pick_file,
-            column=1,
-            sticky="w",
-        )
-
-        # 标题
-        self._title_var = tk.StringVar()
-        row = FormRow(form, "标题", hint="留空则自动取文件名")
-        row.grid(row=1, column=0, sticky="ew", pady=theme.PAD_XS)
-        row.add(ttk.Entry, textvariable=self._title_var)
-
-        # 分区
-        self._tid_var = tk.StringVar()
-        row = FormRow(form, "分区", hint="B 站投稿分区，决定稿件出现在哪里")
-        row.grid(row=2, column=0, sticky="ew", pady=theme.PAD_XS)
-        row.add(
-            ttk.Combobox,
-            textvariable=self._tid_var,
-            values=TID_OPTIONS,
-            state="readonly",
-        )
-        self._tid_var.set("21 - 日常")
-
-        # 标签
-        self._tag_var = tk.StringVar()
-        row = FormRow(form, "标签", hint=f"逗号分隔，最多 {MAX_TAGS} 个")
-        row.grid(row=3, column=0, sticky="ew", pady=theme.PAD_XS)
-        row.add(ttk.Entry, textvariable=self._tag_var)
-
-        # 简介
-        self._desc_var = tk.StringVar()
-        row = FormRow(form, "简介", hint="可留空")
-        row.grid(row=4, column=0, sticky="ew", pady=theme.PAD_XS)
-        row.add(ttk.Entry, textvariable=self._desc_var)
-
-        # 转载来源跟着类型显隐：自制状态下摆一个灰着的「转载来源」
-        # 只会让人困惑。
-        self._copyright_var = tk.StringVar(value=copyright_option(COPYRIGHT_SELF_MADE))
-        row = FormRow(form, "类型", hint="转载需要填写来源，否则 B 站会拒稿")
-        row.grid(row=5, column=0, sticky="ew", pady=theme.PAD_XS)
-        self._copyright_combo = row.add(
-            ttk.Combobox,
-            textvariable=self._copyright_var,
-            values=COPYRIGHT_OPTIONS,
-            state="readonly",
-            width=10,
-        )
-        self._copyright_combo.bind(
-            "<<ComboboxSelected>>", lambda _e: self._sync_source_row()
-        )
-
-        self._source_var = tk.StringVar()
-        self._source_row = FormRow(
-            form, "转载来源", hint="原视频链接或出处，选了转载就必须填", required=True
-        )
-        self._source_row.grid(row=6, column=0, sticky="ew", pady=theme.PAD_XS)
-        self._source_row.add(ttk.Entry, textvariable=self._source_var)
-        # 建完立刻同步一次：默认自制，来源行应当是收起的
-        self._sync_source_row()
-
-        # 定时发布
-        self._dtime_var = tk.StringVar()
-        row = FormRow(
-            form,
-            "延时发布",
-            hint="距今多少小时后发布，需大于 4；留空为立即发布",
-        )
-        row.grid(row=7, column=0, sticky="ew", pady=theme.PAD_XS)
-        row.add(ttk.Entry, textvariable=self._dtime_var)
-
-        # 更多设置：与批量任务页共用同一组开关，术语和默认值都一致，
-        # 免得用户在一个页里设过、換个页又要重新找一遍。
-        self._more = ExpansionPanel(
-            form, "更多设置", "互动设置、音质增强", opened=False,
-            on_toggle=lambda _opened: self._update_more_hint(),
-        )
-        self._more.grid(row=8, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
-        self._option_switches = OptionSwitches(
-            self._more.body, on_change=self._update_more_hint
-        )
-        self._option_switches.grid(row=0, column=0, sticky="ew")
-
-        self._progress = ProgressBar(card)
-        self._progress.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_MD, theme.PAD_SM))
+        self._progress = ProgressBar(body)
+        self._progress.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
 
         # 滚动容器里不能用 weight=1 让日志区「吃掉剩余空间」——
         # 父容器高度就是内容高度，权重不会带来额外空间，反而会压缩内容。
         # 固定高度 + 内容超出时日志自己滚。
-        self._log = LogConsole(card, height=theme.LOG_HEIGHT)
-        self._log.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+        self._log = LogConsole(body, height=theme.LOG_HEIGHT)
+        self._log.grid(row=3, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
 
         # 操作条**在滚动区之外**，钉在页面底部。这是本次流程优化的核心：
         # 「开始投稿」不再混在表单中间——表单一长它就被推出屏幕，
@@ -221,7 +252,7 @@ class UploadView(ttk.Frame):
         )
         self._preview_button = self._action_bar.secondary
 
-        # 表单一改就刷新摘要：用户边填边看到「将要发生什么」，
+        # 表单一改就刷新摘要与预检：用户边填边看到「将要发生什么」，
         # 不需要提交前再回头核对一遍。
         for variable in (
             self._file_var, self._title_var, self._tid_var,
@@ -229,6 +260,288 @@ class UploadView(ttk.Frame):
         ):
             variable.trace_add("write", lambda *_: self._refresh_action_bar())
         self._refresh_action_bar()
+
+    # ---------- 卡片一：视频源 ----------
+
+    def _build_source_card(self, body: tk.Misc) -> None:
+        """① 视频源：缩略图 + 路径行 + 五格元信息。
+
+        缩略图占位为什么值得画：它把「这是一个视频」的语义直接给了出来
+        （播放钮人人认识），比一行灰路径好认得多——用户扫一眼就知道
+        这张卡片在等什么。
+        """
+        card = StepCard(
+            body, step=1, title="视频源",
+            hint="支持 mp4 / flv / mkv，单文件最大 8 GB",
+        )
+        card.grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
+
+        src = tk.Frame(card.body, background=theme.PAPER)
+        src.pack(fill="x")
+        src.columnconfigure(1, weight=1)
+
+        self._thumb = _ThumbPlaceholder(src)
+        self._thumb.grid(row=0, column=0, padx=(0, theme.PAD_MD), sticky="nw")
+
+        info = tk.Frame(src, background=theme.PAPER)
+        info.grid(row=0, column=1, sticky="ew")
+        info.columnconfigure(0, weight=1)
+
+        # 路径行：只读展示框（路径只能来自文件对话框，手改框里的文字
+        # 既无意义也改不了任何状态，所以不做成输入框）+ 选择按钮
+        self._file_var = tk.StringVar()
+        pathbox = tk.Frame(
+            info, background=theme.LINE, height=theme.CONTROL_HEIGHT
+        )
+        pathbox.grid(row=0, column=0, sticky="ew", pady=(theme.PAD_XS, 0))
+        pathbox.grid_propagate(False)
+        pathbox.columnconfigure(1, weight=1)
+        tk.Label(
+            pathbox, text="视频文件", font=theme.font("caption"),
+            background=theme.FILL, foreground=theme.INK_MUTED,
+        ).grid(row=0, column=0, sticky="nsew", padx=(theme.PAD_SM, 0), pady=(1, 1))
+        tk.Label(
+            pathbox, textvariable=self._file_var, anchor="w",
+            font=theme.font("subtitle"), background=theme.FILL,
+            foreground=theme.INK_SECOND,
+        ).grid(row=0, column=1, sticky="ew", padx=(theme.PAD_SM, theme.PAD_SM), pady=(1, 1))
+
+        OutlinedButton(info, "选择文件…", self._pick_file).grid(
+            row=1, column=0, sticky="w", pady=(theme.PAD_SM, 0)
+        )
+
+        # 五格元信息：选完文件异步探测填充，探测前全部显示占位符
+        self._meta = MetaGrid(info)
+        self._meta.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_MD, 0))
+        self._meta.set_rows([
+            ("分辨率", "—"), ("时长", "—"), ("大小", "—"),
+            ("编码", "—"), ("码率", "—"),
+        ])
+
+    # ---------- 卡片二：投稿信息 ----------
+
+    def _build_info_card(self, body: tk.Misc) -> None:
+        """② 投稿信息：标题 / 三列参数 / 标签 / 简介。"""
+        card = StepCard(
+            body, step=2, title="投稿信息", hint="标题与标签直接影响推荐量"
+        )
+        card.grid(row=1, column=0, sticky="ew")
+        form = card.body
+
+        # 标题：小标题 + 必填星 + 右侧字数计数
+        self._title_var = tk.StringVar()
+        head, self._title_count = self._field_head(form, "标题", required=True)
+        self._title_count.configure(text=f"0 / {MAX_TITLE}")
+        head.pack(fill="x", pady=(0, theme.PAD_XS))
+        ttk.Entry(form, textvariable=self._title_var).pack(
+            fill="x", pady=(0, theme.PAD_MD)
+        )
+        self._title_var.trace_add("write", lambda *_: self._sync_title_count())
+
+        # 三列：分区 / 类型 / 延时发布
+        row3 = tk.Frame(form, background=theme.PAPER)
+        row3.pack(fill="x", pady=(0, theme.PAD_MD))
+        for col in range(3):
+            row3.columnconfigure(col, weight=1, uniform="params")
+
+        self._tid_var = tk.StringVar(value="21 - 日常")
+        tid_cell = self._field(row3, 0, "分区", required=True)
+        tid_cell.body.add(
+            ttk.Combobox, textvariable=self._tid_var,
+            values=TID_OPTIONS, state="readonly",
+        )
+
+        # 类型是两个互斥且穷尽的选项，分段控件比下拉少两次点击。
+        # StringVar 仍是**状态源**（测试和 _collect 都读它），
+        # 分段控件只是它的另一种画法，两边互相同步。
+        self._copyright_var = tk.StringVar(
+            value=copyright_option(COPYRIGHT_SELF_MADE)
+        )
+        seg_cell = self._field(row3, 1, "类型")
+        self._copyright_seg = SegmentedControl(
+            seg_cell.body, options=COPYRIGHT_OPTIONS,
+            on_change=self._on_copyright_changed,
+        )
+        self._copyright_seg.pack(fill="x")
+        self._copyright_var.trace_add("write", lambda *_: self._sync_copyright_seg())
+
+        self._dtime_var = tk.StringVar()
+        dtime_cell = self._field(row3, 2, "延时发布")
+        dtime_cell.body.add(ttk.Entry, textvariable=self._dtime_var)
+        tk.Label(
+            dtime_cell.body, text="小时后发布，需大于 4；留空为立即发布",
+            font=theme.font("caption"), background=theme.PAPER,
+            foreground=theme.INK_MUTED, anchor="w", wraplength=200,
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", pady=(theme.PAD_XS, 0))
+
+        # 转载来源跟着类型显隐：自制状态下摆一个灰着的「转载来源」
+        # 只会让人困惑。
+        self._source_var = tk.StringVar()
+        self._source_row = self._make_field(form, "转载来源", required=True)
+        # 行本身走 pack，显隐就得用 pack_forget——grid_remove 对
+        # pack 管的窗口是**静默无效**的，来源行会一直挂在页面上。
+        # pack_forget 会丢参数，所以把参数存下来，显示时原样还回去。
+        self._source_pack_kw = {"fill": "x", "pady": (0, theme.PAD_MD)}
+        self._source_row.pack(**self._source_pack_kw)
+        self._source_row.body.add(ttk.Entry, textvariable=self._source_var)
+        # 建完立刻同步一次：默认自制，来源行应当是收起的
+        self._sync_source_row()
+
+        # 标签：chips + 输入框 + 常用标签
+        tag_head, self._tag_count = self._field_head(form, "标签")
+        self._tag_count.configure(text="已选 0 个")
+        tag_head.pack(fill="x", pady=(0, theme.PAD_XS))
+        self._tag_field = TagChipField(
+            form, max_tags=MAX_TAGS, on_change=self._on_tags_changed,
+        )
+        self._tag_field.pack(fill="x", pady=(0, theme.PAD_XS))
+        self._tag_field.set_quick(QUICK_TAGS)
+
+        # 简介：多行文本（设计稿 92px textarea）。tk.Text 没有
+        # textvariable，用 KeyRelease 同步——中文输入法在组合期间
+        # 不触发 KeyRelease，松键（选字）那一下会触发，够用。
+        desc_head, self._desc_count = self._field_head(form, "简介")
+        self._desc_count.configure(text=f"0 / {MAX_DESC}")
+        desc_head.pack(fill="x", pady=(0, theme.PAD_XS))
+        desc_box = tk.Frame(form, background=theme.LINE)
+        desc_box.pack(fill="x", pady=(0, theme.PAD_MD))
+        self._desc_text = tk.Text(
+            desc_box, height=3, relief="flat", wrap="word",
+            font=theme.font("body"), background=theme.FIELD_BG,
+            foreground=theme.INK, padx=theme.PAD_SM, pady=theme.PAD_SM,
+            insertbackground=theme.INK,
+        )
+        self._desc_text.pack(fill="x", padx=(1, 1), pady=(1, 1))
+        self._desc_text.bind("<KeyRelease>", lambda _e: self._sync_desc_count())
+
+        # 更多设置：与批量任务页共用同一组开关，术语和默认值都一致，
+        # 免得用户在一个页里设过、換个页又要重新找一遍。
+        self._more = ExpansionPanel(
+            form, "更多设置", "互动设置、音质增强", opened=False,
+            on_toggle=lambda _opened: self._update_more_hint(),
+        )
+        self._more.pack(fill="x", pady=(theme.PAD_SM, 0))
+        self._option_switches = OptionSwitches(
+            self._more.body, on_change=self._update_more_hint
+        )
+        self._option_switches.grid(row=0, column=0, sticky="ew")
+
+    # ---------- 字段格 ----------
+
+    @staticmethod
+    def _field_head(
+        parent: tk.Misc, label: str, required: bool = False
+    ) -> tuple[tk.Frame, tk.Label]:
+        """字段的小标题行：标签 + 可选必填星 + 右侧计数。
+
+        返回 ``(标题行, 计数 Label)``。计数由这里创建是因为 **pack 不能
+        跨父容器**——外部造好的 Label 以 ``parent`` 为父，pack 进标题行
+        只会「显示成标题行的兄弟」而不是「贴在标题行右端」。
+        """
+        head = tk.Frame(parent, background=theme.PAPER)
+        tk.Label(
+            head, text=label, font=theme.font("subtitle"),
+            background=theme.PAPER, foreground=theme.INK_SECOND,
+        ).pack(side="left")
+        if required:
+            tk.Label(
+                head, text="*", font=theme.font("subtitle"),
+                background=theme.PAPER, foreground=theme.PINK_DEEP,
+            ).pack(side="left", padx=(2, 0))
+        counter = tk.Label(
+            head, font=theme.font("caption"),
+            background=theme.PAPER, foreground=theme.INK_MUTED,
+        )
+        counter.pack(side="right")
+        return head, counter
+
+    def _make_field(
+        self, parent: tk.Misc, label: str, required: bool = False
+    ) -> "ttk.Frame":
+        """造一个纵排字段格：小标题在上、控件槽在下。
+
+        返回**外层 cell 本身**（一个真 Frame）：显隐、查询几何都用它，
+        ``grid_remove()`` 丢不了配置；控件槽挂在 ``cell.body`` 上，
+        ``add`` 的语义与 :meth:`FormRow.add` 相同。
+        """
+        cell = ttk.Frame(parent, style="Card.TFrame")
+        head, _unused = self._field_head(cell, label, required=required)
+        head.pack(fill="x", pady=(0, theme.PAD_XS))
+        cell.body = _FieldBody(cell)
+        cell.body.pack(fill="x")
+        return cell
+
+    def _field(self, parent: tk.Misc, column: int, label: str, required: bool = False):
+        """三列参数行里的一格（等宽，列间留沟）。"""
+        cell = self._make_field(parent, label, required)
+        cell.grid(
+            row=0, column=column, sticky="ew",
+            padx=(0 if column == 0 else theme.PAD_MD, 0),
+        )
+        return cell
+
+    # ---------- 计数与同步 ----------
+
+    def _sync_title_count(self) -> None:
+        self._title_count.configure(
+            text=f"{len(self._title_var.get())} / {MAX_TITLE}"
+        )
+
+    def _sync_desc_count(self) -> None:
+        text = self._desc_text.get("1.0", "end-1c")
+        self._desc_count.configure(text=f"{len(text)} / {MAX_DESC}")
+        self._refresh_action_bar()
+
+    def _on_tags_changed(self, tags: list) -> None:
+        self._tag_count.configure(
+            text=f"已选 {len(tags)} / 建议 {SUGGESTED_TAGS}-{MAX_TAGS} 个"
+        )
+        self._refresh_action_bar()
+
+    def _on_copyright_changed(self, value: str) -> None:
+        """分段控件 → StringVar（StringVar 是唯一状态源）。"""
+        if self._copyright_var.get() != value:
+            self._copyright_var.set(value)
+
+    def _sync_copyright_seg(self) -> None:
+        """StringVar → 分段控件。判断过值相等才 set，不会成环。"""
+        value = self._copyright_var.get()
+        if self._copyright_seg.value != value:
+            self._copyright_seg.set(value)
+
+    def _probe_meta(self, path: str) -> None:
+        """异步探测视频元信息，填五格与时长角标。
+
+        探测有代次：连续换两个文件时，慢的那次晚回来**不许**覆盖新
+        文件的结果——和 :meth:`App.refresh_status` 同一个坑，同一个解法。
+        """
+        self._meta_generation += 1
+        generation = self._meta_generation
+
+        def work(_report, _cancelled):
+            from ...ffmpeg import video_meta
+
+            return video_meta(path)
+
+        worker = Worker(self)
+        self._meta_worker = worker
+        worker.run(
+            work,
+            on_done=lambda meta: self._apply_meta(generation, meta),
+            on_error=lambda _exc: self._apply_meta(generation, None),
+        )
+
+    def _apply_meta(self, generation: int, meta) -> None:
+        # 过期的探测结果丢弃：它属于上一个文件
+        if generation != self._meta_generation or meta is None:
+            return
+        self._meta.set_rows([
+            ("分辨率", meta["resolution"]), ("时长", meta["duration"]),
+            ("大小", meta["size"]), ("编码", meta["codec"]),
+            ("码率", meta["bitrate"]),
+        ])
+        self._thumb.set_duration(meta["duration"])
 
     # ---------- 行为 ----------
 
@@ -289,12 +602,52 @@ class UploadView(ttk.Frame):
         preview = self._action_bar.secondary
         if preview is not None:
             preview.state(["!disabled"] if has_file else ["disabled"])
+        self._refresh_checks()
         if not self._logged_in():
             self._action_bar.block("尚未登录 · 请先到「登录」页扫码")
         elif not has_file:
             self._action_bar.block("还差一个视频文件")
         else:
             self._action_bar.unblock()
+
+    def _refresh_checks(self) -> None:
+        """刷新操作条上的预检行。
+
+        预检回答的是「点了之后顺不顺」：哪些条件已满足、哪些还差着。
+        它**不挡按钮**——标签 3 个、简介空着都不该拦着投稿，B 站也收；
+        拦人的事（没登录、没文件）由 block 的原因文案负责。两者分工
+        不同，混在一起就会变成「什么都不满足却只红一项」。
+        """
+        raw = self._file_var.get().strip()
+        if not raw:
+            file_pair = ("dim", "未选择文件")
+        elif Path(raw).expanduser().is_file():
+            file_pair = ("ok", "文件可读取")
+        else:
+            file_pair = ("error", "文件不存在")
+
+        title = self._title_var.get().strip()
+        if not title:
+            title_pair = ("dim", "标题为空（将取文件名）")
+        elif len(title) > MAX_TITLE:
+            title_pair = ("error", f"标题超 {MAX_TITLE} 字")
+        else:
+            title_pair = ("ok", "标题合规")
+
+        n_tags = len(self._tag_field.tags)
+        if n_tags == 0:
+            tag_pair = ("dim", "无标签")
+        elif n_tags < SUGGESTED_TAGS:
+            tag_pair = ("warn", f"标签仅 {n_tags} 个")
+        else:
+            tag_pair = ("ok", f"标签 {n_tags} 个")
+
+        desc = self._desc_text.get("1.0", "end-1c").strip()
+        desc_pair = (
+            ("dim", "简介为空") if not desc
+            else ("warn" if len(desc) > MAX_DESC else "ok", f"简介 {len(desc)} 字")
+        )
+        self._action_bar.set_checks([file_pair, title_pair, tag_pair, desc_pair])
 
     def _update_more_hint(self) -> None:
         """收起时右侧列出已开启的项——不然设了什么全看不见。"""
@@ -303,13 +656,13 @@ class UploadView(ttk.Frame):
     def _sync_source_row(self) -> None:
         """「转载来源」只在选了转载时出现。
 
-        用 ``grid_remove()`` 而不是 ``grid_forget()``：后者会丢掉已有的
-        网格配置，再次显示时行位置就乱了。
+        用 ``pack_forget`` 收起、带原参数 ``pack`` 恢复——布局参数存在
+        :attr:`_source_pack_kw` 里，收起再展开不会跑到别的位置去。
         """
         if parse_copyright(self._copyright_var.get()) == 2:
-            self._source_row.grid()
+            self._source_row.pack(**self._source_pack_kw)
         else:
-            self._source_row.grid_remove()
+            self._source_row.pack_forget()
         # 切换类型会改变「将发生什么」（自制/转载），但操作条可能还没建
         if hasattr(self, "_action_bar"):
             self._refresh_action_bar()
@@ -328,6 +681,8 @@ class UploadView(ttk.Frame):
         # 标题空着的话顺手填上文件名，省一次输入
         if not self._title_var.get().strip():
             self._title_var.set(Path(path).stem)
+        # 元信息探测：分辨率/时长/大小/编码/码率，让用户当场确认选对了文件
+        self._probe_meta(path)
 
     def _collect(self) -> TaskConfig:
         """从表单收集并校验，返回任务配置。"""
@@ -355,14 +710,22 @@ class UploadView(ttk.Frame):
         if copyright == 2 and not source:
             raise BiliError("选了「转载」就必须填转载来源（原视频链接或出处）")
 
+        title = self._title_var.get().strip()
+        if len(title) > MAX_TITLE:
+            raise BiliError(f"标题超过 {MAX_TITLE} 字（当前 {len(title)} 字）")
+        desc = self._desc_text.get("1.0", "end-1c").strip()
+        if len(desc) > MAX_DESC:
+            raise BiliError(f"简介超过 {MAX_DESC} 字（当前 {len(desc)} 字）")
+        tags = self._tag_field.text
+
         return TaskConfig(
             name=file.stem,
             type="single",
             file=str(file),
-            title=self._title_var.get().strip() or None,
+            title=title or None,
             tid=tid,
-            tag=self._tag_var.get().strip() or None,
-            desc=self._desc_var.get().strip() or None,
+            tag=tags or None,
+            desc=desc or None,
             copyright=copyright,
             source=source or None,
             dtime_offset_hours=offset,

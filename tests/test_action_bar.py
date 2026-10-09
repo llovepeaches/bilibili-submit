@@ -385,11 +385,16 @@ def test_upload_source_row_marked_required():
         theme.apply(style)
         app = type("App", (), {"ctx": None})()
         view = UploadView(root, app)
-        labels = [
-            child.cget("text")
-            for child in view._source_row.winfo_children()
-            if child.winfo_class() == "TLabel"
-        ]
+        labels = []
+
+        def collect_labels(widget):
+            """星号 label 嵌在字段格的标题行里，递归收集才找得全。"""
+            for child in widget.winfo_children():
+                if child.winfo_class() in ("TLabel", "Label"):
+                    labels.append(child.cget("text"))
+                collect_labels(child)
+
+        collect_labels(view._source_row)
         assert any("*" in text for text in labels), (
             f"转载来源必须有必填标记，实际标签：{labels}"
         )

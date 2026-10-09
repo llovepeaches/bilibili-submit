@@ -207,14 +207,14 @@ def test_probe_runs_off_main_thread_in_statusbar(monkeypatch):
         app.refresh_status()
 
         assert gate.wait(5), "状态栏探测线程没起来"
-        assert "检测中" in app._status_login.cget("text"), (
-            f"状态栏该显示检测中，实际 {app._status_login.cget('text')!r}"
+        assert "检测中" in app._statusbar.texts()[0], (
+            f"状态条该显示检测中，实际 {app._statusbar.texts()!r}"
         )
         assert probe_threads[0] != main_thread
 
         release.set()
-        run_until(root, lambda: "已登录" in app._status_login.cget("text"))
-        assert "ffmpeg 就绪" in app._status_ffmpeg.cget("text")
+        run_until(root, lambda: "已登录" in app._statusbar.texts()[0])
+        assert "ffmpeg 就绪" in app._statusbar.texts()[1]
     finally:
         release.set()
         root.destroy()
@@ -404,9 +404,9 @@ def test_statusbar_probe_failure_shows_error(monkeypatch):
         app, _view = _build(root, monkeypatch, probe=boom)
         app.refresh_status()
 
-        run_until(root, lambda: "检测失败" in app._status_ffmpeg.cget("text"))
-        assert "权限不足" in app._status_ffmpeg.cget("text")
-        assert "检测中" not in app._status_login.cget("text")
+        run_until(root, lambda: "检测失败" in app._statusbar.texts()[1])
+        assert "权限不足" in app._statusbar.texts()[1]
+        assert "检测中" not in app._statusbar.texts()[0]
     finally:
         root.destroy()
 
@@ -453,7 +453,7 @@ def test_stale_probe_result_does_not_overwrite(monkeypatch):
         # 第二次：新路径，先返回
         app.ctx.cookie_file = "/new/cookie.json"
         app.refresh_status()
-        run_until(root, lambda: "已登录" in app._status_login.cget("text"))
+        run_until(root, lambda: "已登录" in app._statusbar.texts()[0])
         assert app._status_generation > stale_generation, "第二次刷新应推进代号"
 
         # 盯住「旧代号有没有被试图应用」
@@ -473,8 +473,8 @@ def test_stale_probe_result_does_not_overwrite(monkeypatch):
         # after(0) 排进队列，update() 不处理普通 after 回调
         run_until(root, lambda: stale_arrived["n"] > 0, timeout_ms=5000)
 
-        assert "已登录" in app._status_login.cget("text"), (
-            f"旧结果覆盖了新的，实际 {app._status_login.cget('text')!r}"
+        assert "已登录" in app._statusbar.texts()[0], (
+            f"旧结果覆盖了新的，实际 {app._statusbar.texts()!r}"
         )
     finally:
         release_first.set()

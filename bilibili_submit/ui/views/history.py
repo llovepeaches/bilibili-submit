@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from ...scheduler import DEFAULT_HISTORY_FILE, read_history_diagnose
 from .. import layout, theme
-from ..widgets import Card, LogConsole, Placeholder, OutlinedButton, SectionTitle
+from ..widgets import Card, LogConsole, PageHeader, Placeholder, OutlinedButton
 
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
     from ._host import AppHost
@@ -43,9 +43,9 @@ class HistoryView(ttk.Frame):
         self._build()
 
     def _build(self) -> None:
-        SectionTitle(
+        PageHeader(
             self, "投稿历史", f"记录文件：{DEFAULT_HISTORY_FILE}"
-        ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_MD))
+        ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_LG))
 
         card = Card(self)
         card.grid(row=1, column=0, sticky="nsew")
