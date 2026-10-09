@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from typing import TYPE_CHECKING
 
 from ... import __version__
 from ...update import (
@@ -51,6 +52,9 @@ from ..widgets import (
 
 __all__ = ["SettingsView"]
 
+if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
+    from ._host import AppHost
+
 #: 下拉框选项顺序。跟随系统放第一个：它是默认值，也最不需要用户操心。
 THEME_OPTIONS = [THEME_MODE_LABELS[key] for key in ("system", "light", "dark")]
 
@@ -63,7 +67,7 @@ _UpdateResult = tuple[ReleaseInfo | None, bool]
 class SettingsView(ttk.Frame):
     """设置页。"""
 
-    def __init__(self, master: tk.Misc, app: "object") -> None:
+    def __init__(self, master: tk.Misc, app: "AppHost") -> None:
         super().__init__(master, style="TFrame")
         self.app = app
         self.columnconfigure(0, weight=1)

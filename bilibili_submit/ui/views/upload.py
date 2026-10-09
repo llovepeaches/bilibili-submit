@@ -10,6 +10,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import filedialog, ttk
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ...config import AppConfig, TaskConfig
 from ...exceptions import BiliError, NotLoggedInError
@@ -29,6 +30,9 @@ from ..widgets import (
     SectionTitle,
 )
 from ..workers import Cancelled, Worker
+
+if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
+    from ._host import AppHost
 
 __all__ = [
     "UploadView",
@@ -78,7 +82,7 @@ def copyright_option(value: int) -> str:
 class UploadView(ttk.Frame):
     """单文件投稿页。"""
 
-    def __init__(self, master: tk.Misc, app: "object") -> None:
+    def __init__(self, master: tk.Misc, app: "AppHost") -> None:
         super().__init__(master, style="TFrame")
         self.app = app
         self.columnconfigure(0, weight=1)

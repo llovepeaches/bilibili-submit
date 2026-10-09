@@ -8,10 +8,14 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from ...scheduler import DEFAULT_HISTORY_FILE, read_history_diagnose
 from .. import layout, theme
 from ..widgets import Card, LogConsole, Placeholder, SecondaryButton, SectionTitle
+
+if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
+    from ._host import AppHost
 
 __all__ = ["HistoryView"]
 
@@ -31,7 +35,7 @@ VISIBLE_LIMIT = 200
 class HistoryView(ttk.Frame):
     """投稿历史页。"""
 
-    def __init__(self, master: tk.Misc, app: "object") -> None:
+    def __init__(self, master: tk.Misc, app: "AppHost") -> None:
         super().__init__(master, style="TFrame")
         self.app = app
         self.columnconfigure(0, weight=1)

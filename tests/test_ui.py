@@ -1713,6 +1713,50 @@ def test_ui_modules_do_not_hardcode_colors():
     assert not offenders, f"界面层出现硬编码颜色，应改用 theme: {offenders}"
 
 
+def test_views_annotate_app_with_a_named_protocol():
+    """视图的 ``app`` 参数不许再写裸 ``"object"``——那等于没有类型。
+
+    裸 ``object`` 的问题是它骗得过一切：``self.app.ctx.proxy`` 拼错了
+    （``proxy`` 写成 ``porxy``）、或者 ``ctx`` 其实叫 ``context``，
+    类型检查器都不会吭声，因为 ``object`` 有任何属性。视图要读共享状态、
+    要刷新状态栏，那就把它真正需要的那一小面写出来——``AppHost``
+    Protocol 只要求 ``ctx`` 与 ``refresh_status()``。
+
+    五个视图必须指向**同一个**名字：各写各的（有的 ``AppHost``、有的
+    ``MainWindow``）等于没统一，编辑器提示也就对不上。
+
+    **只查视图，不查 ``tasks_run.py``**：``BatchRunController`` 拿宿主
+    是用 ``getattr(self._app, "set_task_progress", None)`` 防御式取的——
+    它服务的那一棒宿主未必有这些方法。而 ``AppHost`` 是个「一定有这个
+    成员」的承诺，拿它标注一个刻意容忍缺方法的控制器，等于让标注开始
+    撒谎，那比 ``Any`` 更糟。
+    """
+    import ast
+    from pathlib import Path
+
+    views = Path(__file__).resolve().parent.parent / "bilibili_submit" / "ui" / "views"
+    offenders = []
+    for path in sorted(views.glob("*.py")):
+        if path.name == "tasks_run.py":  # 见 docstring：它刻意容忍宿主缺方法
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.arg) or node.arg != "app":
+                continue
+            ann = ast.unparse(node.annotation) if node.annotation else None
+            # unparse 会把字符串标注连引号一起吐出来（'"AppHost"'），
+            # 两种写法在这里都算合格。
+            if ann is not None:
+                ann = ann.strip("\"'")
+            if ann != "AppHost":
+                offenders.append(f"{path.name}:{node.lineno} -> {ann}")
+    assert not offenders, (
+        "视图的 app 参数应标注为 AppHost（views/_host.py 里的 Protocol），"
+        f"而不是裸 object：{offenders}\n\n"
+        "裸 object 会让 self.app.ctx.proxy 这类拼写错误静默通过。"
+    )
+
+
 def test_two_pages_use_the_same_option_labels():
     """投稿页与批量页用同一组开关标签。
 

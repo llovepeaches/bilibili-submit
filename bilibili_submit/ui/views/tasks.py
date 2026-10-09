@@ -54,6 +54,7 @@ from .tasks_run import BatchRunController
 # 业务层——真正的调用已经归 BatchRunController。
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
     from ...scheduler import TaskOutcome
+    from ._host import AppHost
 
 from ..widgets import (
     ActionBar,
@@ -162,7 +163,7 @@ class SharedSubmitValues:
 class TasksView(ttk.Frame):
     """批量投稿页。"""
 
-    def __init__(self, master: tk.Misc, app: "object") -> None:
+    def __init__(self, master: tk.Misc, app: "AppHost") -> None:
         super().__init__(master, style="TFrame")
         self.app = app
         self.columnconfigure(0, weight=1)

@@ -14,6 +14,7 @@ from __future__ import annotations
 import time
 import tkinter as tk
 from tkinter import ttk
+from typing import TYPE_CHECKING
 
 from ...auth import (
     REQUIRED_COOKIES,
@@ -29,6 +30,9 @@ from .. import theme
 from ..qr import draw_placeholder, draw_qr
 from ..widgets import Card, LogConsole, PrimaryButton, SecondaryButton, SectionTitle
 from ..workers import Cancelled, Worker
+
+if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
+    from ._host import AppHost
 
 __all__ = ["LoginView"]
 
@@ -56,7 +60,7 @@ class LoginView(ttk.Frame):
     #: 见 :class:`_PendingQrCode`
     _PENDING_QR = _PendingQrCode()
 
-    def __init__(self, master: tk.Misc, app: "object") -> None:
+    def __init__(self, master: tk.Misc, app: "AppHost") -> None:
         super().__init__(master, style="TFrame")
         self.app = app
         self.columnconfigure(0, weight=1)

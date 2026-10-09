@@ -48,6 +48,15 @@ BUSINESS = {
 #: 纯组件层：只负责画控件和排版，不该认识任何业务概念
 PURE_UI = ["widgets.py", "theme.py", "layout.py", "qr.py", "workers.py"]
 
+#: 纯类型模块：里面**只有类型标注**，运行期不定义任何东西。
+#: 视图在 ``if TYPE_CHECKING`` 下引它们，标注能写准，运行期零依赖——
+#: 这是「标注不求值」（:mod:`__future__`）之外，另一种不给运行期添麻烦的方式。
+_PURE_TYPE_MODULES = {"_host.py"}
+
+#: ``views/tasks.py`` 在 ``if TYPE_CHECKING`` 下允许引入的名字。
+#: 键是名字，值是「它必须来自哪个纯类型模块」。
+TYPED_ONLY = {"TaskOutcome", "AppHost"}
+
 
 class ImportRef(NamedTuple):
     """一次 import 的解析结果。"""
@@ -207,8 +216,14 @@ def test_tasks_view_keeps_business_at_arms_length():
 
     ``scheduler`` 的 ``TaskOutcome`` 是个例外——它只出现在类型标注里，
     放在 ``if TYPE_CHECKING`` 下 import，运行期不产生依赖。但连它也
-    被钉死在「只允许这一个名字」上：想借类型标注之名再引一个业务符号，
+    被钉死在「只允许纯类型」上：想借类型标注之名再引一个业务符号，
     这条会先红。
+
+    ``views/_host.py`` 的 ``AppHost`` 也在这个例外名单里，而且比
+    ``TaskOutcome`` 更干净：它是一个 :class:`~typing.Protocol`，运行期
+    什么也不导入、什么也不定义。所以这份白名单放行的判据是**「纯类型」**
+    而不是「恰好只有这几个名字」——名单可以更新，但放行的前提是对
+    ``_is_business`` 之外的模块、且只出现在标注里。
     """
     path = UI_ROOT / "views" / "tasks.py"
     assert path.exists()
@@ -221,8 +236,20 @@ def test_tasks_view_keeps_business_at_arms_length():
         + "\n\nTasksView 只做装配。要调业务入口，放进 views/tasks_run.py。"
     )
 
-    typed_names = {name for ref in _imports(path) if ref.typed for name in ref.names}
-    assert typed_names <= {"TaskOutcome"}, (
+    typed_refs = [ref for ref in _imports(path) if ref.typed]
+    typed_names = {name for ref in typed_refs for name in ref.names}
+    assert typed_names <= TYPED_ONLY, (
         f"views/tasks.py 在 TYPE_CHECKING 下 import 了 {sorted(typed_names)}，"
-        "目前只允许 TaskOutcome（纯类型标注用）。"
+        f"目前只允许 {sorted(TYPED_ONLY)}（纯类型标注用）。\n\n"
+        "这里的每个名字都必须来自 UI 层自己的纯类型模块；"
+        "从业务层借一个符号进来（哪怕只用在标注里），这条会先红。"
     )
+    # 白名单不只是几个名字：它还钉住「这些名字来自纯类型模块」。
+    # 没有这一步，往白名单里加一个业务符号就能合法通过——
+    # 白名单会退化成一张许可名单，而不是一条判据。
+    for ref in typed_refs:
+        if ref.module.split(".")[-1] not in _PURE_TYPE_MODULES:
+            continue
+        assert not _is_business(ref.module), (
+            f"{ref.module} 被列为纯类型模块，但它其实在业务层名单里。"
+        )
