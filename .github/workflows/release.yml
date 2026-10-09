@@ -372,16 +372,29 @@ jobs:
           - 新号投稿频控较严，批量投稿请设置任务间隔。
           - 仅供管理自己的账号投稿使用。
           "@
-          gh release create $tag `
-            "dist\bilibili-submit-setup.exe#图形界面安装版（推荐，约 33MB）" `
-            "dist\bilibili-submit-gui-portable.exe#图形界面便携版（免安装，约 72MB）" `
-            "dist\bilibili-submit-standalone.exe#命令行单文件版（内置 ffmpeg，约 70MB）" `
-            "dist\bilibili-submit.exe#命令行轻量 exe（不含 ffmpeg，约 11MB）" `
-            "dist\bilibili-submit-full-windows.zip#命令行完整版（外置 ffmpeg，约 41MB）" `
-            "dist\bilibili-submit-mini-windows.zip#命令行轻量版（不含 ffmpeg，约 10MB）" `
-            --repo ${{ github.repository }} `
-            --title "bilibili-submit $tag" `
-            --notes $notes
+          # 带 rc / alpha / beta / pre 后缀的 tag 要建成 Pre-release。
+          # 不标的话 GitHub 会把它当正式版挂上「Latest」，路人点「下载最新版」
+          # 拿到的是候选版；update.py 虽然靠版本号后缀自己挡了一道
+          # （is_newer 默认 allow_prerelease=False），但不能只靠那一道。
+          $releaseArgs = @(
+            $tag,
+            "dist\bilibili-submit-setup.exe#图形界面安装版（推荐，约 33MB）",
+            "dist\bilibili-submit-gui-portable.exe#图形界面便携版（免安装，约 72MB）",
+            "dist\bilibili-submit-standalone.exe#命令行单文件版（内置 ffmpeg，约 70MB）",
+            "dist\bilibili-submit.exe#命令行轻量 exe（不含 ffmpeg，约 11MB）",
+            "dist\bilibili-submit-full-windows.zip#命令行完整版（外置 ffmpeg，约 41MB）",
+            "dist\bilibili-submit-mini-windows.zip#命令行轻量版（不含 ffmpeg，约 10MB）",
+            "--repo", "${{ github.repository }}",
+            "--title", "bilibili-submit $tag",
+            "--notes", $notes
+          )
+          if ($tag -match '-(rc|alpha|beta|pre)') {
+            $releaseArgs += "--prerelease"
+            Write-Host "tag 带预发布后缀，标记为 Pre-release"
+          }
+          # 数组直接传给原生命令即可展开成多个参数，不用 @splatting——
+          # 后者要 PowerShell 7.2+ 才对外部命令生效，没必要赌这个版本。
+          gh release create $releaseArgs
 
       - name: 打印下载链接
         if: always()
