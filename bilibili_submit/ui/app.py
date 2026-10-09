@@ -256,7 +256,7 @@ class App(ttk.Frame):
 
     # ---------- 响应式 ----------
 
-    def _on_root_configure(self, event: "tk.Event") -> None:
+    def _on_root_configure(self, event: tk.Event) -> None:
         """窗口尺寸变了就重新定档。
 
         四道闸，缺一道拖窗口时界面就会抖成一团：

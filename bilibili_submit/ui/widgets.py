@@ -317,11 +317,11 @@ class Collapsible(ttk.Frame):
         """设置收起时显示在右侧的提示文字。"""
         self._hint.configure(text=text)
 
-    def _on_click(self, _event: "tk.Event") -> str:
+    def _on_click(self, _event: tk.Event) -> str:
         self.set_opened(not self._opened)
         return "break"
 
-    def _on_hover(self, _event: "tk.Event") -> None:
+    def _on_hover(self, _event: tk.Event) -> None:
         """悬停时整条标题栏换底色。
 
         「这一行能点」本来只靠手型光标传达，而光标在快速划过时很
@@ -333,7 +333,7 @@ class Collapsible(ttk.Frame):
         """
         self._paint_header(theme.COLLAPSE_HOVER)
 
-    def _on_unhover(self, _event: "tk.Event") -> None:
+    def _on_unhover(self, _event: tk.Event) -> None:
         self._paint_header(theme.COLLAPSE_BG)
 
     def _paint_header(self, background: str) -> None:
@@ -561,7 +561,7 @@ def _round_rect_points(
     ]
 
 
-def _state_wants_disabled(name: "object") -> "bool | None":
+def _state_wants_disabled(name: object) -> bool | None:
     """把 ``"disabled"`` / ``"!disabled"`` 翻译成布尔。
 
     ttk 的状态写法是 ``["disabled"]`` 置位、``["!disabled"]`` 清位，
@@ -615,9 +615,9 @@ class FluentButton(tk.Canvas):
 
     def __init__(
         self,
-        master: "tk.Misc",
+        master: tk.Misc,
         text: str = "",
-        command: "Callable[[], None] | None" = None,
+        command: Callable[[], None] | None = None,
         *,
         variant: str = STANDARD,
         height: int | None = None,
@@ -681,7 +681,7 @@ class FluentButton(tk.Canvas):
             return
         self._command()
 
-    def configure(self, cnf: "object" = None, **kw: "object") -> "object":
+    def configure(self, cnf: object = None, **kw: object) -> object:
         """支持 ``text`` / ``command`` / ``state`` / ``background`` 等。"""
         merged: dict[str, object] = {}
         if isinstance(cnf, dict):
@@ -702,7 +702,7 @@ class FluentButton(tk.Canvas):
 
     config = configure
 
-    def cget(self, key: str) -> "object":
+    def cget(self, key: str) -> object:
         if key == "text":
             return self._text
         if key == "state":
@@ -742,14 +742,14 @@ class FluentButton(tk.Canvas):
         self.bind("<Return>", self._on_key)
         self.bind("<space>", self._on_key)
 
-    def _on_press(self, _event: "tk.Event") -> str:
+    def _on_press(self, _event: tk.Event) -> str:
         if self._disabled:
             return "break"
         self._pressed = True
         self._paint()
         return "break"
 
-    def _on_release(self, _event: "tk.Event") -> str:
+    def _on_release(self, _event: tk.Event) -> str:
         if self._disabled:
             return "break"
         was_pressed = self._pressed
@@ -760,27 +760,27 @@ class FluentButton(tk.Canvas):
             self.invoke()
         return "break"
 
-    def _on_enter(self, _event: "tk.Event") -> None:
+    def _on_enter(self, _event: tk.Event) -> None:
         if self._disabled:
             return
         self._hovered = True
         self._paint()
 
-    def _on_leave(self, _event: "tk.Event") -> None:
+    def _on_leave(self, _event: tk.Event) -> None:
         self._hovered = False
         self._pressed = False
         self._paint()
 
-    def _on_focus_in(self, _event: "tk.Event") -> None:
+    def _on_focus_in(self, _event: tk.Event) -> None:
         self._focused = True
         self._paint()
 
-    def _on_focus_out(self, _event: "tk.Event") -> None:
+    def _on_focus_out(self, _event: tk.Event) -> None:
         self._focused = False
         self._pressed = False
         self._paint()
 
-    def _on_key(self, _event: "tk.Event") -> str:
+    def _on_key(self, _event: tk.Event) -> str:
         self.invoke()
         return "break"
 
@@ -1099,20 +1099,20 @@ class NavItem(tk.Frame):
 
     # ---------- 内部 ----------
 
-    def _on_click(self, _event: "object" = None) -> None:
+    def _on_click(self, _event: object = None) -> None:
         if self._command:
             self._command()
 
-    def _on_enter(self, _event: "object" = None) -> None:
+    def _on_enter(self, _event: object = None) -> None:
         if not self._active:
             self._hovered = True
             self._render()
 
-    def _on_leave(self, _event: "object" = None) -> None:
+    def _on_leave(self, _event: object = None) -> None:
         self._hovered = False
         self._render()
 
-    def _on_configure(self, _event: "object" = None) -> None:
+    def _on_configure(self, _event: object = None) -> None:
         # pack 拉伸 / 窗口折叠都会走到这里：药丸宽度变了，重画
         self._relayout()
 
@@ -1152,7 +1152,7 @@ class NavItem(tk.Frame):
         )
         canvas.tag_lower(self._pill_item)
 
-    def _relayout(self, _event: "object" = None) -> None:
+    def _relayout(self, _event: object = None) -> None:
         """重画药丸并重排图标/文字。
 
         折叠态把图标挪到药丸正中；展开态图标靠左、文字跟在后面。
@@ -1344,13 +1344,13 @@ class ActionBar(tk.Frame):
         """次操作按钮。调用方要控制它的启用状态时用这个拿。"""
         return self._secondary
 
-    def _fire_submit(self, _event: "object" = None) -> str:
+    def _fire_submit(self, _event: object = None) -> str:
         """Ctrl+Enter。禁用时不响应——快捷键不能绕过禁用状态。"""
         if self._primary is not None and "disabled" not in self._primary.state():
             self._on_submit()
         return "break"
 
-    def _fire_cancel(self, _event: "object" = None) -> str:
+    def _fire_cancel(self, _event: object = None) -> str:
         self._on_cancel()
         return "break"
 

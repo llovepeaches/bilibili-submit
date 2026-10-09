@@ -96,12 +96,12 @@ class TaskTable:
         self,
         master: tk.Misc,
         *,
-        append_log: "object",
-        is_editable: "object",
-        on_changed: "object",
-        on_filled: "object",
-        read_tid: "object",
-        source_mode: "object",
+        append_log: object,
+        is_editable: object,
+        on_changed: object,
+        on_filled: object,
+        read_tid: object,
+        source_mode: object,
     ) -> None:
         self._append_log = append_log
         self._is_editable = is_editable
@@ -204,7 +204,7 @@ class TaskTable:
         self._on_filled(bool(tasks))
         self._on_changed()
 
-    def resize_columns(self, _event: "tk.Event | None" = None) -> None:
+    def resize_columns(self, _event: tk.Event | None = None) -> None:
         """按权重把可用宽度分给各列。
 
         只在宽度真的变了时动手：``<Configure>`` 在布局的每一步都会触发，

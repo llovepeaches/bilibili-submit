@@ -235,7 +235,7 @@ class LoginView(ttk.Frame):
         self._link.configure(text=f"扫码不便？点此复制链接：{url}")
         self._status.configure(text="等待扫码…", foreground=theme.INK_SECOND)
 
-    def _copy_link(self, _event: "object" = None) -> None:
+    def _copy_link(self, _event: object = None) -> None:
         if not self._qr_url:
             return
         self.clipboard_clear()

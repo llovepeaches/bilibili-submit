@@ -88,7 +88,7 @@ def system_prefers_light() -> bool:
         return True
 
 
-def apply_window_effects(root: "tk.Tk", dark: bool) -> None:
+def apply_window_effects(root: tk.Tk, dark: bool) -> None:
     """给窗口套上系统效果。
 
     Args:

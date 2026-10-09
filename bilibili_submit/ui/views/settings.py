@@ -230,11 +230,11 @@ class SettingsView(ttk.Frame):
             self._cookie_var.set(ctx.cookie_file)
         self._theme_var.set(THEME_MODE_LABELS[load_app_state().theme_mode])
 
-    def _on_proxy_change(self, *_: "object") -> None:
+    def _on_proxy_change(self, *_: object) -> None:
         value = self._proxy_var.get().strip()
         self.app.ctx.proxy = value or None
 
-    def _on_theme_change(self, *_: "object") -> None:
+    def _on_theme_change(self, *_: object) -> None:
         """存下主题选择。
 
         只写文件，**不重画界面**：tk/ttk 的颜色在创建控件时就写进去了，

@@ -288,7 +288,7 @@ class TasksView(ttk.Frame):
         self._shared_section.grid(row=0, column=0, sticky="ew")
         shared = self._shared_section.body
 
-        self._tid_var = tk.StringVar(value=tid_option(DEFAULT_TID))
+        self._tid_var = tk.StringVar(value=_tid_option(DEFAULT_TID))
         row = FormRow(
             shared,
             "分区",
@@ -594,9 +594,9 @@ class TasksView(ttk.Frame):
         self._tag_var.set(state.tag)
         self._desc_var.set(state.desc)
         self._dtime_var.set(
-            "" if state.dtime_offset_hours is None else _fmt_offset(state.dtime_offset_hours)
+            "" if state.dtime_offset_hours is None else _format_offset(state.dtime_offset_hours)
         )
-        self._tid_var.set(tid_option(state.tid))
+        self._tid_var.set(_tid_option(state.tid))
         self._copyright_var.set(copyright_option(state.copyright))
         self._source_var.set(state.source)
         # 显隐要跟着恢复的值走，否则上次选了转载、这次打开来源框是收起的，
@@ -658,7 +658,7 @@ class TasksView(ttk.Frame):
         """
         parts: list[str] = []
         tid = self._tid_var.get().strip()
-        if tid and tid != tid_option(DEFAULT_TID):
+        if tid and tid != _tid_option(DEFAULT_TID):
             parts.append(tid)
         if self._tag_var.get().strip():
             parts.append(f"标签 {self._tag_var.get().strip()}")
@@ -941,7 +941,7 @@ class TasksView(ttk.Frame):
 
     # ---------- 勾选（实现在 TaskTable） ----------
 
-    def _resize_columns(self, _event: "tk.Event | None" = None) -> None:
+    def _resize_columns(self, _event: tk.Event | None = None) -> None:
         """按权重把可用宽度分给各列。实现在 :meth:`TaskTable.resize_columns`。"""
         self._table.resize_columns(_event)
 
@@ -1375,13 +1375,20 @@ def _parse_offset(text: str) -> float | None:
         raise BiliError(f"延时发布小时数不是数字: {raw}") from exc
 
 
-def _fmt_offset(value: float) -> str:
+def _format_offset(value: float) -> str:
     """小时数回填到输入框。整数就不带 ``.0``。"""
     return str(int(value)) if value == int(value) else str(value)
 
 
-def tid_option(tid: int) -> str:
-    """分区号 → 下拉框里的文字，认不出来的分区原样显示。"""
+def _tid_option(tid: int) -> str:
+    """分区号 → 下拉框里的文字，认不出来的分区原样显示。
+
+    ``tid`` 是 B 站接口里的 ``type id``（投稿分区），也就是
+    :attr:`TaskConfig.tid` 那个字段——项目里另有 ``DEFAULT_TID``、
+    ``TID_OPTIONS``、``parse_tid``，一律沿用同一个缩写。**不要展开成
+    ``type_id``**：那样代码里的名字就和接口字段脱节了，读代码的人得
+    先知道「tid 是 type id」才能对上。
+    """
     for text in TID_OPTIONS:
         if parse_tid(text) == tid:
             return text

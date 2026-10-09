@@ -86,7 +86,7 @@ class HistoryView(ttk.Frame):
         self._log = LogConsole(card, height=4)
         self._log.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
 
-    def _resize_columns(self, _event: "tk.Event | None" = None) -> None:
+    def _resize_columns(self, _event: tk.Event | None = None) -> None:
         """按权重把可用宽度分给各列。
 
         和批量任务页走同一个 :func:`layout.column_widths`。之前这里写死
@@ -159,7 +159,7 @@ class HistoryView(ttk.Frame):
                 child.configure(text=text)
 
 
-def _format_time(stamp: "object") -> str:
+def _format_time(stamp: object) -> str:
     """把 Unix 时间戳转成可读时间，无效值显示 ?。"""
     try:
         value = float(stamp)  # type: ignore[arg-type]

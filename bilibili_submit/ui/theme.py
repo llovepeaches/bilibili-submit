@@ -240,7 +240,7 @@ def register_fonts(force: bool = False) -> dict[str, str]:
     return dict(_REGISTERED)
 
 
-def measure_font(role: str = "body") -> "object":
+def measure_font(role: str = "body") -> object:
     """取一个用于测量文字宽度的 ``tkfont.Font``（走已注册的字阶）。
 
     组件自绘文字（Canvas 按钮）时用它算宽度——测量和绘制必须用
@@ -602,7 +602,7 @@ def tone_glyph(name: str) -> str:
     return TONE_GLYPHS.get(name, TONE_GLYPHS["idle"])
 
 
-def apply_tree_tags(tree: "object") -> None:
+def apply_tree_tags(tree: object) -> None:
     """给 Treeview 配好状态行着色，是**唯一**的配色来源。
 
     ttk 的 Treeview 行着色只能靠 tag，散在各视图里各配一份迟早会
