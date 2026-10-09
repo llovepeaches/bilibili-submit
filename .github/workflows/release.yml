@@ -185,8 +185,19 @@ jobs:
 
           # 安装器本体：编译成功还不够，必须真的装一遍——"装完双击闪退"
           # 这种问题只有装过才知道。
-          $setup = ".\dist\bilibili-submit-setup.exe"
+          #
+          # ⚠️ 刻意**不从 dist\ 里直接跑**：安装器里的 {src} 是它自己
+          # 所在的目录，在 dist\ 下跑就等于让 {src} 恰好等于产物目录，
+          # 任何依赖 {src} 的代码在这儿都"碰巧正确"。而用户是从「下载」
+          # 文件夹双击的，{src} 是下载目录——曾经就有一版安装器在
+          # InitializeSetup 里拼 {src} 找产物，CI 一路绿、每个下载者
+          # 都装不上。所以先把它拷到一个干净目录，模拟真实场景。
+          $downloads = Join-Path $env:RUNNER_TEMP "fake-downloads"
+          New-Item -ItemType Directory -Path $downloads -Force | Out-Null
+          Copy-Item ".\dist\bilibili-submit-setup.exe" "$downloads\" -Force
+          $setup = Join-Path $downloads "bilibili-submit-setup.exe"
           if (-not (Test-Path $setup)) { throw "安装器未生成: $setup" }
+          Write-Host "从 $setup 安装（模拟用户从下载目录双击）"
           $setupMB = [math]::Round((Get-Item $setup).Length / 1MB, 1)
           Write-Host "安装器体积: $setupMB MB"
           if ($setupMB -lt 20) {

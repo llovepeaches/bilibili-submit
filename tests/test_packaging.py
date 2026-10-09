@@ -392,6 +392,45 @@ def test_ci_waits_for_the_installer_process():
     )
 
 
+def test_ci_installs_setup_from_a_neutral_directory():
+    """CI 必须把安装器拷到别处再装，不能就地从 ``dist\\`` 跑。
+
+    ``{src}`` 是**安装器 exe 所在的目录**。在 ``dist\\`` 下跑安装，
+    ``{src}`` 恰好等于产物目录，任何依赖它的代码都「碰巧正确」；而用户
+    是从「下载」文件夹双击的，``{src}`` 是下载目录。
+
+    这两者的差别不是理论问题：曾经有一版安装器在 ``InitializeSetup``
+    里拼 ``{src}`` 找打包产物，找不到就中止安装——CI 一路绿，每个下载
+    者都装不上，整整一个版本都没人发现。把安装器拷到 ``RUNNER_TEMP``
+    下再装，这类 bug 才会在 CI 上现形。
+    """
+    for path in (INSTALLER_YML, RELEASE_YML):
+        body = "\n".join(
+            line for line in path.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith("#")
+        )
+        # ① 真的把安装器拷出去了（源在 dist\ 里，目标不在）
+        destinations = re.findall(
+            r"Copy-Item\s+\"?[^\s\"]*bilibili-submit-setup\.exe\"?\s+(\S+)",
+            body,
+        )
+        assert destinations, (
+            f"{path.name} 就地跑 dist\\bilibili-submit-setup.exe——{{src}} 会"
+            "恰好等于产物目录，依赖 {src} 的代码在 CI 上永远通过、在用户"
+            "机器上永远失败。先 Copy-Item 到别的目录再装"
+        )
+        assert not any("dist" in dest.lower() for dest in destinations), (
+            f"{path.name} 把安装器拷回了 dist\\ 下（{destinations}）——等于没拷"
+        )
+        # ② 真正交给 Start-Process 的路径也不在 dist\ 里
+        assigned = re.findall(r"\$setup\s*=\s*(.+)$", body, re.MULTILINE)
+        assert assigned, f"{path.name} 里找不到 $setup 的赋值"
+        assert not any("dist" in value.lower() for value in assigned), (
+            f"{path.name} 的 $setup 仍指向 dist\\（{assigned}）——{{src}} 会"
+            "等于产物目录，测不出用户机器上的失败"
+        )
+
+
 def test_artifacts_are_checked_at_build_time_not_install_time():
     """产物齐不齐全要在**构建期**查，不能放进安装器里查。
 
