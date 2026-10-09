@@ -233,12 +233,37 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Err: String;
 begin
   { ssInstall 是「真的要开始装了」，此时消息文件已经定下来。
     更早的 InitializeSetup 也行，但 CurStepChanged 顺带能确认
     前面几页都没中止掉——探针跑在真正安装的路径上，测的才是
     用户会遇到的那条路。 }
-  if CurStep = ssInstall then
-    if ParamExists('/LANGCHECK') then
-      WriteLangReport;
+  if (CurStep <> ssInstall) or not ParamExists('/LANGCHECK') then
+    Exit;
+
+  { ⚠️ 探针**必须**吞掉自己的异常。
+    不吞的话，它一出问题（常量没展开、临时目录不可写……）就会连带
+    中止整个安装，CI 看到的是「静默安装失败 (3)」——退出码 3 是
+    「用户取消」，跟探针八竿子打不着，排查方向会被彻底带偏。
+    而探针报错时最该做的是**把原因说出来**，不是让安装崩掉。
+
+    这段 try/except 不是防御性冗余，是这个探针能存在的条件：
+    它跑在用户的安装路径上，任何未捕获的异常都会变成「装不上」。
+
+    CI 上真栽过：第一版探针没包 try/except，ISCC 编译通过、
+    静默安装 3 秒就退出码 3，日志里什么都看不到。 }
+  try
+    WriteLangReport;
+  except
+    { 异常消息本身可能含中文（Inno 自己的报错就是中文的），而
+      SaveStringToFile 按 ACP 编码，写出去会变问号——所以只把它
+      当「有没有出错」的信号，不指望读到内容。要看原文得让安装器
+      带 /LOG，那会另开一个日志文件。 }
+    Err := GetExceptionMessage;
+    SaveStringToFile(ExpandConstant('{tmp}\lang-report.txt'),
+      'lang=' + ActiveLanguage + #13#10 + 'probe_error=1' + #13#10
+      + 'probe_error_len=' + IntToStr(Length(Err)) + #13#10, False);
+  end;
 end;

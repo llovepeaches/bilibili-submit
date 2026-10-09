@@ -46,6 +46,18 @@ foreach ($line in Get-Content -LiteralPath $ReportPath -Encoding ASCII) {
 }
 Write-Host "语言报告内容：$($report | Out-String)"
 
+# 0) 探针自己报错了 —— 这是**先**要看的。探针跑在安装路径上，
+#    它一崩安装就中止（退出码 3 = 「用户取消」，跟探针毫无关系，
+#    排查方向会被带偏）。所以它自带 try/except 把原因写进报告。
+#    这一条必须排在最前面，否则下面会报「语言是 chinese 但四项
+#    都缺」，而真原因是探针压根没跑完。
+if ($report.ContainsKey('probe_error')) {
+    throw ("安装器里的探针自己抛异常了（异常消息长度 " +
+        "$($report['probe_error_len']) 字符）。看 %TEMP% 下 Inno 自己" +
+        '的安装日志（CI 那步传了 /LOG）——消息是中文的，ACP 编码后' +
+        '这里读不到内容。**不是向导的问题，是探针没跑成**。')
+}
+
 # 1) 语言名。Name 写的是 chinese，但那只是下拉框显示的名字，
 #    MessagesFile 才是决定文案的那一半——这个坑栽过。
 if ($report['lang'] -ne 'chinese') {

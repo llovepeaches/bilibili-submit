@@ -1239,6 +1239,19 @@ def test_release_notes_survive_powershell_escaping():
         assert name in expanded, f"展开后的 notes 里文件名不完整: {name}"
 
 
+def _strip_pascal_comments(text: str) -> str:
+    """剥掉 Pascal Script 的注释（``{...}`` 块注释与 ``//`` 行注释）。
+
+    查代码结构时**必须**先剥注释。这段 [Code] 里到处是解释性的
+    注释，而它们恰好会提到自己要讲的那些关键词——「这段 try/except
+    不是防御性冗余」这句话里就有 try/except。直接在原文里搜关键词，
+    把真正的代码删掉都照样绿。
+    """
+    text = re.sub(r"\{[^}]*\}", "", text)          # { 块注释 }
+    text = re.sub(r"//[^\n]*", "", text)            # // 行注释
+    return text
+
+
 def test_installer_ships_a_language_probe_for_ci():
     """``installer.iss`` 的 ``[Code]`` 段必须带一个**只在开关下动作**的语言探针。
 
@@ -1321,6 +1334,30 @@ def test_installer_ships_a_language_probe_for_ci():
         f"SaveStringToFile 传了 {len(args)} 个参数，应为 3"
         "（文件名、内容、Append）——少一个编译期就报 "
         "\"Invalid number of parameters\"，而那句话指不到真正的原因"
+    )
+
+    # 探针跑在**用户的安装路径**上，所以它自己的异常必须吞掉。
+    # 不吞的后果不是「探针坏掉」，而是「安装中止」：退出码 3 意思是
+    # 「用户取消」，跟探针八竿子打不着，CI 上照着这个码查会一路跑偏。
+    # 第一版探针就栽在这里——ISCC 编译通过，静默安装 3 秒退出码 3，
+    # 日志里什么都没打出来。
+    # ⚠️ 必须先剥掉注释再查关键词。段里那段注释**本身**就写着
+    # 「这段 try/except 不是防御性冗余」——直接在原文里搜 try/except，
+    # 删掉真正的 try 块它照样绿。第一版守卫就栽在这儿（变异自检时
+    # 发现的：把 try/except 换成 begin/end 后测试仍然通过）。
+    body = _strip_pascal_comments(code)
+    cur = re.search(r"procedure CurStepChanged\(.*?\bend;", body, re.DOTALL)
+    assert cur, "[Code] 段里找不到 CurStepChanged"
+    body = cur.group(0)
+    assert re.search(r"\btry\b", body) and re.search(r"\bexcept\b", body), (
+        "CurStepChanged 的**代码**里没有 try/except——探针抛异常会连带"
+        "中止安装，而退出码 3（用户取消）完全指不到探针头上"
+    )
+    # 吞掉之后得把「我出错了」写出来，否则安装是装完了，报告却是空的，
+    # 校验脚本只会说「找不到报告」，还是指不到真原因
+    assert "probe_error=1" in body, (
+        "except 分支的**代码**里没有写 probe_error=1——异常被吞掉后没人知道，"
+        "校验脚本只会报「找不到语言报告」，排查方向照样跑偏"
     )
 
     # [Code] 段的**最后一个** end; 之后不许再有任何内容。

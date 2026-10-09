@@ -150,7 +150,9 @@ jobs:
           # /LANGCHECK：打开 installer.iss [Code] 段里的语言探针，让安装器
           # 把「运行时真正生效的那几条消息里有没有汉字」写成 ASCII 报告。
           # 只在这个开关存在时才动作，正常用户安装不会多出文件。
-          $setupArgs = @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/CURRENTUSER","/LANGCHECK")
+          # /LOG：Inno 自己写安装日志。探针的异常消息是中文的，
+          # 经 ACP 编码后报告里读不到内容，只能靠这个日志看原文。
+          $setupArgs = @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/CURRENTUSER","/LANGCHECK","/LOG")
           Write-Host "开始静默安装..."
           $setupProc = Start-Process -FilePath $setup -ArgumentList $setupArgs -PassThru
           $waited = 0
@@ -164,7 +166,23 @@ jobs:
             throw "静默安装超时（${waited}s）——安装器卡住了（多半是 UAC 提权）"
           }
           Write-Host "安装结束，退出码 $($setupProc.ExitCode)，耗时 ${waited}s"
-          if ($setupProc.ExitCode -ne 0) { throw "静默安装失败 ($($setupProc.ExitCode))" }
+          if ($setupProc.ExitCode -ne 0) {
+            # 安装失败时把 Inno 自己的日志打出来：退出码只说「失败」，
+            # 原因（比如探针抛的异常）只写在日志里。不打的话，CI 上一片
+            # 空白，只能靠猜——上一版就因为这样卡了好几轮。
+            # 编码按 Unicode 读：Inno 的日志是 UTF-16，中文报错用默认
+            # 编码读出来是乱码，反而更难认。
+            $innoLog = Get-ChildItem "$env:TEMP\Setup Log*.txt" -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($innoLog) {
+              Write-Host "--- Inno 安装日志 $($innoLog.FullName) ---"
+              Get-Content -LiteralPath $innoLog.FullName -Encoding Unicode |
+                Select-Object -Last 40 | ForEach-Object { Write-Host "  $_" }
+            } else {
+              Write-Host "没找到 Inno 安装日志（$env:TEMP 下没有 Setup Log*.txt）"
+            }
+            throw "静默安装失败 ($($setupProc.ExitCode))"
+          }
           Start-Sleep -Seconds 3
 
           $app = "$env:LOCALAPPDATA\Programs\bilibili-submit"
