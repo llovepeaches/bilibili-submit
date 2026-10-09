@@ -42,12 +42,12 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 
 | 资产 | 体积 | 说明 |
 |---|---|---|
-| [`bilibili-submit-setup.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.5/bilibili-submit-setup.exe) | ~33 MB | **图形界面 · 安装版（推荐）**。开始菜单有入口，能干净卸载 |
-| [`bilibili-submit-gui-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.5/bilibili-submit-gui-portable.exe) | ~72 MB | 图形界面 · 便携版，免安装，拷走即用 |
-| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.5/bilibili-submit-standalone.exe) | ~70 MB | 命令行 · 单文件，ffmpeg 已内置 |
-| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.5/bilibili-submit.exe) | ~10 MB | 命令行 · 轻量 exe |
-| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.5/bilibili-submit-full-windows.zip) | ~41 MB | 命令行 · 轻量 exe + 外置 ffmpeg，启动最快 |
-| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.5/bilibili-submit-mini-windows.zip) | ~10 MB | 命令行 · 轻量 exe + 配置与文档 |
+| [`bilibili-submit-setup.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.6/bilibili-submit-setup.exe) | ~33 MB | **图形界面 · 安装版（推荐）**。开始菜单有入口，能干净卸载 |
+| [`bilibili-submit-gui-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.6/bilibili-submit-gui-portable.exe) | ~72 MB | 图形界面 · 便携版，免安装，拷走即用 |
+| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.6/bilibili-submit-standalone.exe) | ~70 MB | 命令行 · 单文件，ffmpeg 已内置 |
+| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.6/bilibili-submit.exe) | ~10 MB | 命令行 · 轻量 exe |
+| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.6/bilibili-submit-full-windows.zip) | ~41 MB | 命令行 · 轻量 exe + 外置 ffmpeg，启动最快 |
+| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.7-rc.6/bilibili-submit-mini-windows.zip) | ~10 MB | 命令行 · 轻量 exe + 配置与文档 |
 
 **怎么选**：用图形界面 → 自己的电脑长期用装 `setup`，临时用 / U 盘 /
 别人的机器用 `portable`。用命令行 → 图省事就 `standalone`，在意体积和
