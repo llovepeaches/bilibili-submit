@@ -57,8 +57,22 @@ _COLUMN_MIN_WIDTHS = {
 #: 短内容居中更整齐，长文本左对齐更好扫读
 _CENTERED_COLUMNS = ("pick", "parts", "tid", "status")
 
+#: 状态列最多显示多少字。超出的部分存起来，双击看全文
+STATUS_MAX = 18
+
 PICKED = "✓"
 UNPICKED = ""
+
+
+def _truncate(text: str, limit: int = STATUS_MAX) -> str:
+    """截断长文本，保留尾部信息（错误原因的尾巴通常更有用）。
+
+    不从头截：``601 投稿过于频繁，等待 30 分钟后重试`` 截成
+    ``601 投稿过于频繁…`` 比 ``…30 分钟后重试`` 更好懂。
+    """
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
 
 
 def _column_widths(total: int) -> dict[str, int]:

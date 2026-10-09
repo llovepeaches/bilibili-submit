@@ -28,9 +28,9 @@ from typing import Any, Literal
 
 from ...config import AppConfig, TaskConfig, expand_tasks, load_config, scan_video_files
 from ...config import task_files
-from ...exceptions import BiliError, ConfigError, NotLoggedInError
+from ...exceptions import BiliError, ConfigError
 from ...multipart import PartGroup, group_files
-from ...scheduler import RunOptions, TaskOutcome, run_task
+from ...scheduler import TaskOutcome, run_task
 from ...submit import get_backend
 from .. import layout, theme
 from ..state import BatchUIState, DEFAULT_TID, load_ui_state, save_ui_state
@@ -46,9 +46,11 @@ from .tasks_table import (  # noqa: F401
     _COLUMN_MIN_WIDTHS,
     _COLUMN_WEIGHTS,
     _column_widths,
+    _truncate,
 )
 # PartTitlesDialog 同上：实现在 tasks_editor，测试仍从本模块 import。
 from .tasks_editor import PartTitlesDialog, TaskEditor, render_title_template  # noqa: F401
+from .tasks_run import BatchRunController
 from ..widgets import (
     ActionBar,
     Collapsible,
@@ -64,7 +66,7 @@ from ..widgets import (
     SummaryBar,
     TertiaryButton,
 )
-from ..workers import Cancelled, Event, Worker
+from ..workers import Cancelled, Worker
 from .upload import (
     COPYRIGHT_OPTIONS,
     COPYRIGHT_SELF_MADE,
@@ -97,26 +99,12 @@ GROUP_MODE_BY_LABEL = {
 }
 GROUP_LABEL_BY_MODE = {mode: label for label, mode in GROUP_MODE_BY_LABEL.items()}
 
-#: 状态列最多显示多少字。超出的部分存起来，双击看全文
-STATUS_MAX = 18
-
 #: 任务来源
 #:
 #: ``folder`` 是默认路径，不碰 yaml；``yaml`` 是高级兼容路径，
 #: 此时顶部统一参数**不可编辑**——配置里的逐任务 tid、title_template、
 #: submit.backend 会被统一参数覆盖掉，那些能力就等于没了。
 SourceMode = Literal["folder", "yaml"]
-
-
-def _truncate(text: str, limit: int = STATUS_MAX) -> str:
-    """截断长文本，保留尾部信息（错误原因的尾巴通常更有用）。
-
-    不从头截：``601 投稿过于频繁，等待 30 分钟后重试`` 截成
-    ``601 投稿过于频繁…`` 比 ``…30 分钟后重试`` 更好懂。
-    """
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1] + "…"
 
 
 @dataclass(frozen=True)
@@ -222,6 +210,38 @@ class TasksView(ttk.Frame):
             save_state=lambda: self._save_state(),
             asker=lambda *args, **kwargs: self._ask_titles(*args, **kwargs),
         )
+
+        #: 一轮「开始投稿」的完整生命周期，见 :mod:`~.tasks_run`。
+        #: ``_worker`` 仍归本视图所有（测试会直接动它），这里只把实例传进去。
+        self._runner = BatchRunController(
+            app=self.app,
+            worker=self._worker,
+            table=self._table,
+            log=self._log,
+            progress=self._progress,
+            read_tasks=lambda: self._tasks,
+            read_cfg=lambda: self._cfg,
+            read_source_mode=lambda: self._source_mode,
+            collect_shared=lambda: self._collect_shared(),
+            set_busy=lambda *args, **kwargs: self._set_busy(*args, **kwargs),
+            is_editable=lambda: self._editable(),
+            update_summary=lambda: self._update_summary(),
+            select_failed=lambda: self._select_failed(),
+            # _active_worker 仍归本视图：目录加载那条流程也用它，
+            # 取消按钮要作用于「当前那一个」，放在视图上才是单一事实来源
+            read_active_worker=lambda: self._active_worker,
+            write_active_worker=self._set_active_worker,
+            # 延迟查找本模块的 run_task / get_backend：它们是从业务层
+            # import 进来的，测试替换的是**本模块**上的名字。直接把函数
+            # 对象传过去的话，构造那一刻就固定了，打桩换不掉——
+            # 那会让「挡掉真实网络调用」的测试静默走真实路径。
+            run_task=lambda *a, **k: run_task(*a, **k),
+            get_backend=lambda *a, **k: get_backend(*a, **k),
+        )
+
+    def _set_active_worker(self, worker) -> None:
+        """当前正在跑的 worker（执行或加载）——取消按钮作用于它。"""
+        self._active_worker = worker
 
     # ---------- 布局 ----------
 
@@ -1006,96 +1026,27 @@ class TasksView(ttk.Frame):
     def _snapshot_run(
         self, indexes: list[int]
     ) -> tuple[AppConfig, list[tuple[int, TaskConfig]]]:
-        """为本轮执行做完整快照。
+        """为本轮执行做完整快照。实现在 :meth:`BatchRunController.snapshot_run`。
 
-        **工作线程不许读页面上的可变属性**。``self._tasks`` /
-        ``self._cfg`` 随时可能被下一次「重新扫描」整体换掉，而执行线程
-        正逐项遍历它——换掉一半的话，投出去的是新任务里的一半、参数却
-        还是旧的。所以这里在主线程把要用的东西全拷出来再传进去。
+        **工作线程不许读页面上的可变属性**——原因写在那边。
         """
-        cfg = replace(self._cfg) if self._source_mode == "yaml" else AppConfig()
-        if self._source_mode == "folder":
-            shared = self._collect_shared()
-            # 转载缺来源时，服务端对每个稿件都回一句 21004——与其让整批
-            # 逐个失败、列表一片红，不如在开始前就拦住
-            if shared.copyright == 2 and not shared.source.strip():
-                raise BiliError("选了「转载」就必须填转载来源（原视频链接或出处）")
-            selected = [
-                (index, shared.apply(self._tasks[index])) for index in indexes
-            ]
-        else:
-            selected = [
-                (index, replace(self._tasks[index])) for index in indexes
-            ]
-        return cfg, selected
+        return self._runner.snapshot_run(indexes)
 
     def _run(self) -> None:
-        # 用 _editable 而不是 _worker.running：界面还锁着就说明这一轮
-        # 还没收尾，此时再启动一个 Worker 会和上一轮的收尾回调打架
-        if not self._editable():
-            return
-        indexes = self._selected_indexes()
-        if not indexes:
-            self._log.append("没有勾选任何任务")
-            return
-        if not self.app.ctx.logged_in:
-            self._log.append("尚未登录，请先到「登录」页扫码")
-            return
-        try:
-            cfg, selected = self._snapshot_run(indexes)
-        except BiliError as exc:
-            self._log.append(f"参数有误：{exc}")
-            return
-
-        self._set_busy(True)
-        try:
-            self._log.clear()
-            self._progress.reset()
-            self._active_worker = self._worker
-            self._worker.run(
-                lambda report, is_cancelled: self._do_run(
-                    report, is_cancelled, selected, cfg
-                ),
-                on_progress=self._on_progress,
-                on_done=self._on_done,
-                on_error=self._on_error,
-            )
-        except Exception as exc:  # noqa: BLE001 - 启动失败必须把界面解锁
-            # 线程没起来就不会有 _on_done/_on_error 来收尾，_busy 会永久
-            # 卡在 True——「开始投稿」灰着、取消点不动，只能重启进程。
-            # 这里与 _on_error 做同样的归位。
-            self._set_busy(False)
-            self._active_worker = None
-            self._log.append(f"无法启动任务：{exc}")
+        """开始投稿。实现在 :meth:`BatchRunController.run`。"""
+        self._runner.run()
 
     def _retry_failed(self) -> None:
-        """只重试上一轮失败的项。
-
-        顺序很重要：**先校验再改选区**。反过来写的话，未登录时
-        ``_run`` 会直接 return，用户原来那一堆勾选已经被「只选失败项」
-        覆盖掉了，白丢一次选择。
-        """
-        if not self._failed_indexes():
-            return
-        if not self.app.ctx.logged_in:
-            self._log.append("尚未登录，请先到「登录」页扫码")
-            return
-        self._select_failed()
-        self._run()
+        """只重试上一轮失败的项。实现在 :meth:`BatchRunController.retry_failed`。"""
+        self._runner.retry_failed()
 
     def _failed_indexes(self) -> list[int]:
-        """上一轮失败项的下标（不含文件缺失的）。"""
-        return [
-            int(iid)
-            for iid in self._tree.get_children()
-            if self._tones.get(iid) == "error"
-        ]
+        """上一轮失败项的下标。实现在 :meth:`BatchRunController.failed_indexes`。"""
+        return self._runner.failed_indexes()
 
     def _cancel(self) -> None:
-        worker = self._active_worker
-        if worker:
-            worker.cancel()
-        self._log.append("已请求取消…")
+        """请求取消当前这一轮。实现在 :meth:`BatchRunController.cancel`。"""
+        self._runner.cancel()
 
     def _do_run(
         self,
@@ -1104,143 +1055,36 @@ class TasksView(ttk.Frame):
         selected: list[tuple[int, TaskConfig]],
         cfg: AppConfig,
     ) -> list[TaskOutcome]:
-        """依次执行勾选的任务（工作线程）。
-
-        UI 更新一律走 ``report``：文字进度直接是字符串，
-        行状态与进度条用 :class:`~..workers.Event`。
-        """
-        client = self.app.ctx.client()
-        backend = get_backend(cfg.submit.backend, cfg.submit.app)
-        outcomes: list[TaskOutcome] = []
-
-        total = len(selected)
-        for position, (index, task) in enumerate(selected, start=1):
-            if is_cancelled():
-                raise Cancelled()
-
-            report(Event("start", index=index, position=position, total=total))
-            report(f"[{position}/{total}] 开始：{task.name}")
-
-            outcome = run_task(
-                client,
-                task,
-                cfg,
-                backend=backend,
-                options=RunOptions(on_progress=report),
-            )
-            outcomes.append(outcome)
-
-            if outcome.success:
-                status, error = "成功", ""
-            else:
-                status, error = f"失败：{outcome.error}", outcome.error
-
-            report(
-                Event(
-                    "done",
-                    index=index,
-                    position=position,
-                    total=total,
-                    status=status,
-                    error=error,
-                )
-            )
-            report(f"[{position}/{total}] {task.name} → {status}")
-
-        return outcomes
-
-    # ---------- 主线程回调 ----------
+        """工作线程里依次执行任务。实现在 :meth:`BatchRunController.do_run`。"""
+        return self._runner.do_run(report, is_cancelled, selected, cfg)
 
     def _on_progress(self, message: "Any") -> None:
-        """分发工作线程的上报：Event 更新界面，字符串进日志。"""
-        if isinstance(message, Event):
-            # 注意：算进度只能用 position（本次执行里的第几个），
-            # 不能用 index（下标）——见 Event 的文档。
-            if not message.done:
-                self._mark(message.index, "进行中", "busy")
-                self._set_task_status(
-                    f"进行中 {message.position}/{message.total}"
-                )
-            else:
-                tone = "ok" if message.succeeded else "error"
-                self._mark(message.index, _truncate(message.status), tone)
-                self._errors[str(message.index)] = message.error
-                self._progress.set_value(message.percent)
-                self._set_task_status(f"{message.position}/{message.total}")
-            self._update_summary()
-            return
-        self._log.append(message)
+        """分发工作线程的上报。实现在 :meth:`BatchRunController.on_progress`。"""
+        self._runner.on_progress(message)
 
     def _set_task_status(self, text: str) -> None:
-        """把进度同步到窗口底部状态栏。
-
-        用户可以切到「历史」页去看之前的记录，状态栏是唯一一直可见的
-        地方，在那里报进度就不用切回来盯。
-        """
-        setter = getattr(self.app, "set_task_progress", None)
-        if setter:
-            setter(text)
+        """把进度同步到窗口底部状态栏。"""
+        self._runner._set_task_status(text)
 
     def _mark(self, index: int, status: str, tone: str = "idle") -> None:
         """更新某一行的状态文案与配色。实现在 :meth:`TaskTable.mark`。"""
         self._table.mark(index, status, tone)
 
     def _on_done(self, outcomes: list[TaskOutcome]) -> None:
-        self._set_busy(False)
-        self._active_worker = None
-        ok = sum(1 for o in outcomes if o.success)
-        self._progress.set_value(100)
-        self._progress.set_text(f"完成 {ok}/{len(outcomes)}")
-        self._set_task_status(f"完成 {ok}/{len(outcomes)}")
-        self._log.append(f"全部结束：成功 {ok}/{len(outcomes)}")
-        for outcome in outcomes:
-            if outcome.success:
-                self._log.append(f"  {outcome.bvid}  {outcome.url}")
-        self._update_summary()
+        """一轮跑完。实现在 :meth:`BatchRunController.on_done`。"""
+        self._runner.on_done(outcomes)
 
     def _on_error(self, exc: BaseException) -> None:
-        self._set_busy(False)
-        self._active_worker = None
-        if isinstance(exc, Cancelled):
-            self._revert_busy_rows("已取消")
-            self._log.append("已取消")
-            return
-        # 非取消的异常（登录态失效、网络断了、ffmpeg 缺失抛的错）同样要收尾：
-        # 不收的话「进行中」的行会永远停在那里、进度条也不复位，
-        # 界面看着像还在跑，用户既不知道发生了什么也不知道怎么恢复。
-        self._revert_busy_rows("已中断")
-        if isinstance(exc, NotLoggedInError):
-            self._log.append("登录态已失效，请到「登录」页重新扫码")
-            # 登录态变了，状态栏那个「● 已登录」也得跟着改
-            self._refresh_app_status()
-        else:
-            self._log.append(f"错误：{exc}")
+        """一轮失败/取消的收尾。实现在 :meth:`BatchRunController.on_error`。"""
+        self._runner.on_error(exc)
 
     def _refresh_app_status(self) -> None:
-        """让主窗口刷新登录态显示（没有这个方法时静默跳过）。"""
-        refresh = getattr(self.app, "refresh_status", None)
-        if refresh:
-            refresh()
+        """让主窗口刷新登录态显示。"""
+        self._runner._refresh_app_status()
 
     def _revert_busy_rows(self, reason: str = "已取消") -> None:
-        """把「进行中」的行恢复成待投稿，并复位进度条。
-
-        不处理的话，那一批会永远停在「进行中」，进度条也不复位——
-        看着像还在跑。取消和异常都要走这里，所以文案由调用方给。
-        """
-        pending = 0
-        for iid in self._tree.get_children():
-            if self._tones.get(iid) == "busy":
-                self._mark(int(iid), "待投稿", "idle")
-                pending += 1
-        self._progress.reset()
-        if pending:
-            text = f"{reason}，{pending} 项未执行"
-        else:
-            text = reason
-        self._progress.set_text(text)
-        self._set_task_status(text)
-        self._update_summary()
+        """把「进行中」的行恢复成待投稿。实现在 :meth:`BatchRunController`。"""
+        self._runner.revert_busy_rows(reason)
 
     def _on_double_click(self, event: tk.Event) -> None:
         """双击某一行：失败了看完整原因，否则改这个稿件的标题。
