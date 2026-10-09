@@ -67,19 +67,15 @@ pre code{display:block;padding:10px 14px;overflow-x:auto;line-height:1.6}
 .brand b{font-size:13px;line-height:1.35;display:block}
 .brand small{color:var(--ink-3);font-size:11px;display:block}
 .nav a{
-  display:flex;align-items:center;gap:10px;height:40px;margin-bottom:4px;
-  padding:0 12px;border-radius:var(--radius-ctl);
+  display:flex;align-items:center;gap:10px;height:40px;margin:0 6px 4px;
+  padding:0 12px;border-radius:20px;
   color:var(--ink);text-decoration:none;font-size:14px;position:relative;
 }
 .nav a .ico{width:20px;text-align:center;color:var(--ink-2);font-style:normal}
 .nav a:hover{background:var(--nav-hover)}
 .nav a.on{background:var(--nav-active);color:var(--pink-deep);font-weight:600}
 .nav a.on .ico{color:var(--pink-deep)}
-/* 选中指示条：Fluent NavigationView 的圆角竖条（theme.py NAV_BAR_WIDTH=3） */
-.nav a.on::before{
-  content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;
-  border-radius:2px;background:var(--pink-deep);
-}
+/* 选中指示：Material 的整行药丸（与程序内的导航高亮一致，不是竖条） */
 .nav .foot{margin-top:16px;padding:10px 12px;font-size:11px;color:var(--ink-3);line-height:1.6}
 
 main{flex:1;min-width:0;padding:28px 32px 0}

@@ -3,8 +3,8 @@
 组件里**不允许**出现颜色或尺寸字面量——改一个主色不该翻遍所有文件。
 需要新颜色就在这里加，并给出用途注释。
 
-设计方向：Fluent 骨架 + B 站粉强调（详见项目根的 ``.impeccable.md``）
---------------------------------------------------------------------
+设计方向：Material 3 视觉 + B 站粉强调（详见项目根的 ``.impeccable.md``）
+--------------------------------------------------------------------------
 
 三件事决定了这套色板长这样：
 
@@ -28,6 +28,11 @@
    深色弱化字 / 深纸          5.07:1  AA
    ==========================  ========  ==========================================
 
+形状语言：**能画出来的交互件都是药丸**。Material 3 的按钮和导航高亮
+是全圆角（半径 = 高度一半），Canvas 自绘的按钮与导航项走
+:data:`RADIUS_PILL`；ttk 引擎绘制的输入框/下拉框圆不了角，降级为
+1px 细边框 + 聚焦环（见下方 note）——降级写在这里，不做假的圆角。
+
 命名字体
 --------
 
@@ -49,10 +54,10 @@ Tk 只有 ``normal`` / ``bold`` 两档字重，所以层级靠
 
    1. **输入框/下拉框无法圆角**：ttk 的 field 由引擎绘制，
       ``borderwidth`` 只能给直角边框。降级为 1px 细边框 + 聚焦环，
-      视觉层级靠底色和边框区分。按钮是自绘的（:class:`FluentButton`），
-      所以按钮有真圆角。
-   2. **没有原生阴影**：tkinter 不提供 drop shadow。Fluent 的 elevation
-      改用「卡片底色 + 1px 边框 + 更小的内圆角」三层来表达。
+      视觉层级靠底色和边框区分。按钮和导航高亮是 Canvas 自绘的，
+      所以它们有真的药丸形。
+   2. **没有原生阴影**：tkinter 不提供 drop shadow。Material 的
+      elevation 改用「卡片底色 + 1px 边框」来表达——不画假的阴影。
 """
 
 from __future__ import annotations
@@ -75,8 +80,13 @@ PAD_LG = 16         # 2 格：卡片内边距
 PAD_XL = 24         # 3 格：分区之间
 PAD_2XL = 32        # 4 格：页面级留白
 
-#: 控件圆角。Fluent 的按钮/输入框是 4~8px，取中间值。
+#: 控件圆角。ttk 引擎绘制的控件（输入框、下拉框）画不出圆角，这个值
+#: 只剩「降级说明」里的参考意义；Canvas 自绘的控件一律走 :data:`RADIUS_PILL`。
 RADIUS_CONTROL = 6
+#: 药丸圆角：Material 3 的按钮与导航高亮是**全圆角**（半径 = 高度一半）。
+#: 给 999 表示「能有多圆就多圆」——绘制时会被 clamp 到边长的一半，
+#: 32/40px 高的控件自然变成胶囊。
+RADIUS_PILL = 999
 #: 卡片圆角，比控件大一点，层级才分得开
 RADIUS_CARD = 8
 
@@ -105,9 +115,9 @@ NAV_WIDTH = NAV_WIDTH_EXPANDED
 NAV_ITEM_HEIGHT = 40
 #: 导航项之间的间隙（半格）。项高本身是 40，间隙再按整格给就太散了。
 NAV_ITEM_GAP = 4
-#: 选中指示条：Fluent 的 NavigationView 用一条圆角竖条标出当前项
-NAV_BAR_WIDTH = 3
-NAV_BAR_HEIGHT = 24
+#: Material 的导航高亮是**整行药丸**（不是 Fluent 的左侧竖条）：
+#: 药丸不满铺，两侧各留这条缝，形状才读得出来。
+NAV_ITEM_MARGIN = 6
 INPUT_HEIGHT = CONTROL_HEIGHT
 BUTTON_HEIGHT = CONTROL_HEIGHT
 QR_SIZE = 220                 # 登录二维码边长
@@ -709,7 +719,7 @@ def apply(style: "ttk.Style", mode: str | None = None) -> str:
         font=font("caption"),
     )
 
-    # 按钮。圆角由自绘的 FluentButton 提供；这里是ttk 版本的兜底样式，
+    # 按钮。药丸形由自绘的 FluentButton 提供；这里是ttk 版本的兜底样式，
     # 高度靠 padding 凑到 32 / 40，五态齐全。
     style.configure(
         "Primary.TButton",

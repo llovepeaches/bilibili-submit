@@ -538,8 +538,11 @@ def _round_rect_points(
 
     Tk 的 Canvas 没有圆角矩形图元，常用做法是给 ``create_polygon`` 传
     ``smooth=True``：把角上的点**重复一遍**，样条就会在那里拐出一个角
-    而不是切掉它——每个角给三个点（入角、角、出角）刚好得到 4~8px
-    视觉圆角，和 Fluent 的控件圆角一致。
+    而不是切掉它——每个角给三个点（入角、角、出角）刚好得到圆角。
+
+    半径会被 clamp 到「边长的一半」：Material 的按钮与导航高亮传
+    :data:`~.theme.RADIUS_PILL`（999），实际画出来就是药丸形——
+    32/40px 高的控件两端全圆。
     """
     r = max(0.0, min(radius, (x2 - x1) / 2, (y2 - y1) / 2))
     return [
@@ -575,14 +578,14 @@ def _state_wants_disabled(name: "object") -> "bool | None":
 
 
 class FluentButton(tk.Canvas):
-    """Fluent 风格按钮：Canvas 自绘圆角矩形 + 文字。
+    """Material 风格按钮：Canvas 自绘药丸 + 文字。
 
     为什么不直接用 ``ttk.Button``：clam 主题（这里统一用的跨平台上观感
-    一致的那个）画的是**直角**，而 Fluent 的按钮圆角是 4~8px。ttk 没有
-    「圆角」这个选项，边框宽度再怎么调也只能是方的。自绘才能把圆角、
-    32/40px 高度、五态配色都精确控住。
+    一致的那个）画的是**直角**，而 Material 3 的按钮是**药丸形**
+    （圆角 = 高度一半）。ttk 没有「圆角」这个选项，边框宽度再怎么调
+    也只能是方的。自绘才能把药丸形、32/40px 高度、五态配色都精确控住。
 
-    五态（对应 Fluent 的 Rest / Hover / Pressed / Disabled / Focus）：
+    五态（对应 Material 的 Rest / Hover / Pressed / Disabled / Focus）：
     默认、悬停、按下、禁用、聚焦（聚焦画主色环）。
 
     对外保持 ``ttk.Button`` 的常用接口——``state()`` 传 ``["disabled"]`` /
@@ -842,7 +845,7 @@ class FluentButton(tk.Canvas):
         if self._focused and not self._disabled:
             # 聚焦环用深梅不用粉：粉在纸白上只有 2.64:1，等于没有
             self.create_polygon(
-                _round_rect_points(0, 0, width - 1, height - 1, theme.RADIUS_CONTROL + ring),
+                _round_rect_points(0, 0, width - 1, height - 1, theme.RADIUS_PILL),
                 smooth=True,
                 fill=theme.FOCUS_RING,
                 outline=theme.FOCUS_RING,
@@ -851,7 +854,7 @@ class FluentButton(tk.Canvas):
         outline = self._outline_for(fill)
         self.create_polygon(
             _round_rect_points(
-                ring, ring, width - 1 - ring, height - 1 - ring, theme.RADIUS_CONTROL
+                ring, ring, width - 1 - ring, height - 1 - ring, theme.RADIUS_PILL
             ),
             smooth=True,
             fill=fill,
@@ -996,25 +999,26 @@ class StatusPill(tk.Label):
 
 
 class NavItem(tk.Frame):
-    """侧边导航项：左侧竖条 + 图标 + 文字。
+    """侧边导航项：Material 的**整行药丸**高亮。
 
-    选中态是一条粉色竖条。clam 主题没法给 Button 画「局部」边框，
-    所以用 frame 拼：竖条是独立的 3px 宽 frame，未选中时涂成
-    **和底色一样**的颜色而不是隐藏它——隐藏会让文字在选中/未选中
-    之间左右跳动，很难看。
+    Material 3 的导航选中指示是一个撑满整行的药丸底（圆角 = 高度
+    一半），不再有左侧竖条。tk.Frame 画不出圆角，所以底座换成
+    Canvas：药丸画在 Canvas 上，图标和文字作为 window item 嵌进
+    画布，垂直居中。
+
+    未选中/悬停时药丸涂成**当刻该有的底色**（隐形 / 悬停色），选中
+    才浮出反白药丸——选中与否只是底色差异，图标和文字不会左右跳动。
+    这是 Fluent 版竖条「占位不隐藏」的同一条纪律。
 
     .. note::
-       用 ``tk.Frame`` 而非 ``ttk.Frame``：整块导航项要随悬停/选中
-       改底色，而 ttk 组件只能通过 style 改色（``ttk.Frame`` 甚至
-       不接受 ``background`` 选项，会报 ``unknown option``）。
-       这里底色是动态变化的，tk.Frame 直接得多。
-
-    对外接口只有 :meth:`set_active`——不要给它补 ``state()`` 之类的
-    ``ttk.Button`` 兼容层：导航项从来不参与 ``state`` 机制，
-    硬凑一个空实现只会让人误以为它支持禁用。
+       文字隐藏用 ``itemconfigure(state="hidden")``：window item 和
+       它的配置都还在，恢复时原样回来——和 ``grid_remove()`` 一样
+       是可逆隐藏（见 .impeccable.md 的反模式清单），不用
+       ``grid_forget()``。
     """
 
-    BAR_WIDTH = theme.NAV_BAR_WIDTH
+    #: 图标/文字距药丸左缘的距离
+    _INSET = 8
 
     def __init__(
         self,
@@ -1029,49 +1033,46 @@ class NavItem(tk.Frame):
         )
         self._command = command
         self._active = False
+        self._hovered = False
+        self._collapsed = False
+        self._pill_item: int | None = None  # 药丸的 canvas item id
 
-        # 选中指示条用 Canvas 画：Fluent 的指示条是**圆角**竖条，
-        # 而 tk.Frame 只能是直角方块
-        self._bar = tk.Canvas(
+        # 药丸底座。宽度由 pack 拉伸决定，画药丸时才读实际宽度
+        self._pill = tk.Canvas(
             self,
-            width=theme.NAV_BAR_WIDTH,
             height=theme.NAV_ITEM_HEIGHT,
             background=theme.NAV_BG,
             highlightthickness=0,
             borderwidth=0,
         )
-        self._bar.pack(side="left", fill="y")
-        self._bar.pack_propagate(False)
-
-        # 内容区用 **grid** 而不是 pack：折叠成图标栏时要隐藏文字，
-        # 而 packer 只有 ``pack_forget()``（会把配置一起忘掉），没有
-        # 对应的 ``pack_remove()``。grid 的 ``grid_remove()`` 记住配置，
-        # 是本项目唯一认可的隐藏方式（见 .impeccable.md 反模式）。
-        self._body = tk.Frame(self, background=theme.NAV_BG)
-        self._body.pack(side="left", fill="both", expand=True)
-        self._body.rowconfigure(0, weight=1)
-        self._body.columnconfigure(1, weight=1)
+        self._pill.pack(fill="both", expand=True, padx=theme.NAV_ITEM_MARGIN)
 
         self._icon = tk.Label(
-            self._body, text=icon, font=theme.font("subtitle"),
+            self._pill, text=icon, font=theme.font("subtitle"),
             background=theme.NAV_BG, foreground=theme.INK_MUTED,
             width=2, anchor="center",
         )
-        self._icon.grid(row=0, column=0, padx=(theme.PAD_MD, theme.PAD_XS))
-
         self._text = tk.Label(
-            self._body, text=text, font=theme.font("body"),
+            self._pill, text=text, font=theme.font("body"),
             background=theme.NAV_BG, foreground=theme.NAV_FG,
             anchor="w",
         )
-        self._text.grid(row=0, column=1, sticky="ew")
+        self._icon_win = self._pill.create_window(
+            self._INSET, theme.NAV_ITEM_HEIGHT / 2,
+            window=self._icon, anchor="w",
+        )
+        self._text_win = self._pill.create_window(
+            self._INSET + self._icon.winfo_reqwidth() + 2,
+            theme.NAV_ITEM_HEIGHT / 2,
+            window=self._text, anchor="w",
+        )
+        self._pill.bind("<Configure>", self._on_configure)
 
-        self._paintable = (self, self._body, self._icon, self._text)
+        self._paintable = (self._pill, self._icon, self._text)
         for widget in self._paintable:
             widget.bind("<Button-1>", self._on_click)
             widget.bind("<Enter>", self._on_enter)
             widget.bind("<Leave>", self._on_leave)
-        self._bar.bind("<Button-1>", self._on_click)
 
     # ---------- 对外 ----------
 
@@ -1086,21 +1087,15 @@ class NavItem(tk.Frame):
         窗口窄到一定程度时，导航那 200px 里大半是空白，而内容区正
         挤得看不全文件名——折叠把那 144px 还给内容区。
 
-        隐藏用 ``grid_remove()``（记住配置）而不是 ``grid_forget()``，
-        理由见 :meth:`__init__` 里的说明。图标在折叠态靠
-        ``columnconfigure`` 的权重变化居中：文字那列权重归零后，
-        图标列吃满整行，自然居中——比手算 padx 稳。
+        隐藏用 ``itemconfigure(state="hidden")``（可逆，item 还在），
+        理由见类文档。图标重新居中靠 :meth:`_relayout` 按药丸实际
+        宽度现算，比手算 padx 稳。
         """
-        if collapsed:
-            self._text.grid_remove()
-            self._body.columnconfigure(0, weight=1)
-            self._body.columnconfigure(1, weight=0)
-            self._icon.grid_configure(padx=(0, 0))
-        else:
-            self._text.grid()
-            self._body.columnconfigure(0, weight=0)
-            self._body.columnconfigure(1, weight=1)
-            self._icon.grid_configure(padx=(theme.PAD_MD, theme.PAD_XS))
+        self._collapsed = collapsed
+        self._pill.itemconfigure(
+            self._text_win, state="hidden" if collapsed else "normal"
+        )
+        self._relayout()
 
     # ---------- 内部 ----------
 
@@ -1110,49 +1105,84 @@ class NavItem(tk.Frame):
 
     def _on_enter(self, _event: "object" = None) -> None:
         if not self._active:
-            self._paint(theme.NAV_HOVER)
-            # 指示条区域也要跟着换底，否则悬停时左边留一条原底色的缝
-            self._bar.configure(background=theme.NAV_HOVER)
+            self._hovered = True
+            self._render()
 
     def _on_leave(self, _event: "object" = None) -> None:
+        self._hovered = False
         self._render()
 
-    def _paint(self, background: str) -> None:
-        for widget in self._paintable:
-            widget.configure(background=background)
+    def _on_configure(self, _event: "object" = None) -> None:
+        # pack 拉伸 / 窗口折叠都会走到这里：药丸宽度变了，重画
+        self._relayout()
 
-    def _render_bar(self) -> None:
-        """画选中指示条：选中时主色圆角竖条，否则不画但**占位**。
+    def _pill_color(self) -> str:
+        if self._active:
+            return theme.NAV_ACTIVE_BG
+        if self._hovered:
+            return theme.NAV_HOVER
+        return theme.NAV_BG
 
-        占位是必须的——把整条隐藏/显示会让文字左右跳动。
+    def _paint_pill(self) -> None:
+        """画药丸底：选中反白、悬停上色、平时与导航条同色（隐形）。
+
+        只重建药丸这一个 item——``delete("all")`` 会把嵌在画布上的
+        图标/文字 window item 一起删掉（真踩过：恢复展开后文字再也不
+        出现，``winfo_ismapped()`` 恒为 0）。重画的药丸用 ``tag_lower``
+        压回底层，图标和文字才不会被它盖住。
         """
-        self._bar.delete("all")
-        self._bar.configure(background=(
-            theme.NAV_ACTIVE_BG if self._active else theme.NAV_BG
-        ))
-        if not self._active:
-            return
-        width = theme.NAV_BAR_WIDTH
-        top = (theme.NAV_ITEM_HEIGHT - theme.NAV_BAR_HEIGHT) / 2
-        self._bar.create_polygon(
+        canvas = self._pill
+        if self._pill_item is not None:
+            canvas.delete(self._pill_item)
+            self._pill_item = None
+        # 底永远是导航底——药丸不满铺（两侧各留 NAV_ITEM_MARGIN），
+        # 圆角才读得出来；这一点 Material 和 Fluent 的满铺选中不一样
+        canvas.configure(background=theme.NAV_BG)
+        width = canvas.winfo_width()
+        if width <= 1:
+            return  # 还没布局，Configure 马上会再来
+        color = self._pill_color()
+        self._pill_item = canvas.create_polygon(
             _round_rect_points(
-                0, top, width - 1, top + theme.NAV_BAR_HEIGHT - 1, width / 2
+                0, 0, width - 1, theme.NAV_ITEM_HEIGHT - 1, theme.RADIUS_PILL
             ),
             smooth=True,
-            fill=theme.PINK,
-            outline=theme.PINK,
+            fill=color,
+            outline=color,
         )
+        canvas.tag_lower(self._pill_item)
+
+    def _relayout(self, _event: "object" = None) -> None:
+        """重画药丸并重排图标/文字。
+
+        折叠态把图标挪到药丸正中；展开态图标靠左、文字跟在后面。
+        坐标现算而不是记死——药丸宽度随折叠/展开变化。
+        """
+        self._paint_pill()
+        icon_w = self._icon.winfo_reqwidth()
+        if self._collapsed:
+            pill_w = self._pill.winfo_width()
+            x = max((pill_w - icon_w) / 2, 0)
+            self._pill.coords(self._icon_win, x, theme.NAV_ITEM_HEIGHT / 2)
+        else:
+            self._pill.coords(
+                self._icon_win, self._INSET, theme.NAV_ITEM_HEIGHT / 2
+            )
+            self._pill.coords(
+                self._text_win,
+                self._INSET + icon_w + 2, theme.NAV_ITEM_HEIGHT / 2,
+            )
 
     def _render(self) -> None:
+        color = self._pill_color()
         if self._active:
-            self._paint(theme.NAV_ACTIVE_BG)
-            self._icon.configure(foreground=theme.NAV_ACTIVE_FG)
-            self._text.configure(foreground=theme.NAV_ACTIVE_FG)
+            icon_fg = text_fg = theme.NAV_ACTIVE_FG
         else:
-            self._paint(theme.NAV_BG)
-            self._icon.configure(foreground=theme.INK_MUTED)
-            self._text.configure(foreground=theme.NAV_FG)
-        self._render_bar()
+            icon_fg, text_fg = theme.INK_MUTED, theme.NAV_FG
+        self._icon.configure(background=color, foreground=icon_fg)
+        self._text.configure(background=color, foreground=text_fg)
+        self._paint_pill()
+        self._relayout()
 
 
 class SummaryBar(ttk.Frame):

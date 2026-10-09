@@ -43,8 +43,8 @@ def test_theme_font_family_is_platform_specific():
         assert "PingFang" in theme.FAMILY
 
 
-def test_theme_fluent_metrics():
-    """Fluent Design 的关键度量：栅格、圆角、控件高度。
+def test_theme_material_metrics():
+    """Material 化的关键度量：栅格、药丸圆角、控件高度。
 
     这些数字是设计规范的承诺，不是随便填的——改了要连同所有视图
     一起重排，所以在这里钉死。
@@ -52,7 +52,11 @@ def test_theme_fluent_metrics():
     assert theme.GRID == 8
     for name in ("PAD_XS", "PAD_SM", "PAD_MD", "PAD_LG", "PAD_XL", "PAD_2XL"):
         assert getattr(theme, name) % (theme.GRID // 2) == 0, name
-    assert 4 <= theme.RADIUS_CONTROL <= 8, "Fluent 要求控件圆角 4~8px"
+    assert theme.RADIUS_PILL == 999, (
+        "Material 的按钮/导航高亮是药丸形——半径传 999，绘制时被 "
+        "clamp 到高度一半（ttk 画不了圆角的输入框另用 RADIUS_CONTROL 降级）"
+    )
+    assert 4 <= theme.RADIUS_CONTROL <= 8, "ttk 降级描边的圆角参考仍是 4~8px"
     assert theme.CONTROL_HEIGHT == 32, "按钮/输入框标准高度 32px"
     assert theme.PRIMARY_BUTTON_HEIGHT == 40, "主要操作按钮 40px"
     assert theme.PRIMARY_BUTTON_HEIGHT > theme.CONTROL_HEIGHT
@@ -493,6 +497,63 @@ def test_qr_draws_on_canvas():
 
 
 @needs_display
+@needs_display
+def test_nav_active_indicator_is_a_pill():
+    """Material 的导航选中指示：一枚**反白药丸**，图标文字浮在其上。
+
+    Material 化时换掉了 Fluent 的左侧竖条。重构中真踩过两个坑，都
+    钉在这里：
+
+    - 重画药丸用了 ``delete("all")``，把嵌在画布上的图标/文字
+      window item 一起删了——恢复展开后文字永远不出现
+      （``winfo_ismapped()`` 恒为 0）；
+    - 重画的药丸不压回底层的话，会把图标和文字盖住。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.widgets import NavItem
+
+    root = tk.Tk()
+    try:
+        item = NavItem(root, text="登录", icon="登")
+        item.pack(fill="x", padx=40)
+        root.update_idletasks()
+        root.update()
+        item.set_active(True)
+        root.update()
+
+        canvas = item._pill
+        polys = [i for i in canvas.find_all() if canvas.type(i) == "polygon"]
+        assert len(polys) == 1, "选中指示就是一枚药丸，不该有别的形状"
+        assert canvas.itemcget(polys[0], "fill") == theme.NAV_ACTIVE_BG, (
+            "选中药丸应当反白（NAV_ACTIVE_BG）"
+        )
+        assert item._text.winfo_ismapped(), "选中后文字必须仍然可见"
+
+        # 药丸压在 window item 底下：find_all 按 z 序返回（底→顶），
+        # 药丸必须排在图标/文字前面
+        order = list(canvas.find_all())
+        assert order.index(item._pill_item) < order.index(item._icon_win), (
+            "药丸必须压在图标/文字底下——盖住它们导航就瞎了"
+        )
+
+        # 未选中：药丸隐形（与导航条同色），只留一份
+        item.set_active(False)
+        root.update()
+        canvas.delete(item._pill_item)
+        item._pill_item = None
+        item._hovered = True
+        item._render()
+        root.update()
+        polys = [i for i in canvas.find_all() if canvas.type(i) == "polygon"]
+        assert len(polys) == 1, "悬停态同样只该有一枚药丸"
+        assert canvas.itemcget(polys[0], "fill") == theme.NAV_HOVER, (
+            "悬停态药丸应当用 NAV_HOVER，不要直接上粉色——粉色只给主操作"
+        )
+    finally:
+        root.destroy()
+
+
 def test_nav_collapses_at_compact():
     """窄窗口下侧栏收成图标栏，宽窗口下恢复展开，来回切不错位。
 
