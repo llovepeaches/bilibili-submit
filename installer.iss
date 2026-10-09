@@ -182,18 +182,26 @@ end;
 { 这条消息里有没有中日韩统一表意文字（U+4E00–U+9FFF）？
   不查「等不等于某句中文」——那句话改个措辞就得同步改这里，
   忘了改的表现是 CI 报「不是中文」，而实际只是措辞变了。
-  判「有没有汉字」则与具体措辞无关。 }
-function HasCjk(const S: String): Boolean;
+  判「有没有汉字」则与具体措辞无关。
+
+  直接返回 '1'/'0' 字符串而不是 Boolean：调用侧要用 Ord() 转成
+  数字，而 Ord() 在这套 Pascal Script 里是面向字符/整数这些类型的，
+  传 Boolean 进去不保证被接受。与其赌编译期，不如一开始就不
+  绕那一圈——反正写出去的就是 ASCII 文本。 }
+function CjkFlag(const S: String): String;
 var
   I, C: Integer;
 begin
-  Result := False;
+  { Result 先兜底成 '0'，命中就改成 '1' 再 Exit——Inno 的 Pascal
+    Script 支持不带参数的 Exit（返回 Result 当前值），但把这条
+    依赖写出来更好：改的人一眼能看到「Exit 前必须先给 Result 赋值」。 }
+  Result := '0';
   for I := 1 to Length(S) do
   begin
     C := Ord(S[I]);
     if (C >= $4E00) and (C <= $9FFF) then
     begin
-      Result := True;
+      Result := '1';
       Exit;
     end;
   end;
@@ -212,13 +220,16 @@ begin
   Finish  := ExpandConstant('{cm:FinishedLabel}');
 
   F := 'lang=' + ActiveLanguage + #13#10
-     + 'seldir_cjk='   + IntToStr(Ord(HasCjk(SelDir)))  + #13#10
-     + 'selgroup_cjk=' + IntToStr(Ord(HasCjk(SelGroup))) + #13#10
-     + 'ready_cjk='    + IntToStr(Ord(HasCjk(Ready)))   + #13#10
-     + 'finish_cjk='   + IntToStr(Ord(HasCjk(Finish)))  + #13#10;
+     + 'seldir_cjk='   + CjkFlag(SelDir)  + #13#10
+     + 'selgroup_cjk=' + CjkFlag(SelGroup) + #13#10
+     + 'ready_cjk='    + CjkFlag(Ready)   + #13#10
+     + 'finish_cjk='   + CjkFlag(Finish)  + #13#10;
   { 只写 0/1 与 ASCII 键名：这份报告的**全部内容**都保证与文件编码
     无关，见上面关于 ACP 的那段。 }
-  SaveStringToFile(ExpandConstant('{tmp}\lang-report.txt'), F);
+  { 第三个参数 Append 必须显式给 False——SaveStringToFile 是三参数的
+    形式，省掉它编译期就报 "Invalid number of parameters"（CI 上真报在
+    这一行，报错文案完全指不到「少了第三个参数」上）。}
+  SaveStringToFile(ExpandConstant('{tmp}\lang-report.txt'), F, False);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

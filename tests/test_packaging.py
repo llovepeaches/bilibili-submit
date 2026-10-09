@@ -1278,17 +1278,18 @@ def test_installer_ships_a_language_probe_for_ci():
     # 报告内容必须全是 ASCII：写出去的是「有没有汉字」这个 0/1，
     # 不是文案原文。
     report = re.search(
-        r"SaveStringToFile\(\s*ExpandConstant\([^)]*\)\s*,\s*(\w+)\s*\);",
-        code, re.DOTALL)
+        r"SaveStringToFile\(\s*ExpandConstant\('\{tmp\}[^)]*\)\s*,\s*(\w+)\s*"
+        r",\s*(?:True|False)\s*\)",
+        code)
     assert report, "[Code] 段里找不到 SaveStringToFile 的完整调用"
     var = report.group(1)
     # 写出去的是个变量，内容在别处拼的——顺着赋值追进去。
-    # 直接搜 SaveStringToFile 那一行的内容没用：HasCjk 在 F := ... 里。
+    # 直接搜 SaveStringToFile 那一行的内容没用：CjkFlag 在 F := ... 里。
     assign = re.search(rf"\b{re.escape(var)}\s*:=\s*(.+?);", code, re.DOTALL)
     assert assign, f"探针里找不到 {var} 的赋值——写出去的内容无从检查"
     written = assign.group(1)
-    assert "HasCjk" in written, (
-        "报告内容里没有 HasCjk 的判定——把中文原样写出来的话，ACP 一路"
+    assert "CjkFlag" in written, (
+        "报告内容里没有 CjkFlag 的判定——把中文原样写出来的话，ACP 一路"
         f"编码就变成问号：{written.strip()[:80]}"
     )
 
@@ -1310,12 +1311,24 @@ def test_installer_ships_a_language_probe_for_ci():
         "不同页面用的是不同消息，取两遍同一个等于少验了一半"
     )
 
+    # SaveStringToFile 是**三**参数（文件名、内容、Append）。省掉第三个
+    # 编译期报的是 "Invalid number of parameters"——那句话完全指不到
+    # 「少了 Append」，本地又没有 ISCC 可验，只能靠这条守卫提前拦。
+    call = re.search(r"SaveStringToFile\((.*?)\);", code, re.DOTALL)
+    assert call, "[Code] 段里找不到 SaveStringToFile 调用"
+    args = [a for a in call.group(1).split(",") if a.strip()]
+    assert len(args) == 3, (
+        f"SaveStringToFile 传了 {len(args)} 个参数，应为 3"
+        "（文件名、内容、Append）——少一个编译期就报 "
+        "\"Invalid number of parameters\"，而那句话指不到真正的原因"
+    )
+
     # 判 CJK 的那段必须真的在查码位区间，而不是恒返回 True/False：
     # 恒 True 会让英文向导也通过，恒 False 会让中文向导误报。
-    has_cjk = re.search(r"function HasCjk\(.*?\nend;", code, re.DOTALL)
-    assert has_cjk, "[Code] 段里找不到 HasCjk 的实现"
+    has_cjk = re.search(r"function CjkFlag\(.*?\nend;", code, re.DOTALL)
+    assert has_cjk, "[Code] 段里找不到 CjkFlag 的实现"
     assert "$4E00" in has_cjk.group(0) and "$9FFF" in has_cjk.group(0), (
-        "HasCjk 没查 U+4E00–U+9FFF 区间——恒返回 True 会让英文向导也通过，"
+        "CjkFlag 没查 U+4E00–U+9FFF 区间——恒返回 True 会让英文向导也通过，"
         "恒返回 False 会让中文向导误报，两种都是这条检查彻底失效"
     )
 
