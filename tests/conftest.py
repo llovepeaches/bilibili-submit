@@ -97,6 +97,20 @@ def run_until(root, predicate, timeout_ms: int = 5000) -> None:
     assert predicate()
 
 
+@pytest.fixture
+def root():
+    """一个 Tk 根窗口，用完销毁。
+
+    标了 ``needs_display`` 的用例才能用它——没有 X server 时 ``Tk()``
+    会直接抛 TclError。
+    """
+    import tkinter as tk
+
+    made = tk.Tk()
+    yield made
+    made.destroy()
+
+
 def environment_probe_targets() -> tuple[object, object]:
     """探测函数被打桩的位置（app 与 settings 各自导入了一份）。"""
     from bilibili_submit.ui import app as app_mod

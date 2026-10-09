@@ -34,8 +34,20 @@ from ...scheduler import RunOptions, TaskOutcome, run_task
 from ...submit import get_backend
 from .. import layout, theme
 from ..state import BatchUIState, DEFAULT_TID, load_ui_state, save_ui_state
-# PartTitlesDialog 的实现已经搬到 tasks_editor 了，这里继续导出是因为
-# 测试从本模块 import 它（``from ...views.tasks import PartTitlesDialog``）。
+# 列定义、勾选标记、列宽算法的实现已经搬到 tasks_table 了，这里继续
+# 导出是因为测试从本模块 import（``from ...views.tasks import PICKED``）。
+# COLUMNS / PICKED / UNPICKED / _column_widths 在本文件里已不再直接使用，
+# 留着纯粹是为了那条 import 路径不断。
+from .tasks_table import (  # noqa: F401
+    COLUMNS,
+    PICKED,
+    UNPICKED,
+    TaskTable,
+    _COLUMN_MIN_WIDTHS,
+    _COLUMN_WEIGHTS,
+    _column_widths,
+)
+# PartTitlesDialog 同上：实现在 tasks_editor，测试仍从本模块 import。
 from .tasks_editor import PartTitlesDialog, TaskEditor, render_title_template  # noqa: F401
 from ..widgets import (
     ActionBar,
@@ -69,43 +81,6 @@ __all__ = ["TasksView"]
 #: ``name`` 是任务的标识（扫目录时是文件名/文件夹名），``title`` 是真正
 #: 投出去的稿件标题。两者默认一致，但改过之后就不一样了——分开两列正是
 #: 为了让"我改过哪些"一眼可见，否则改完跟没改看起来一样。
-COLUMNS = ("pick", "name", "title", "file", "parts", "tid", "status")
-_HEADINGS = {
-    "pick": "✓",
-    "name": "任务",
-    "title": "标题",
-    "file": "文件",
-    "parts": "分P",
-    "tid": "分区",
-    "status": "状态",
-}
-#: 列宽权重。窗口宽度变化时按这个比例分配——固定列宽在宽屏上右侧
-#: 留一大片空白，在窄屏上文件名被截得认不出是哪个，两个毛病一起治。
-_COLUMN_WEIGHTS = {
-    "pick": 0,
-    "name": 3,
-    "title": 5,
-    "file": 6,
-    "parts": 1,
-    "tid": 2,
-    "status": 3,
-}
-#: 每列的下限。权重再小也不能窄到看不清内容。
-_COLUMN_MIN_WIDTHS = {
-    "pick": 34,
-    "name": 70,
-    "title": 90,
-    "file": 110,
-    "parts": 42,
-    "tid": 48,
-    "status": 90,
-}
-#: 短内容居中更整齐，长文本左对齐更好扫读
-_CENTERED_COLUMNS = ("pick", "parts", "tid", "status")
-
-PICKED = "✓"
-UNPICKED = ""
-
 #: 分 P 合并方式。``分P`` 列是数字，单 P 稿件显示一条横线更分明
 GROUP_OFF = "不合并"
 GROUP_PREFIX = "按文件名前缀分组"
@@ -142,16 +117,6 @@ def _truncate(text: str, limit: int = STATUS_MAX) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
-
-
-def _column_widths(total: int) -> dict[str, int]:
-    """按权重把总宽度分给各列，返回每列宽度。
-
-    算法本身在 :func:`layout.column_widths`——历史页用的是同一份。
-    两边各写一遍的结果就是同一个窗口里两个表格拉伸手感不一样，
-    而且改一处漏一处。
-    """
-    return layout.column_widths(COLUMNS, _COLUMN_WEIGHTS, _COLUMN_MIN_WIDTHS, total)
 
 
 @dataclass(frozen=True)
@@ -232,14 +197,9 @@ class TasksView(ttk.Frame):
         #: 偏好文件路径。None 表示用默认位置；测试注入临时路径用，
         #: 否则测试会去动用户真实的 ~/.config 下的文件。
         self._state_file: Path | None = None
-        #: iid -> 是否勾选
-        self._picked: dict[str, bool] = {}
-        #: 文件不存在的 iid
-        self._missing: set[str] = set()
-        #: iid -> 完整错误原因（状态列放不下）
-        self._errors: dict[str, str] = {}
-        #: iid -> 语义色名，见 :data:`~.theme.TONES`
-        self._tones: dict[str, str] = {}
+        # 勾选 / 缺失 / 错误 / 着色这四个容器归 TaskTable 所有——
+        # 它们的键就是表格行 id，表格换了一批它们就该跟着换。
+        # 本视图上保留同名只读转发，见文件末尾的 property。
 
         self._build()
 
@@ -487,31 +447,28 @@ class TasksView(ttk.Frame):
         list_holder.columnconfigure(0, weight=1)
         list_holder.rowconfigure(0, weight=1)
 
-        self._tree = ttk.Treeview(
-            list_holder, columns=COLUMNS, show="headings", height=8
+        # 表格整体（Treeview + 勾选状态 + 着色 + 列宽）是一个独立协作者，
+        # 见 :mod:`~.tasks_table`。``_tree`` 现在只是转发到它的 property。
+        #
+        # 依赖全部走回调：``_log`` 和 ``_placeholder`` 要到本方法更后面
+        # 才建出来，直接把对象传进去就会撞上创建顺序。
+        self._table = TaskTable(
+            list_holder,
+            append_log=lambda text: self._log.append(text),
+            is_editable=lambda: self._editable(),
+            on_changed=lambda: self._update_summary(),
+            on_filled=self._on_table_filled,
+            read_tid=lambda: parse_tid(self._tid_var.get()),
+            source_mode=lambda: self._source_mode,
         )
-        for column in COLUMNS:
-            self._tree.heading(column, text=_HEADINGS[column])
-            self._tree.column(
-                column,
-                width=_COLUMN_MIN_WIDTHS[column],
-                stretch=True,
-                anchor="center" if column in _CENTERED_COLUMNS else "w",
-            )
-        # 行着色的唯一来源
-        theme.apply_tree_tags(self._tree)
-        # 宽度跟着窗口走，而不是锁死在固定值上
-        self._tree.bind("<Configure>", self._resize_columns)
-        self._tree.grid(row=0, column=0, sticky="nsew")
+        self._table.tree.grid(row=0, column=0, sticky="nsew")
 
         scroll = ttk.Scrollbar(list_holder, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=scroll.set)
         scroll.grid(row=0, column=1, sticky="ns")
 
-        # 点首列切换勾选；表头点全选/全不选
-        self._tree.bind("<Button-1>", self._on_tree_click)
-        self._tree.bind("<space>", self._on_space)
-        # 双击：有失败原因看全文，否则多 P 任务可以改分P标题
+        # 双击：有失败原因看全文，否则多 P 任务可以改分P标题。
+        # 这个留在视图里——它要判断「看错误还是改标题」，那是页面级决策。
         self._tree.bind("<Double-1>", self._on_double_click)
 
         self._placeholder = Placeholder(
@@ -939,127 +896,52 @@ class TasksView(ttk.Frame):
 
     def _reset_state(self) -> None:
         """清空上一轮的选择与结果。"""
-        self._picked.clear()
-        self._missing.clear()
-        self._errors.clear()
-        self._tones.clear()
+        self._table.reset()
 
-    def _fill_tree(self, tasks: list[TaskConfig]) -> None:
-        shared_tid = parse_tid(self._tid_var.get())
-        self._tree.delete(*self._tree.get_children())
-        for index, task in enumerate(tasks):
-            iid = str(index)
-            files = task_files(task)
-            # 多 P 稿件缺一个文件就投不完整，所以整行都算缺失
-            gone = [path for path in files if not path.is_file()]
-            exists = bool(files) and not gone
+    def _on_table_filled(self, has_rows: bool) -> None:
+        """表格填完之后切换「有任务 / 还没有任务」的显示。
 
-            if exists:
-                file_text = files[0].name
-                if len(files) > 1:
-                    file_text = f"{files[0].name} 等 {len(files)} 个"
-                status = "待投稿"
-                tone = "idle"
-                # 正常任务默认勾选——大多数情况用户就是要跑全部
-                self._picked[iid] = True
-            else:
-                if files:
-                    detail = f"（缺 {len(gone)}/{len(files)}）" if len(files) > 1 else ""
-                    file_text = f"[缺] {files[0].name}{detail}"
-                else:
-                    file_text = "[缺] (未设置)"
-                status = "文件缺失"
-                tone = "missing"
-                self._missing.add(iid)
-                # 缺失的不预选，也拒绝后续勾选
-                self._picked[iid] = False
-
-            self._tones[iid] = tone
-            self._tree.insert(
-                "",
-                "end",
-                iid=iid,
-                values=(
-                    PICKED if self._picked[iid] else UNPICKED,
-                    task.name,
-                    task.title or task.name,
-                    file_text,
-                    str(len(files)) if len(files) > 1 else "—",
-                    shared_tid if self._source_mode == "folder" else (task.tid or ""),
-                    status,
-                ),
-                tags=(tone,),
-            )
-
-        if tasks:
+        占位图属于页面级的东西（它的按钮是「选择视频文件夹」），所以留在
+        视图里而不是塞进 :class:`TaskTable`。
+        """
+        if has_rows:
             self._placeholder.grid_remove()
             self._tree.grid()
         else:
             self._tree.grid_remove()
             self._placeholder.grid()
 
-        self._update_summary()
+    def _fill_tree(self, tasks: list[TaskConfig]) -> None:
+        """重建整个表格。实现在 :meth:`TaskTable.fill`。"""
+        self._table.fill(tasks)
 
     # ---------- 勾选 ----------
 
-    def _resize_columns(self, _event: "tk.Event | None" = None) -> None:
-        """按权重把可用宽度分给各列。
+    # ---------- 勾选（实现在 TaskTable） ----------
 
-        只在宽度真的变了时动手：``<Configure>`` 在布局的每一步都会触发，
-        无脑重算会让 Treeview 反复重排，拖窗口时能看出明显抖动。
-        """
-        total = self._tree.winfo_width()
-        if total < 100:  # 还没布局出来，别拿 1px 去算比例
-            return
-        for column, width in _column_widths(total).items():
-            self._tree.column(column, width=width)
+    def _resize_columns(self, _event: "tk.Event | None" = None) -> None:
+        """按权重把可用宽度分给各列。实现在 :meth:`TaskTable.resize_columns`。"""
+        self._table.resize_columns(_event)
 
     def _on_tree_click(self, event: tk.Event) -> None:
         """点首列切换勾选；点表头首列则全选/全不选。"""
-        region = self._tree.identify_region(event.x, event.y)
-        if region == "heading":
-            if self._tree.identify_column(event.x) == "#1":
-                self._select_all() if self._any_unpicked() else self._select_none()
-            return
-        if region != "cell":
-            return
-        if self._tree.identify_column(event.x) != "#1":
-            return
-        iid = self._tree.identify_row(event.y)
-        if iid:
-            self._toggle(iid)
+        self._table._on_click(event)
 
     def _on_space(self, _event: tk.Event) -> str:
         """空格切换当前行的勾选。"""
-        focused = self._tree.focus()
-        if focused:
-            self._toggle(focused)
-        return "break"
+        return self._table._on_space(_event)
 
     def _toggle(self, iid: str) -> None:
-        """切换一行的勾选状态。
-
-        文件缺失的行**拒绝勾选**：勾了却在执行时被跳过最让人困惑，
-        不如一开始就勾不上。
-        """
-        if iid in self._missing:
-            self._log.append("该文件不存在，无法勾选")
-            return
-        if not self._editable():
-            return
-        self._picked[iid] = not self._picked.get(iid, False)
-        self._refresh_pick_cell(iid)
-        self._update_summary()
+        """切换一行的勾选状态。实现在 :meth:`TaskTable.toggle`。"""
+        self._table.toggle(iid)
 
     def _refresh_pick_cell(self, iid: str) -> None:
-        values = list(self._tree.item(iid, "values"))
-        values[0] = PICKED if self._picked.get(iid) else UNPICKED
-        self._tree.item(iid, values=values)
+        """刷新首列的勾选标记。实现在 :meth:`TaskTable`。"""
+        self._table._refresh_pick_cell(iid)
 
     def _set_pick(self, iid: str, picked: bool) -> None:
-        if iid in self._missing:
-            picked = False
-        self._picked[iid] = picked
+        """直接设置勾选（缺失行强制 False）。"""
+        self._table.set_pick(iid, picked)
 
     def _editable(self) -> bool:
         """当前是否允许改动勾选状态。
@@ -1085,41 +967,28 @@ class TasksView(ttk.Frame):
         return not self._busy
 
     def _apply_selection(self, predicate: "Any") -> None:
-        """按谓词批量设置勾选，然后刷新首列与汇总。"""
-        if not self._editable():
-            return
-        for iid in self._tree.get_children():
-            self._set_pick(iid, predicate(iid))
-            self._refresh_pick_cell(iid)
-        self._update_summary()
+        """按谓词批量设置勾选。"""
+        self._table._apply_selection(predicate)
 
     def _select_all(self) -> None:
-        self._apply_selection(lambda iid: True)
+        self._table.select_all()
 
     def _select_none(self) -> None:
-        self._apply_selection(lambda iid: False)
+        self._table.select_none()
 
     def _select_failed(self) -> None:
         """只勾失败项（不含文件缺失的）。"""
-        self._apply_selection(lambda iid: self._tones.get(iid) == "error")
+        self._table.select_failed()
 
     def _any_unpicked(self) -> bool:
-        """是否存在可勾但未勾的项——决定点表头是全选还是全不选。"""
-        return any(
-            not self._picked.get(iid, False)
-            for iid in self._tree.get_children()
-            if iid not in self._missing
-        )
+        """是否存在可勾但未勾的项。"""
+        return self._table.any_unpicked()
 
     # ---------- 执行 ----------
 
     def _selected_indexes(self) -> list[int]:
         """当前勾选的任务下标，按列表顺序。"""
-        return [
-            int(iid)
-            for iid in self._tree.get_children()
-            if self._picked.get(iid) and iid not in self._missing
-        ]
+        return self._table.selected_indexes()
 
     def _collect_shared(self) -> SharedSubmitValues:
         """读顶部统一参数。**主线程调用**，只碰内存里的 Tk 变量。"""
@@ -1313,23 +1182,8 @@ class TasksView(ttk.Frame):
             setter(text)
 
     def _mark(self, index: int, status: str, tone: str = "idle") -> None:
-        """更新某一行的状态文案与配色，并同步汇总条。
-
-        汇总放在这里更新而不是让调用方记得调：行状态一变，汇总里的
-        成败计数就必须跟着变，分成两步迟早会忘，界面上就会出现
-        「列表里明明有两个红的，汇总却说 0 失败」。
-        """
-        iid = str(index)
-        if not self._tree.exists(iid):
-            return
-        values = list(self._tree.item(iid, "values"))
-        if len(values) != len(COLUMNS):
-            return
-        values[-1] = status
-        self._tones[iid] = tone
-        # 每行只打一个 tag——避免多个 tag 的背景色互相打架
-        self._tree.item(iid, values=values, tags=(tone,))
-        self._update_summary()
+        """更新某一行的状态文案与配色。实现在 :meth:`TaskTable.mark`。"""
+        self._table.mark(index, status, tone)
 
     def _on_done(self, outcomes: list[TaskOutcome]) -> None:
         self._set_busy(False)
@@ -1573,6 +1427,46 @@ class TasksView(ttk.Frame):
         else:
             self._retry_button.state(["disabled"])
         self._refresh_action_bar()
+
+    # ---------- 兼容层：转发到 TaskTable ----------
+    #
+    # TODO(兼容期): 这四个容器和 ``_tree`` 已经归 :class:`TaskTable` 所有，
+    # 这里只为 ``tests/test_tasks.py`` 里那 60 条直接读私有属性的用例保留
+    # 同名只读入口。返回的是**活动对象**（dict / set / 控件），所以在上面
+    # 调方法、增删键值都和从前完全一样，测试因此一行都不用改。
+    #
+    # 退役路径：先给 TaskTable 补直连单测（本轮已做），再把这些转发连同
+    # 依赖它们的老用例一起改掉——那是下一轮的事，不要和拆分混在一起做，
+    # 否则改坏了分不清是哪一步的锅。
+    @property
+    def _tree(self):
+        return self._table.tree
+
+    @property
+    def _picked(self) -> dict:
+        return self._table.picked
+
+    @_picked.setter
+    def _picked(self, value: dict) -> None:
+        """整体替换勾选表——只有 ``test_copyright.py`` 一条老用例这么用。
+
+        就地清空再填，而不是换掉 dict 对象：``TaskTable`` 内部持有的就是
+        这个引用，换掉的话表格和视图会各看一份，勾选就对不上了。
+        """
+        self._table.picked.clear()
+        self._table.picked.update(value)
+
+    @property
+    def _missing(self) -> set:
+        return self._table.missing
+
+    @property
+    def _errors(self) -> dict:
+        return self._table.errors
+
+    @property
+    def _tones(self) -> dict:
+        return self._table.tones
 
 
 # ---------- 模块级辅助 ----------
