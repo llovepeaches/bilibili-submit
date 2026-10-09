@@ -242,22 +242,3 @@ begin
     if ParamExists('/LANGCHECK') then
       WriteLangReport;
 end;
-
-; ============================================================
-;  曾经在这里用 InitializeSetup() 检查打包产物是否存在，找不到就让
-;  Result := False 中止安装。本意是好的——「别让产物不全的安装器流出去」，
-;  但它跑在**安装器启动那一刻**，而 {src} 是安装器 exe 所在的目录：
-;
-;    · CI 上：setup.exe 就在 dist\ 下，拼出的路径正好是产物目录 → 通过
-;    · 用户机器上：setup.exe 在「下载」文件夹里，于是去找
-;      下载\bilibili-submit-gui\bilibili-submit-gui.exe —— 当然没有
-;      → 弹框「找不到打包产物，请先运行 build_windows.bat」并中止
-;
-;  结果就是 CI 永远绿、用户永远装不上，而且报的错对用户毫无意义
-;  （他是下载来装的人，不是打包的人）。
-;
-;  所以那条检查**不许再回来**。产物齐不齐全应该在**构建期**查，
-;  那里才有 dist\ 可看：tools/check_installer.py 会校验
-;  dist\<BuildDir> 下的主程序，编译安装器之前跑它即可
-;  （build_windows.bat 与 release.yml 都已接上）。
-; ============================================================

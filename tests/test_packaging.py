@@ -1323,6 +1323,16 @@ def test_installer_ships_a_language_probe_for_ci():
         "\"Invalid number of parameters\"，而那句话指不到真正的原因"
     )
 
+    # [Code] 段的**最后一个** end; 之后不许再有任何内容。
+    # Pascal Script 会把 end; 后面的东西当代码解析，而 ; 注释在
+    # 段外不是注释——于是报 'BEGIN' expected，Column 1，看不出是
+    # 「段尾多了段注释」。CI 上真报过（那是被删掉之前的历史说明）。
+    assert code.rstrip().endswith("end;"), (
+        "[Code] 段最后一行是 end; 之后还有内容——Pascal Script 会把它"
+        "当代码解析，; 注释在段尾不是注释，报的是 'BEGIN' expected、"
+        f"Column 1。看最后一行：{code.rstrip().splitlines()[-1]!r}"
+    )
+
     # 判 CJK 的那段必须真的在查码位区间，而不是恒返回 True/False：
     # 恒 True 会让英文向导也通过，恒 False 会让中文向导误报。
     has_cjk = re.search(r"function CjkFlag\(.*?\nend;", code, re.DOTALL)
