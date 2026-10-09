@@ -73,6 +73,7 @@ jobs:
           Copy-Item vendor\ffmpeg.exe "$dir\ffmpeg.exe" -Force
           Copy-Item config "$dir\config" -Recurse -Force
           Copy-Item README.md "$dir\README.md" -Force
+          Copy-Item docs\user-guide.html "$dir\user-guide.html" -Force
           Get-ChildItem $dir | Format-Table Name, `
             @{n='MB';e={[math]::Round($_.Length/1MB,2)}} -AutoSize
 
@@ -157,8 +158,8 @@ jobs:
             throw "安装后找不到 $exe（实际目录：$(Test-Path $app)）"
           }
 
-          # 用户真正能用到的三个文件，少一个都算安装失败
-          foreach ($f in @("ffmpeg.exe", "config\config.example.yaml", "README.md")) {
+          # 用户真正能用到的四个文件，少一个都算安装失败
+          foreach ($f in @("ffmpeg.exe", "config\config.example.yaml", "README.md", "user-guide.html")) {
             if (-not (Test-Path "$app\$f")) { throw "安装后缺少 $f" }
           }
           # _internal 是 Python 运行时，漏了整个程序起不来

@@ -349,6 +349,7 @@ xvfb-run -a python -m pytest      # 612 项
 | [自行打包](docs/BUILD.md) | 本地 / Actions 打包、发版要同步的版本号 |
 | [部署指南](docs/DEPLOY.md) | 源码部署：三平台安装、代理、ffmpeg、定时任务 |
 | [常见问题](docs/FAQ.md) | 按症状排查：错误码、二维码、上传慢、杀软误报 |
+| [使用说明](docs/user-guide.html) | 面向装好的用户：五页签怎么用、数据在哪、报错含义。随安装包附带，开始菜单有入口 |
 
 安装器脚本是 [`installer.iss`](installer.iss)（Inno Setup 6），
 `tools/check_installer.py` 能在提交前静态检查它。

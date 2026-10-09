@@ -80,6 +80,7 @@ jobs:
           Copy-Item vendor\ffmpeg.exe "$dir\ffmpeg.exe" -Force
           Copy-Item config "$dir\config" -Recurse -Force
           Copy-Item README.md "$dir\README.md" -Force
+          Copy-Item docs\user-guide.html "$dir\user-guide.html" -Force
           Get-ChildItem $dir | Format-Table Name, `
             @{n='MB';e={[math]::Round($_.Length/1MB,2)}} -AutoSize
 
@@ -237,7 +238,7 @@ jobs:
           if (-not (Test-Path "$installed\bilibili-submit-gui.exe")) {
             throw "安装后找不到主程序（目录：$installed）"
           }
-          foreach ($f in @("ffmpeg.exe", "_internal", "config\config.example.yaml", "README.md")) {
+          foreach ($f in @("ffmpeg.exe", "_internal", "config\config.example.yaml", "README.md", "user-guide.html")) {
             if (-not (Test-Path "$installed\$f")) { throw "安装后缺少 $f" }
           }
 

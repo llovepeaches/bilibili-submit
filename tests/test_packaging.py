@@ -608,6 +608,84 @@ def test_installer_does_not_delete_user_data_on_uninstall():
     )
 
 
+def test_installer_ships_a_user_guide():
+    """安装版必须带一份「使用说明」，并且给好两个入口。
+
+    装到 Program Files 里的 README.md 是 GitHub 主页那份——徽章、
+    下载表、构建说明，对已经装好软件的人来说全是噪音；而且 Windows
+    上双击 ``.md`` 默认没有打开方式。所以另备一份面向已安装用户的
+    ``docs/user-guide.html``（离线可看，双击即开），并接好两个入口：
+
+    - 开始菜单里的「使用说明」；
+    - 安装完成页的「查看使用说明」勾选项——第一次装好的人最需要的
+      不是程序本身，是知道怎么用。
+
+    这条守卫盯三处：入口在 installer.iss 里真的存在；两个打包流程
+    （本地 bat 与 CI）都把文件放进产物目录；说明页本身是**自包含**
+    的——引用了外部 CSS/JS/图片的话，在用户机器上打开就是残页。
+    """
+    text = ISS.read_text(encoding="utf-8-sig")
+
+    icons = _directives(text, "Icons")
+    assert icons, "[Icons] 段应该有实际指令"
+    assert 'Filename: "{app}\\user-guide.html"' in icons, (
+        "开始菜单没有「使用说明」入口——安装版里那份说明就没人能发现"
+    )
+
+    run_section = _directives(text, "Run")
+    assert run_section, "[Run] 段应该有安装完成页的「查看使用说明」勾选项"
+    assert "user-guide.html" in run_section and "postinstall" in run_section, (
+        "安装完成页缺「查看使用说明」勾选项"
+    )
+    # HTML 不是可执行文件，必须 shellexec 让 Windows 挑默认浏览器，
+    # 否则 Inno 会试图直接执行它然后失败。skipifsilent 是给 CI 的
+    # 静默安装准备的——不能在无人值守的机器上弹浏览器。
+    for flag in ("shellexec", "skipifsilent"):
+        assert flag in run_section, (
+            f"[Run] 的 user-guide.html 缺 {flag} 标志——"
+            + ("不带 shellexec 时 Inno 会直接执行 .html 然后失败"
+               if flag == "shellexec" else
+               "不带它，CI 的静默安装会在无人值守的机器上弹浏览器")
+        )
+
+    guide = ROOT / "docs" / "user-guide.html"
+    assert guide.is_file(), "docs/user-guide.html 不存在"
+
+    # 自包含：不许引用外部资源。相对路径引用在 CI 打包机上能解析，
+    # 到用户机器上（只有安装目录、没有 docs/images）就是残页。
+    html = guide.read_text(encoding="utf-8")
+    externals = re.findall(
+        r'(?:<link[^>]+href=|<script[^>]+src=|<img[^>]+src=|@import\s+|url\()'
+        r'\s*["\']?(https?://|/|\.\./)[^"\')\s]*',
+        html,
+    )
+    assert not externals, (
+        f"user-guide.html 引用了外部资源（{sorted(set(externals))}）——"
+        "它是随安装包发给用户离线看的，必须自包含：样式内联、不引图片"
+    )
+    # 设计语言与 GUI 同源：色值来自 bilibili_submit/ui/theme.py。
+    # 改了 GUI 主题却忘了同步这份页面时，这条会提醒。
+    assert "#FB7299" in html and "#241A1F" in html, (
+        "user-guide.html 里找不到 GUI 主题色（#FB7299 粉 / #241A1F 墨）——"
+        "它的配色应当与程序一致（见 bilibili_submit/ui/theme.py）"
+    )
+
+    for label, path in (("build_windows.bat", ROOT / "build_windows.bat"),
+                        ("release.yml", RELEASE_YML),
+                        ("build-installer.yml", INSTALLER_YML)):
+        body = "\n".join(
+            line for line in path.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith(("#", "::", "REM", "rem"))
+        )
+        # 必须出现「从 docs 拷贝」的那一行，光有文件名不算——
+        # 冒烟检查数组里也写着 user-guide.html，只搜文件名的话，
+        # 删掉拷贝动作它照样绿（自检抓出来的假绿）。
+        assert re.search(r"docs[/\\]user-guide\.html", body), (
+            f"{label} 没把 docs/user-guide.html 放进产物目录——"
+            "安装器 [Files] 按目录打包，产物目录里没有它就装不进去"
+        )
+
+
 def test_readme_documents_both_gui_forms():
     """README 要同时说清「安装版」和「便携版」。
 

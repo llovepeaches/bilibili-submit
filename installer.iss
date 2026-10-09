@@ -11,6 +11,7 @@
 ;          ffmpeg.exe             ← 封面抽帧用，可自行替换
 ;          _internal\                 ← Python 运行时，别手动改
 ;          config\                     ← 配置样例
+;          user-guide.html             ← 使用说明（开始菜单与完成页都有入口）
 ;          README.md
 ;
 ;  装到 Program Files 需要管理员权限。Inno Setup 会自动申请 UAC 提权，
@@ -103,15 +104,20 @@ LicenseText=哔哩哔哩自动投稿程序
 本程序为个人开源项目，与哔哩哔哩官方无任何关联。
 
 [Icons]
-; 开始菜单固定一项
+; 开始菜单固定三项：程序本体、使用说明（安装目录里的 user-guide.html，
+; 双击用系统默认浏览器打开，离线可看）、卸载
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
+Name: "{group}\使用说明"; Filename: "{app}\user-guide.html"
 Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
 ; 桌面快捷方式做成可选项，默认不打勾
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
-; 装完不自动启动（见 Setup 段说明）。要改的话把下面两行去掉注释：
-;Filename: "{app}\{#AppExeName}"; Description: "立即启动 {#AppName}"; Flags: nowait postinstall skipifsilent
+; 装完不自动启动程序（见 Setup 段说明），但完成页给一个「查看使用说明」
+; 的勾选项——第一次装好的人最需要的不是程序本身，是知道怎么用。
+; 必须带 shellexec：HTML 不是可执行文件，让 Windows 挑默认浏览器打开。
+; skipifsilent：静默安装（CI 冒烟测试）时跳过，不会在 CI 上弹浏览器。
+Filename: "{app}\user-guide.html"; Description: "查看使用说明"; Flags: shellexec nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; 卸载时清掉 Program Files 下的残留。

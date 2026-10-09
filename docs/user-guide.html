@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>使用说明 · 哔哩哔哩自动投稿程序</title>
+<style>
+/* ============================================================
+   配色与设计语言来自 bilibili_submit/ui/theme.py（Fluent 骨架 +
+   B 站粉强调），两边刻意保持一致——这份页面是安装版自带的，
+   打开它的人正看着那个程序。改了 GUI 主题记得同步这里。
+
+   纪律同样沿用 theme.py 的三条：
+   1. 中性色带粉相，不用纯灰；
+   2. 强调色是稀缺资源——粉色只出现在主操作和当前项；
+   3. 语义状态用「浅底 + 深字」，不用深底白字。
+   ============================================================ */
+:root{
+  --shell:#F5F0F2;      /* 窗口底 */
+  --paper:#FDFAFB;      /* 卡片 */
+  --paper-alt:#F7F1F3;  /* 表头、代码底 */
+  --line:#EADFE4;
+  --line-strong:#D8C7CF;
+  --ink:#241A1F;        /* 深梅墨，不用纯黑 */
+  --ink-2:#4A3B42;
+  --ink-3:#6B5A62;
+  --pink:#FB7299;       /* B 站粉 */
+  --pink-deep:#A62052;  /* 链接、选中文字用深梅，粉当背景看不清 */
+  --pink-tint:#FFF1F4;
+  --nav:#E9E0E4;        /* 侧栏底 */
+  --nav-hover:#E4D8DD;
+  --nav-active:#FDFAFB; /* 选中项反白，像一张被抽出的单据 */
+  --ink-surface:#241A1F;/* 底部墨色条 */
+  --ink-surface-fg:#FDFAFB;
+  --ink-surface-muted:#C9AFB7;
+  --ok:#1B6B3A;  --ok-bg:#E4F4E8;
+  --warn:#8A5A00; --warn-bg:#FBF0DA;
+  --err:#B3261E; --err-bg:#FCE7E5;
+  --radius-card:8px;
+  --radius-ctl:6px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{
+  margin:0;background:var(--shell);color:var(--ink);
+  font:15px/1.75 "Segoe UI","PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+}
+code,tt,.mono{
+  font-family:"Cascadia Mono",Consolas,"DejaVu Sans Mono",monospace;
+  font-size:.92em;background:var(--paper-alt);
+  border:1px solid var(--line);border-radius:4px;padding:0 5px;
+}
+pre code{display:block;padding:10px 14px;overflow-x:auto;line-height:1.6}
+
+/* ---------- 布局：复刻 GUI 的 NavigationView ---------- */
+.wrap{display:flex;max-width:1120px;margin:0 auto;min-height:100vh;align-items:stretch}
+.nav{
+  width:200px;flex:0 0 200px;background:var(--nav);
+  padding:20px 12px;position:sticky;top:0;height:100vh;overflow-y:auto;
+}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 10px 18px}
+.brand .logo{
+  width:32px;height:32px;border-radius:8px;background:var(--pink);
+  color:var(--ink);font-weight:700;display:flex;align-items:center;justify-content:center;
+  font-size:15px;
+}
+.brand b{font-size:13px;line-height:1.35;display:block}
+.brand small{color:var(--ink-3);font-size:11px;display:block}
+.nav a{
+  display:flex;align-items:center;gap:10px;height:40px;margin-bottom:4px;
+  padding:0 12px;border-radius:var(--radius-ctl);
+  color:var(--ink);text-decoration:none;font-size:14px;position:relative;
+}
+.nav a .ico{width:20px;text-align:center;color:var(--ink-2);font-style:normal}
+.nav a:hover{background:var(--nav-hover)}
+.nav a.on{background:var(--nav-active);color:var(--pink-deep);font-weight:600}
+.nav a.on .ico{color:var(--pink-deep)}
+/* 选中指示条：Fluent NavigationView 的圆角竖条（theme.py NAV_BAR_WIDTH=3） */
+.nav a.on::before{
+  content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;
+  border-radius:2px;background:var(--pink-deep);
+}
+.nav .foot{margin-top:16px;padding:10px 12px;font-size:11px;color:var(--ink-3);line-height:1.6}
+
+main{flex:1;min-width:0;padding:28px 32px 0}
+section{margin-bottom:36px;scroll-margin-top:16px}
+.card{
+  background:var(--paper);border:1px solid var(--line);
+  border-radius:var(--radius-card);padding:20px 22px;margin-bottom:14px;
+}
+h1{font-size:24px;margin:6px 0 8px}
+h2{font-size:18px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+h2 .step{
+  flex:0 0 auto;width:26px;height:26px;border-radius:50%;background:var(--pink);
+  color:var(--ink);font-size:14px;font-weight:700;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+h3{font-size:14.5px;margin:18px 0 8px;color:var(--ink)}
+p{margin:8px 0}
+.lead{color:var(--ink-2);margin:0 0 20px;max-width:46em}
+.muted{color:var(--ink-3);font-size:13px}
+a{color:var(--pink-deep)}
+b,strong{font-weight:600}
+
+/* 语义状态条：浅底 + 深字，双通道（文字说得明白，颜色只是强调） */
+.note{border-radius:var(--radius-ctl);padding:10px 14px;margin:10px 0;font-size:14px}
+.note b{display:block;margin-bottom:2px}
+.note.warn{background:var(--warn-bg);color:var(--warn)}
+.note.err{background:var(--err-bg);color:var(--err)}
+.note.busy{background:var(--pink-tint);color:var(--pink-deep)}
+.note.ok{background:var(--ok-bg);color:var(--ok)}
+
+/* 步骤列表 */
+ol.steps{list-style:none;margin:10px 0;padding:0}
+ol.steps li{display:flex;gap:14px;padding:7px 0;position:relative}
+ol.steps li::before{
+  content:attr(data-n);flex:0 0 24px;height:24px;border-radius:50%;
+  background:var(--pink-tint);color:var(--pink-deep);font-weight:700;font-size:13px;
+  display:flex;align-items:center;justify-content:center;margin-top:3px;
+}
+ol.steps li:not(:last-child)::after{
+  content:"";position:absolute;left:12px;top:34px;bottom:-8px;width:1px;background:var(--line-strong);
+}
+
+/* 表格：表头复刻 Treeview.Heading（paper-alt 底 + 弱化字） */
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:14px}
+th{background:var(--paper-alt);color:var(--ink-2);font-weight:600;text-align:left;
+   padding:7px 12px;font-size:12.5px}
+td{padding:8px 12px;border-top:1px solid var(--line);vertical-align:top}
+tr:first-child td{border-top:none}
+
+/* 徽章：开始之前的三件小事 */
+.chips{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0 2px}
+.chip{
+  background:var(--paper);border:1px solid var(--line-strong);
+  border-radius:16px;padding:4px 14px;font-size:13px;color:var(--ink-2);
+}
+
+/* 目录树 */
+pre.tree{
+  background:var(--paper-alt);border:1px solid var(--line);
+  border-radius:var(--radius-ctl);padding:12px 16px;margin:10px 0;
+  font:13px/1.7 "Cascadia Mono",Consolas,monospace;color:var(--ink-2);overflow-x:auto;
+}
+
+/* 底部墨色条：复刻 GUI 的状态栏（INK_SURFACE + 反白字） */
+.inkbar{
+  background:var(--ink-surface);color:var(--ink-surface-fg);
+  margin:24px -32px 0;padding:16px 32px;font-size:13px;
+  display:flex;gap:18px;flex-wrap:wrap;align-items:center;
+}
+.inkbar a{color:var(--ink-surface-fg)}
+.inkbar .dim{color:var(--ink-surface-muted)}
+
+/* 窄屏：侧栏折到顶部横排 */
+@media (max-width:860px){
+  .wrap{flex-direction:column}
+  .nav{position:static;width:auto;height:auto;flex:none;padding:12px}
+  .nav a{display:inline-flex;margin:0 4px 4px 0}
+  .nav .foot{display:none}
+  main{padding:20px 18px 0}
+  .inkbar{margin:24px -18px 0;padding:14px 18px}
+}
+@media print{
+  .nav,.inkbar{display:none}
+  body{background:#fff}
+  .card{border:none;padding:0}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- 侧栏：五个页签与程序一一对应，加三段通用说明 -->
+  <aside class="nav">
+    <div class="brand">
+      <div class="logo">B</div>
+      <div><b>哔哩哔哩自动投稿</b><small>自动投稿工具</small></div>
+    </div>
+    <a href="#start" class="on"><i class="ico">◆</i>开始之前</a>
+    <a href="#login"><i class="ico">登</i>登录</a>
+    <a href="#upload"><i class="ico">投</i>投稿</a>
+    <a href="#tasks"><i class="ico">批</i>批量任务</a>
+    <a href="#history"><i class="ico">历</i>历史 · 设置</a>
+    <a href="#data"><i class="ico">🗂</i>数据在哪</a>
+    <a href="#faq"><i class="ico">？</i>常见问题</a>
+    <a href="#feedback"><i class="ico">✉</i>反馈</a>
+    <div class="foot">
+      本文件随程序一起安装，离线可看。<br>
+      最新版本与完整文档见 GitHub 仓库。
+    </div>
+  </aside>
+
+  <main>
+    <h1>使用说明</h1>
+    <p class="lead">管理<b>你自己账号</b>的视频投稿：扫码登录、单个投稿、批量任务、
+    历史记录，都在这一个窗口里。左边的目录对应程序的五个页签，遇到问题先看
+    「常见问题」。</p>
+
+    <!-- ============ 开始之前 ============ -->
+    <section id="start">
+      <div class="card">
+        <h2><i class="ico">◆</i>开始之前</h2>
+        <div class="chips">
+          <span class="chip">不需要装 Python</span>
+          <span class="chip">ffmpeg 已内置（自动封面用）</span>
+          <span class="chip">数据只存在本机</span>
+        </div>
+        <p>程序左侧是五个页签，按投稿顺序排：<b>登录 → 投稿 → 批量任务 → 历史 → 设置</b>。
+        窗口最底下有一条常驻状态栏，随时能看到<b>是否已登录</b>和 <b>ffmpeg 是否就绪</b>，
+        不用进设置页翻。</p>
+        <p>所有耗时操作（取二维码、上传）都在后台跑，窗口不会卡住；
+        登录和投稿都能随时点「取消」。</p>
+        <div class="note warn"><b>第一次用？</b>
+        先拿一个几十 MB 的小视频，把「登录 → 上传 → 拿到 BV 号」整条跑通，
+        再批量用。</div>
+      </div>
+    </section>
+
+    <!-- ============ 登录 ============ -->
+    <section id="login">
+      <div class="card">
+        <h2><span class="step">1</span>登录</h2>
+        <ol class="steps">
+          <li data-n="1">左侧点「登录」，点 <b>获取二维码</b>。</li>
+          <li data-n="2">打开手机 B 站 App，扫窗口里的二维码。</li>
+          <li data-n="3"><b>回到手机上点「确认登录」。</b>
+            只是在手机上看到二维码、不点确认，程序会一直等到超时（约 180 秒）
+            ——这是最常见的一个坑。</li>
+        </ol>
+        <p>登录成功后，底部状态栏会变成「已登录」。登录状态保存在本机
+        （见<a href="#data">数据在哪</a>），下次打开程序<b>不用重新扫码</b>。</p>
+        <div class="note busy"><b>扫完一直卡着？</b>
+        看一眼手机——十有八九是没点「确认登录」。二维码过期就点「取消」重新获取。</div>
+      </div>
+    </section>
+
+    <!-- ============ 投稿 ============ -->
+    <section id="upload">
+      <div class="card">
+        <h2><span class="step">2</span>投稿</h2>
+        <ol class="steps">
+          <li data-n="1">选视频文件。</li>
+          <li data-n="2">填标题（<b>不超过 80 字</b>）、分区、标签、简介。</li>
+          <li data-n="3">选类型：<b>自制</b>（自己拍的/剪的）或 <b>转载</b>
+            （转载要填来源地址）。</li>
+          <li data-n="4">拿不准就先点 <b>预览</b>——空跑一遍，只检查不真投。</li>
+          <li data-n="5">点 <b>开始投稿</b>，进度在日志区滚动，完成后给出 BV 号。</li>
+        </ol>
+        <p><b>封面</b>：留空并用 <code>auto</code> 的话，程序用 ffmpeg 抽视频首帧当封面
+        ——安装版自带 <code>ffmpeg.exe</code>，开箱即用；也可以直接给一张图片。</p>
+        <p>条件没齐（没登录、没选文件）时按钮会就地灰掉，旁边写着<b>差什么</b>，
+        不用点了才知道。跑起来之后主按钮就地变成「取消」。</p>
+        <div class="note err"><b>报错先看日志区。</b>
+        常见代码的意思都在下面<a href="#faq">常见问题</a>里，如
+        <code>601</code>、<code>200009</code>、<code>-352</code>。</div>
+      </div>
+    </section>
+
+    <!-- ============ 批量任务 ============ -->
+    <section id="tasks">
+      <div class="card">
+        <h2><span class="step">3</span>批量任务</h2>
+        <p>选一个文件夹，程序自动扫描里面的视频；顶部填一次共用参数
+        （分区、标签、简介模板），勾选要投的文件，点开跑。列表里每行有状态着色，
+        双击可改标题。</p>
+        <p>简介和标题支持占位符，按文件自动替换：<code>{name}</code> 完整文件名、
+        <code>{stem}</code> 去掉扩展名、<code>{n}</code> 序号。</p>
+        <h3>分 P 合并</h3>
+        <p>一套视频可以合成<b>一个稿件的 P1/P2/P3</b>（一个 BV 号，播放器里连续切），
+        在「分P合并」里选：</p>
+        <table>
+          <tr><th style="width:11em">模式</th><th>怎么分</th></tr>
+          <tr><td><b>不合并</b></td><td>一个文件一个稿件。</td></tr>
+          <tr><td><b>按文件名前缀</b></td><td><code>旅行_01 / 旅行_02</code> 合成一套「旅行」；
+              文件名里没线索时（如 <code>01.mp4</code>）要求序号从 1 开始且连续才敢合并。</td></tr>
+          <tr><td><b>按子文件夹</b></td><td>每个子文件夹一个稿件，文件夹名当标题——只往下钻一层，
+              不会一次冒出几百个稿件。</td></tr>
+          <tr><td><b>整个目录合并</b></td><td>勾选的文件全部合成一个稿件的多 P。</td></tr>
+        </table>
+        <div class="note warn"><b>新号务必设任务间隔。</b>
+        新号、小号的频控明显更严，一口气连投很容易触发风控。
+        批量任务里把每个任务之间的间隔拉长（分钟级），宁可慢，别封号。</div>
+      </div>
+    </section>
+
+    <!-- ============ 历史 · 设置 ============ -->
+    <section id="history">
+      <div class="card">
+        <h2><span class="step">4</span>历史 · 设置</h2>
+        <h3>历史</h3>
+        <p>本机投过的稿：BV 号、时间、标题。只记录这台机器上通过本程序投的，
+        不联网拉取全部稿件。</p>
+        <h3>设置</h3>
+        <p>配代理、换 cookie 路径、切深浅色主题（改完重启生效），
+        还有一键<b>环境自检</b>——登录状态、ffmpeg、网络三样逐项打勾。
+        拿不准环境好不好，先跑一次自检。</p>
+      </div>
+    </section>
+
+    <!-- ============ 数据在哪 ============ -->
+    <section id="data">
+      <div class="card">
+        <h2><i class="ico">🗂</i>数据在哪</h2>
+        <p>登录状态、界面偏好、投稿历史都在<b>用户目录</b>下，不在安装目录：</p>
+<pre class="tree">%USERPROFILE%\.config\bilibili_submit\
+├── cookie.json       登录状态
+├── ui-state.json     界面偏好（上次用的目录等）
+└── history.json      投稿历史</pre>
+        <p>所以<b>卸载不会删掉这些</b>——重装、升级后打开程序，不用重新扫码。
+        想彻底清干净（换号、送人电脑），把这个 <code>.config</code> 目录一起删掉。</p>
+        <div class="note err"><b>Cookie 等于账号本身。</b>
+        拿到 <code>cookie.json</code> 就能不扫码直接操作你的账号，
+        别发给任何人、别上传到网盘或仓库。</div>
+      </div>
+    </section>
+
+    <!-- ============ 常见问题 ============ -->
+    <section id="faq">
+      <div class="card">
+        <h2><i class="ico">？</i>常见问题</h2>
+        <table>
+          <tr><th style="width:16em">现象 / 报错</th><th>说明与处理</th></tr>
+          <tr><td>卡在「已扫码，等待确认」</td>
+              <td>去手机 B 站 App 里点<b>「确认登录」</b>。不点会一直等到超时。</td></tr>
+          <tr><td><code>601 投稿过于频繁</code></td>
+              <td>频控到了。停一段时间再投；批量任务务必设间隔。</td></tr>
+          <tr><td><code>200009 今日投稿次数已达上限</code></td>
+              <td>非正式会员单日有数量上限，可在 B 站主站答题转正式会员解除。</td></tr>
+          <tr><td><code>-352 风险控制触发</code> / <code>-412 请求被拦截</code></td>
+              <td>操作太像脚本了。停几小时到一两天，降频率、减少单日量再试。</td></tr>
+          <tr><td>「标题不能超过 80 字」</td>
+              <td>B 站的硬限制，缩短标题或把信息挪到简介。</td></tr>
+          <tr><td>「定时时间必须距今 4 小时以上」</td>
+              <td>预约投稿的时间得设在 4 小时以后。</td></tr>
+          <tr><td>自动封面不可用 / 找不到 ffmpeg</td>
+              <td>看底部状态栏的 ffmpeg 一项。安装版自带，若被杀软隔离需还原并加白名单。</td></tr>
+          <tr><td>杀毒软件报毒 / 文件消失</td>
+              <td>打包程序常被误判。在 Windows Defender「病毒和威胁防护 → 保护历史记录」
+                  里还原，并把安装目录加入白名单。</td></tr>
+          <tr><td>上传很慢 / 中途失败</td>
+              <td>先跑设置里的环境自检；配了代理的话检查代理是否可用；
+              大文件建议错开网络高峰。</td></tr>
+        </table>
+        <p class="muted">更多排查手段见仓库里的 <code>docs/FAQ.md</code>。</p>
+      </div>
+    </section>
+
+    <!-- ============ 反馈 ============ -->
+    <section id="feedback">
+      <div class="card">
+        <h2><i class="ico">✉</i>反馈</h2>
+        <p>报 bug 或提建议请到 <a href="https://github.com/llovepeaches/bilibili-submit/issues">GitHub Issues</a>，
+        附上<b>日志区的完整报错</b>和程序版本（标题栏上写着）。</p>
+        <p>仅供管理自己的账号投稿使用。请勿用于批量注册、刷量或搬运他人作品——
+        高频自动化会触发风控甚至封号，程序内置的保守退避策略正是为此。</p>
+      </div>
+    </section>
+
+    <div class="inkbar">
+      <span>哔哩哔哩自动投稿程序 · 使用说明</span>
+      <span class="dim">随安装包附带，离线可看</span>
+      <span style="flex:1"></span>
+      <a href="https://github.com/llovepeaches/bilibili-submit">GitHub 仓库</a>
+      <a href="https://github.com/llovepeaches/bilibili-submit/issues">问题反馈</a>
+    </div>
+  </main>
+</div>
+
+<script>
+// 侧栏当前项高亮。没有这段页面也完全可用——这只是把 GUI 里
+// 「当前页签左侧的粉色竖条」搬到了网页上。
+(function(){
+  var links=[].slice.call(document.querySelectorAll('.nav a[href^="#"]'));
+  var map={};
+  links.forEach(function(a){map[a.getAttribute('href').slice(1)]=a});
+  var current=links[0];
+  function paint(){
+    links.forEach(function(a){a.classList.remove('on')});
+    if(current)current.classList.add('on');
+  }
+  if('IntersectionObserver' in window){
+    var io=new IntersectionObserver(function(es){
+      es.forEach(function(e){
+        if(e.isIntersecting && map[e.target.id]){current=map[e.target.id];paint();}
+      });
+    },{rootMargin:'-20% 0px -70% 0px'});
+    Object.keys(map).forEach(function(id){
+      var el=document.getElementById(id);if(el)io.observe(el);
+    });
+  }
+})();
+</script>
+</body>
+</html>

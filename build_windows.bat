@@ -104,6 +104,7 @@ if not exist "dist\bilibili-submit-gui\config" (
     xcopy config "dist\bilibili-submit-gui\config\" /e /i /q >nul
 )
 copy README.md "dist\bilibili-submit-gui\" >nul
+copy docs\user-guide.html "dist\bilibili-submit-gui\" >nul
 
 REM ------------------------------------------------------------
 REM  编译安装器。ISCC 只在装了 Inno Setup 时才有，找不到就跳过
