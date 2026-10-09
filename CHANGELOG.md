@@ -6,6 +6,26 @@
 所有值得记录的变更都会写进这里。格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.7-rc.4] - 2026-10-09
+
+第四个预发布候选。**只有 Windows 安装版变了**，其余五个产物与 rc.3
+完全一致——如果之前装不上，是安装器自己的问题，重装这个版本即可。
+
+### 修复
+
+- **Windows 安装版装不上了**。安装器里曾用 `InitializeSetup()` 拼
+  `{src}` 找打包产物，找不到就中止安装。`{src}` 是**安装器 exe 所在的
+  目录**：CI 上 `setup.exe` 就在 `dist\` 下所以一路通过，用户机器上
+  `setup.exe` 在「下载」文件夹里，于是去找
+  `下载\bilibili-submit-gui\bilibili-submit-gui.exe`——当然没有，弹框
+  「找不到打包产物，请先运行 build_windows.bat」并中止。结果是 CI 永远
+  绿、每个下载者都装不上，而这句提示对下载者毫无意义。
+
+  现在删掉整个 `[Code]` 段，产物校验挪到构建期
+  （`tools/check_installer.py`），那里才有 `dist\` 可看。新增守卫
+  `test_artifacts_are_checked_at_build_time_not_install_time` 盯两头：
+  安装器里不许再出现 `{src}`，构建期校验必须真的接进本地脚本与 CI。
+
 ## [0.2.7-rc.3] - 2026-10-09
 
 第三个预发布候选。修的是**发出去的 Release 说明文字本身**：rc.1、rc.2
