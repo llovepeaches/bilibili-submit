@@ -103,8 +103,9 @@ if exist vendor\ffmpeg.exe (
 if not exist "dist\bilibili-submit-gui\config" (
     xcopy config "dist\bilibili-submit-gui\config\" /e /i /q >nul
 )
-copy README.md "dist\bilibili-submit-gui\" >nul
 copy docs\user-guide.html "dist\bilibili-submit-gui\" >nul
+REM  安装目录里不放 README.md——那是给 GitHub 主页看的（徽章、下载表、
+REM  构建说明），给用户看的使用说明是 user-guide.html（开始菜单有入口）。
 
 REM ------------------------------------------------------------
 REM  编译安装器。ISCC 只在装了 Inno Setup 时才有，找不到就跳过

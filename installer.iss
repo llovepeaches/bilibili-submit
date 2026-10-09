@@ -12,7 +12,6 @@
 ;          _internal\                 ← Python 运行时，别手动改
 ;          config\                     ← 配置样例
 ;          user-guide.html             ← 使用说明（开始菜单与完成页都有入口）
-;          README.md
 ;
 ;  装到 Program Files 需要管理员权限。Inno Setup 会自动申请 UAC 提权，
 ;  用户看到的是标准 Windows 安装向导，不需要管理员的选项也做了

@@ -611,10 +611,11 @@ def test_installer_does_not_delete_user_data_on_uninstall():
 def test_installer_ships_a_user_guide():
     """安装版必须带一份「使用说明」，并且给好两个入口。
 
-    装到 Program Files 里的 README.md 是 GitHub 主页那份——徽章、
-    下载表、构建说明，对已经装好软件的人来说全是噪音；而且 Windows
-    上双击 ``.md`` 默认没有打开方式。所以另备一份面向已安装用户的
-    ``docs/user-guide.html``（离线可看，双击即开），并接好两个入口：
+    安装目录里**刻意不放** README.md——那是 GitHub 主页的文档
+    （徽章、下载表、构建说明），对已经装好软件的人来说全是噪音；
+    而且 Windows 上双击 ``.md`` 默认没有打开方式。取而代之的是一份
+    面向已安装用户的 ``docs/user-guide.html``（离线可看，双击即开），
+    并接好两个入口：
 
     - 开始菜单里的「使用说明」；
     - 安装完成页的「查看使用说明」勾选项——第一次装好的人最需要的
@@ -683,6 +684,27 @@ def test_installer_ships_a_user_guide():
         assert re.search(r"docs[/\\]user-guide\.html", body), (
             f"{label} 没把 docs/user-guide.html 放进产物目录——"
             "安装器 [Files] 按目录打包，产物目录里没有它就装不进去"
+        )
+
+    # 反向：安装目录里刻意**不放** README.md。命令行 zip 包（stage-mini/
+    # stage-full）里的 README 不受影响，这里只盯 GUI 产物目录这一条。
+    bat_body = "\n".join(
+        line for line in (ROOT / "build_windows.bat")
+        .read_text(encoding="utf-8").splitlines()
+        if not line.strip().startswith(("REM", "rem", "::"))
+    )
+    assert 'README.md "dist\\bilibili-submit-gui' not in bat_body, (
+        "build_windows.bat 又在往安装版产物里拷 README.md——"
+        "安装目录只放 user-guide.html，README 是 GitHub 主页的文档"
+    )
+    for path in (RELEASE_YML, INSTALLER_YML):
+        body = "\n".join(
+            line for line in path.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith("#")
+        )
+        assert '"$dir\\README.md"' not in body, (
+            f"{path.name} 又在往安装版产物目录拷 README.md——"
+            "安装目录只放 user-guide.html"
         )
 
 
