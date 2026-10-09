@@ -2,6 +2,13 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
+# 安装器的两个输入文件同理：ISCC 跑在 Windows 上，.isl 里的中文与
+# 段名行尾的 \r 都按 CRLF 处理最稳。写死 eol=crlf 还有个副作用是好的——
+# 仓库里存的是 LF 字节，Windows 上检出才展开成 CRLF，diff 不会因为
+# 换行符在每个人的机器上长得不一样而炸开。
+installer.iss text eol=crlf
+installer_languages/*.isl text eol=crlf
+
 # 默认按文本处理，检出时统一换行
 * text=auto
 

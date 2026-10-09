@@ -24,7 +24,7 @@
 
 #define AppName "哔哩哔哩自动投稿程序"
 #define AppShortName "bilibili-submit"
-#define AppVersion "0.2.7"
+#define AppVersion "0.2.8"
 #define AppExeName "bilibili-submit-gui.exe"
 ; PyInstaller onedir 输出的目录名，必须与 EXE_NAME 一致
 #define BuildDir "dist\bilibili-submit-gui"
@@ -69,7 +69,20 @@ SolidCompression=yes
 ; 可能只想装好放着。
 ;WizardImageFile 留空表示不换背景图
 [Languages]
-Name: "chinese"; MessagesFile: "compiler:Default.isl"
+; 简体中文消息文件放在仓库的 installer_languages\ 下，不用官方的
+; compiler:Languages\ChineseSimplified.isl —— 后者依赖「构建机的 Inno Setup
+; 装没装、装的哪一版、语言文件在不在那个目录」，本地能编 CI 编不了，
+; 或者反过来。仓库自带这份就断了这个依赖。
+;
+; ⚠️ 这里曾经写着 Name: "chinese"; MessagesFile: "compiler:Default.isl"
+;    —— 语言名叫 chinese（所以语言名显示得对），消息文件却指向**英文**
+;    的 Default.isl，装出来整个向导全是英文。更糟的是没有任何一个测试
+;    能发现「向导不是中文的」这件事：没有测试关心语言。
+;    现在 tests/test_packaging.py 里钉住了「MessagesFile 不得指向英文」。
+;
+; 文件必须是 UTF-8 带 BOM（ISCC 靠 BOM 认编码，不带 BOM 按 ANSI 读，
+; 中文会乱码且不报错）。installer.iss 自己也一样，两个文件同一个坑。
+Name: "chinese"; MessagesFile: "installer_languages\ChineseSimplified.isl"
 
 ; 不需要 .NET / 不用管理员就能装的路径（VCL 组件一个都不引）。
 ; 这里刻意**不设** [Components]：装了组件选择页就得给每条 [Files] 写
