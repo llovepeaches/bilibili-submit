@@ -345,9 +345,12 @@ def test_do_run_reports_position_not_index():
     """
     events = []
 
+    seen: list[str] = []
+
     def fake_run_task(client, task, cfg, **kwargs):
         from bilibili_submit.scheduler import TaskOutcome
 
+        seen.append(task.name)
         return TaskOutcome(name=task.name, success=True, bvid="BV1", url="u")
 
     tasks = [TaskConfig(name=f"n{i}", type="single", file=f"/x/{i}.mp4") for i in range(6)]
@@ -365,6 +368,9 @@ def test_do_run_reports_position_not_index():
     dones = [e for e in events if isinstance(e, Event) and e.done]
     assert [(e.index, e.position, e.total) for e in starts] == [(3, 1, 2), (5, 2, 2)]
     assert [(e.index, e.position, e.total) for e in dones] == [(3, 1, 2), (5, 2, 2)]
+    # 投稿必须是**注入进来那个**函数干的：只盯上报序列的话，就算 do_run
+    # 偷偷换成模块级的真 run_task，这条用例也照样是绿的
+    assert seen == ["n3", "n5"]
 
 
 def test_do_run_stops_immediately_when_cancelled():

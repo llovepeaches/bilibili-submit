@@ -510,12 +510,19 @@ git tag v0.2.7-rc.1 && git push origin v0.2.7-rc.1   # 版本号换成你要发�
 WBI 签名算法、二维码登录全流程、线路探测、`add/v3` 接口可达性、
 分片边界算法、断点续传、ffmpeg 定位与封面抽帧，以及打包链路本身。
 
-单元测试 539 项（`python -m pytest`）。
+单元测试 612 项（`python -m pytest`）。
 
 > **跑测试必须挂虚拟屏幕**：`xvfb-run -a python -m pytest`
 > 没有 X server 时 tkinter 建不出窗口，138 条界面测试会被**静默跳过**——
 > 测试照样报绿，但你改的界面代码一行都没被验到。涉及 `ui/` 的改动尤其要当心。
 > 想在 CI 里堵死这个口子，设 `BILLI_REQUIRE_DISPLAY=1`，届时缺屏会直接判失败而不是跳过。
+
+界面层还有一个 `tests/test_layering.py` 守着依赖方向：纯组件
+（`widgets` / `theme` / `layout` / `qr` / `workers`）不许认识业务模块，
+`ui/` 不许直接调 `upload_video`，`views/tasks.py` 运行期不许 import
+`scheduler` / `submit`。它们都用 AST 读 import 节点，注释里提到
+`upload_video` 不会被误判。改动 `ui/` 被这几条挡住时，说明该把逻辑
+挪进 `views/tasks_run.py` 那一层，而不是放宽守卫。
 
 **建议第一次拿一个几十 MB 的小视频试跑**，确认「登录 → 上传 → 拿到 BV 号」整条通了再批量用。
 

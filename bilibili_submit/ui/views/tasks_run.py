@@ -22,7 +22,8 @@ from typing import Any
 
 from ...config import AppConfig, TaskConfig
 from ...exceptions import BiliError, NotLoggedInError
-from ...scheduler import RunOptions, TaskOutcome
+from ...scheduler import RunOptions, TaskOutcome, run_task
+from ...submit import get_backend
 from ..workers import Cancelled, Event
 from .tasks_table import _truncate
 
@@ -52,8 +53,8 @@ class BatchRunController:
         select_failed: Any,
         read_active_worker: Any,
         write_active_worker: Any,
-        run_task: Any,
-        get_backend: Any,
+        run_task: Any = None,
+        get_backend: Any = None,
     ) -> None:
         self._app = app
         self._worker = worker
@@ -70,15 +71,31 @@ class BatchRunController:
         self._select_failed = select_failed
         self._read_active_worker = read_active_worker
         self._write_active_worker = write_active_worker
-        #: 业务入口。走注入而不是模块级 import，是为了让「替换掉真实的
-        #: 投稿实现」这件事有一个稳定的接缝——测试打桩的位置不应该
-        #: 因为我把它搬到哪个文件里就跟着变。
+        #: 业务入口。默认是本模块 import 进来的真函数，但可以在构造时
+        #: 整个换掉——注入优先、模块级垫底，两边都不是在构造那一刻求值
+        #: 的函数对象：``_invoke_*`` 每次调用才决定用谁，所以测试无论
+        #: 是打本模块的名字还是传替身进来，都能生效。
         self._run_task = run_task
         self._get_backend = get_backend
 
         # 注意 ``active_worker`` 不在本对象上：它同时服务于「投稿执行」和
         # 「目录加载」两条流程，取消按钮要作用于当前那一个。放在视图上
         # 才是单一事实来源，这里通过回调读写。
+
+    def _invoke_run_task(self, *args, **kwargs):
+        """真正发起一次投稿：注入优先，没注入就用本模块 import 的真函数。
+
+        **到调用这一刻才决定用谁**。构造时就把函数对象取出来存着的话，
+        对象是死的，测试 monkeypatch 本模块的 ``run_task`` 换不掉它——
+        那会让「已经挡掉网络调用」的测试静默走真实路径还报绿。
+        """
+        fn = self._run_task if self._run_task is not None else run_task
+        return fn(*args, **kwargs)
+
+    def _invoke_backend(self, *args, **kwargs):
+        """同上，取后端实例。"""
+        fn = self._get_backend if self._get_backend is not None else get_backend
+        return fn(*args, **kwargs)
 
     # ---------- 启动 ----------
 
@@ -192,7 +209,7 @@ class BatchRunController:
         行状态与进度条用 :class:`~..workers.Event`。
         """
         client = self._app.ctx.client()
-        backend = self._get_backend(cfg.submit.backend, cfg.submit.app)
+        backend = self._invoke_backend(cfg.submit.backend, cfg.submit.app)
         outcomes: list[TaskOutcome] = []
 
         total = len(selected)
@@ -203,7 +220,7 @@ class BatchRunController:
             report(Event("start", index=index, position=position, total=total))
             report(f"[{position}/{total}] 开始：{task.name}")
 
-            outcome = self._run_task(
+            outcome = self._invoke_run_task(
                 client,
                 task,
                 cfg,

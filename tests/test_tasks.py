@@ -227,7 +227,6 @@ def _write_yaml(directory: Path, entries: list[tuple[str, str]]) -> str:
 
 def _load_yaml(root, view, path) -> None:
     """走高级 yaml 入口加载，等真实结果落地。"""
-    view._pick_config_from = None  # 标记不是文件对话框路径
     view._dir_var.set(str(path))
     from bilibili_submit.config import expand_tasks, load_config
 
@@ -754,7 +753,7 @@ def test_do_run_reports_events_instead_of_touching_tk(tmp_path, monkeypatch):
     import tkinter as tk
 
     from bilibili_submit.scheduler import TaskOutcome
-    from bilibili_submit.ui.views import tasks as tasks_mod
+    from bilibili_submit.ui.views import tasks_run as tasks_run_mod
 
     for name in ("a.mp4", "b.mp4"):
         _make_video(tmp_path, name)
@@ -766,10 +765,10 @@ def test_do_run_reports_events_instead_of_touching_tk(tmp_path, monkeypatch):
 
         # 把真实网络调用挡掉
         monkeypatch.setattr(
-            tasks_mod, "run_task",
+            tasks_run_mod, "run_task",
             lambda *a, **k: TaskOutcome(name="A", success=True, bvid="BV1", url="u"),
         )
-        monkeypatch.setattr(tasks_mod, "get_backend", lambda *a, **k: object())
+        monkeypatch.setattr(tasks_run_mod, "get_backend", lambda *a, **k: object())
         monkeypatch.setattr(
             type(view.app.ctx), "client", lambda self, need_login=True: object()
         )
@@ -805,6 +804,7 @@ def test_do_run_uses_snapshot_not_live_tasks(tmp_path, monkeypatch):
     from bilibili_submit.config import TaskConfig
     from bilibili_submit.scheduler import TaskOutcome
     from bilibili_submit.ui.views import tasks as tasks_mod
+    from bilibili_submit.ui.views import tasks_run as tasks_run_mod
 
     _make_video(tmp_path, "a.mp4")
     _make_video(tmp_path, "b.mp4")
@@ -816,13 +816,13 @@ def test_do_run_uses_snapshot_not_live_tasks(tmp_path, monkeypatch):
 
         seen_tasks = []
         monkeypatch.setattr(
-            tasks_mod, "run_task",
+            tasks_run_mod, "run_task",
             lambda client, task, cfg, **k: (
                 seen_tasks.append(task)
                 or TaskOutcome(name="x", success=True, bvid="BV1", url="u")
             ),
         )
-        monkeypatch.setattr(tasks_mod, "get_backend", lambda *a, **k: object())
+        monkeypatch.setattr(tasks_run_mod, "get_backend", lambda *a, **k: object())
         monkeypatch.setattr(
             type(view.app.ctx), "client", lambda self, need_login=True: object()
         )
@@ -852,7 +852,7 @@ def test_do_run_reports_position_not_index(tmp_path, monkeypatch):
     import tkinter as tk
 
     from bilibili_submit.scheduler import TaskOutcome
-    from bilibili_submit.ui.views import tasks as tasks_mod
+    from bilibili_submit.ui.views import tasks_run as tasks_run_mod
 
     for i in range(6):
         _make_video(tmp_path, f"v{i}.mp4")
@@ -863,10 +863,10 @@ def test_do_run_reports_position_not_index(tmp_path, monkeypatch):
         _load_folder(root, view, tmp_path, monkeypatch)
 
         monkeypatch.setattr(
-            tasks_mod, "run_task",
+            tasks_run_mod, "run_task",
             lambda *a, **k: TaskOutcome(name="A", success=True, bvid="BV1", url="u"),
         )
-        monkeypatch.setattr(tasks_mod, "get_backend", lambda *a, **k: object())
+        monkeypatch.setattr(tasks_run_mod, "get_backend", lambda *a, **k: object())
         monkeypatch.setattr(
             type(view.app.ctx), "client", lambda self, need_login=True: object()
         )

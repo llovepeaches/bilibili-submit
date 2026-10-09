@@ -14,6 +14,35 @@
   138 条界面测试会被静默跳过——测试报绿但改动未经验证。改用
   `xvfb-run -a python -m pytest`；CI 可设 `BILLI_REQUIRE_DISPLAY=1` 让缺屏
   直接判失败而非跳过。
+- **界面测试基座统一**。此前 6 份测试各自定义了一份 `needs_display`、
+  3 份各自定义 `run_until`，改一处要改 6 遍。现在统一放进
+  `tests/conftest.py`，并加一条 `test_display_contract.py` 守卫：谁再在
+  测试文件里重新定义这些辅助函数，直接判失败。（用 AST 查赋值，不是搜
+  字符串——注释里写一句「这里不要用 run_until」不会被误判。）
+- **批量任务页拆分**（`ui/views/tasks.py` 1809 行 → 1386 行）。
+  把三块各自独立的东西抽成协作者，原来它们都堆在同一个类里，互相看得见
+  彼此的私有状态，改一处要在 1809 行里确认没有别处依赖：
+  - `views/tasks_editor.py` — `TaskEditor`：标题模板套用与分 P 标题编辑；
+  - `views/tasks_table.py` — `TaskTable`：表格、勾选、列几何、状态着色；
+  - `views/tasks_run.py` — `BatchRunController`：批量执行、进度上报、
+    快照、线程回调收尾。
+  拆分用组合而不是 mixin：mixin 展平后各块仍可互调，跨组依赖会从
+  「文件内可见」变成「完全不可见」，等于把同一份面条分几碗装。协作者对象
+  可以单独实例化、单独测试——新增的 60 条直连单测里有 43 条不需要
+  X server，0.2 秒内跑完，而此前要验证「套模板只改勾选行」得先建 App、
+  选目录、等扫描线程。
+- **投稿入口的打桩接缝归位**。`run_task` / `get_backend` 原先由
+  `tasks.py` import 后注入给控制器，函数一搬家，3 条测试对
+  `tasks_mod.run_task` 的 monkeypatch 就失效了，其中两条走了真实网络路径
+  却仍然报绿。现在接缝放在真正调用它们的 `tasks_run.py`：注入优先、
+  模块级垫底，而且到调用那一刻才决定用谁——构造时就把函数对象取出来
+  存着的话，monkeypatch 换不掉它。
+- **新增分层守卫**（`tests/test_layering.py`）：纯组件层不许依赖业务模块、
+  `ui/` 不许直接调 `upload_video`、`views/tasks.py` 运行期不许 import
+  `scheduler` / `submit`。三条都是此刻为真，且都做过反向自检（故意
+  注入违规 import，确认守卫真的变红）。
+- **默认分区号不再两处各写一遍**：`DEFAULT_TID` 改从
+  `DefaultsConfig().tid` 取。
 
 ## [0.2.7-rc.1] - 2026-10-07
 

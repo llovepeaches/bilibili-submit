@@ -24,14 +24,12 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ...config import AppConfig, TaskConfig, expand_tasks, load_config, scan_video_files
 from ...config import task_files
 from ...exceptions import BiliError, ConfigError
 from ...multipart import PartGroup, group_files
-from ...scheduler import TaskOutcome, run_task
-from ...submit import get_backend
 from .. import layout, theme
 from ..state import BatchUIState, DEFAULT_TID, load_ui_state, save_ui_state
 # 列定义、勾选标记、列宽算法的实现已经搬到 tasks_table 了，这里继续
@@ -51,6 +49,12 @@ from .tasks_table import (  # noqa: F401
 # PartTitlesDialog 同上：实现在 tasks_editor，测试仍从本模块 import。
 from .tasks_editor import PartTitlesDialog, TaskEditor, render_title_template  # noqa: F401
 from .tasks_run import BatchRunController
+# TaskOutcome 只在类型标注里出现（``from __future__ import annotations``
+# 让标注不求值），放在 TYPE_CHECKING 下 import，运行期就不必为此依赖
+# 业务层——真正的调用已经归 BatchRunController。
+if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
+    from ...scheduler import TaskOutcome
+
 from ..widgets import (
     ActionBar,
     Collapsible,
@@ -231,12 +235,9 @@ class TasksView(ttk.Frame):
             # 取消按钮要作用于「当前那一个」，放在视图上才是单一事实来源
             read_active_worker=lambda: self._active_worker,
             write_active_worker=self._set_active_worker,
-            # 延迟查找本模块的 run_task / get_backend：它们是从业务层
-            # import 进来的，测试替换的是**本模块**上的名字。直接把函数
-            # 对象传过去的话，构造那一刻就固定了，打桩换不掉——
-            # 那会让「挡掉真实网络调用」的测试静默走真实路径。
-            run_task=lambda *a, **k: run_task(*a, **k),
-            get_backend=lambda *a, **k: get_backend(*a, **k),
+            # run_task / get_backend 不在这里注入：它们由 BatchRunController
+            # 自己从业务层 import（默认）或由测试整体替换（注入）。接缝在
+            # 真正调用它们的那个文件里，视图不必为此知道业务层的存在。
         )
 
     def _set_active_worker(self, worker) -> None:
