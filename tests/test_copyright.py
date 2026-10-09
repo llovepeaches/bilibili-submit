@@ -92,21 +92,7 @@ def test_shared_values_apply_carries_copyright():
 # ---------- 需要 Tk ----------
 
 
-def _display_available() -> bool:
-    try:
-        import tkinter as tk
-
-        root = tk.Tk()
-        root.withdraw()
-        root.destroy()
-        return True
-    except Exception:  # noqa: BLE001 - 任何失败都当作没有显示环境
-        return False
-
-
-needs_display = pytest.mark.skipif(
-    not _display_available(), reason="无显示环境（CI 可配 Xvfb 后自动启用）"
-)
+from conftest import needs_display  # noqa: E402 - 由 tests/conftest.py 统一提供
 
 
 def _upload_view(root, tmp_path):

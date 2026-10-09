@@ -12,53 +12,11 @@ import os
 import sys
 import threading
 
-import pytest
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bilibili_submit.ui import environment as env_mod  # noqa: E402
 from bilibili_submit.ui.views.settings import SettingsView  # noqa: E402
-
-
-def _display_available() -> bool:
-    try:
-        import tkinter as tk
-
-        root = tk.Tk()
-        root.destroy()
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
-needs_display = pytest.mark.skipif(
-    not _display_available(), reason="无显示环境（CI 可配 Xvfb 后自动启用）"
-)
-
-
-def run_until(root, predicate, timeout_ms: int = 5000) -> None:
-    """跑真实事件循环直到 ``predicate()`` 为真。
-
-    ``update_idletasks()`` 只跑重绘不跑普通 ``after`` 回调——
-    Worker 完成只是把结果排进队列，能不能排上、什么时候排上
-    全看事件循环。所以异步 UI 的测试不能用它等。
-
-    超时直接 fail：宁可红一次，也不要把「结果没到达」读成「功能正常」。
-    """
-    state = {"done": False}
-
-    def poll():
-        if predicate():
-            state["done"] = True
-            root.quit()
-        else:
-            root.after(10, poll)
-
-    root.after(0, poll)
-    root.after(timeout_ms, root.quit)
-    root.mainloop()
-    assert state["done"], f"等待异步结果超时（{timeout_ms}ms）"
-    assert predicate()
+from conftest import needs_display, run_until  # noqa: E402 - 由 tests/conftest.py 统一提供
 
 
 class _FakeFfmpeg:

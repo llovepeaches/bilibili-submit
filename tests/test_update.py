@@ -448,37 +448,7 @@ def test_repo_matches_installer_iss():
 # ---------- 界面 ----------
 
 
-def _display_available() -> bool:
-    try:
-        import tkinter as tk
-
-        root = tk.Tk()
-        root.destroy()
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
-needs_display = pytest.mark.skipif(
-    not _display_available(), reason="无显示环境（CI 可配 Xvfb 后自动启用）"
-)
-
-
-def run_until(root, predicate, timeout_ms: int = 5000) -> None:
-    """跑真实事件循环等异步结果——``update_idletasks`` 等不到 ``after``。"""
-    state = {"done": False}
-
-    def poll():
-        if predicate():
-            state["done"] = True
-            root.quit()
-        else:
-            root.after(10, poll)
-
-    root.after(0, poll)
-    root.after(timeout_ms, root.quit)
-    root.mainloop()
-    assert state["done"], f"等待异步结果超时（{timeout_ms}ms）"
+from conftest import needs_display, run_until  # noqa: E402 - 由 tests/conftest.py 统一提供
 
 
 def _build_view(root, monkeypatch):

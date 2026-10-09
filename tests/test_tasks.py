@@ -132,49 +132,11 @@ def test_shared_values_blank_tag_becomes_none():
 # ---------- 需要 Tk ----------
 
 
-def _display_available() -> bool:
-    try:
-        import tkinter as tk
-
-        root = tk.Tk()
-        root.destroy()
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
-needs_display = pytest.mark.skipif(
-    not _display_available(), reason="无显示环境（CI 可配 Xvfb 后自动启用）"
+from conftest import (  # noqa: E402 - 由 tests/conftest.py 统一提供
+    environment_probe_targets,
+    needs_display,
+    run_until,
 )
-
-
-def run_until(root, predicate, timeout_ms: int = 5000) -> None:
-    """跑真实事件循环直到 ``predicate()`` 为真。
-
-    为什么不用 ``update_idletasks()``：那只跑重绘，**不跑普通 ``after``
-    回调**。Worker 完成只是把结果 ``after(0)`` 排进队列，能不能排上、
-    什么时候排上都由事件循环说了算。
-
-    超时直接 fail 而不是静默通过——宁可红一次，也不要让「异步结果没到达」
-    被读成「功能正常」。
-    """
-    state = {"done": False}
-
-    def poll():
-        if predicate():
-            state["done"] = True
-            root.quit()
-        else:
-            root.after(10, poll)
-
-    def on_timeout():
-        root.quit()
-
-    root.after(0, poll)
-    root.after(timeout_ms, on_timeout)
-    root.mainloop()
-    assert state["done"], f"等待异步结果超时（{timeout_ms}ms）"
-    assert predicate()
 
 
 def _build(root, tmp_path=None, monkeypatch=None):
@@ -221,14 +183,6 @@ def _stub_probe(monkeypatch, app) -> None:
 
     monkeypatch.setattr(environment_probe_targets()[0], "probe_environment", fake)
     monkeypatch.setattr(environment_probe_targets()[1], "probe_environment", fake)
-
-
-def environment_probe_targets() -> tuple[object, object]:
-    """探测函数被打桩的位置（app 与 settings 各自导入了一份）。"""
-    from bilibili_submit.ui import app as app_mod
-    from bilibili_submit.ui.views import settings as settings_mod
-
-    return app_mod, settings_mod
 
 
 def _make_video(directory: Path, name: str) -> Path:

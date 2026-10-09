@@ -319,25 +319,7 @@ def test_worker_survives_dead_window():
 # ---------- 需要 Tk ----------
 
 
-def _display_available() -> bool:
-    """真的试着建一个 Tk 根窗口。
-
-    只看 ``DISPLAY`` 环境变量不够——很多环境里它被设了值，
-    但 X server 根本不在（CI、容器里常见），那样 Tk() 才会暴露真相。
-    """
-    try:
-        import tkinter as tk
-
-        root = tk.Tk()
-        root.destroy()
-        return True
-    except Exception:  # noqa: BLE001 - 任何失败都当作没有显示环境
-        return False
-
-
-needs_display = pytest.mark.skipif(
-    not _display_available(), reason="无显示环境（CI 可配 Xvfb 后自动启用）"
-)
+from conftest import needs_display  # noqa: E402 - 由 tests/conftest.py 统一提供
 
 
 @needs_display

@@ -6,6 +6,15 @@
 所有值得记录的变更都会写进这里。格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [未发布]
+
+### 变更
+
+- **测试基座：跑测试必须挂虚拟屏幕**。没有 X server 时 tkinter 建不出窗口，
+  138 条界面测试会被静默跳过——测试报绿但改动未经验证。改用
+  `xvfb-run -a python -m pytest`；CI 可设 `BILLI_REQUIRE_DISPLAY=1` 让缺屏
+  直接判失败而非跳过。
+
 ## [0.2.7-rc.1] - 2026-10-07
 
 预发布候选：先跑一遍完整打包流水线（安装器 + 便携版 + 内置版），

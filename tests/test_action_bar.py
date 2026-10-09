@@ -14,31 +14,10 @@
 import os
 import sys
 
-import pytest
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bilibili_submit.ui import theme  # noqa: E402
-
-
-def _display_available() -> bool:
-    import tkinter as tk
-
-    root = None
-    try:
-        root = tk.Tk()
-        root.withdraw()
-        return True
-    except Exception:  # noqa: BLE001 - 任何失败都当作没有显示环境
-        return False
-    finally:
-        if root is not None:
-            root.destroy()
-
-
-needs_display = pytest.mark.skipif(
-    not _display_available(), reason="无显示环境（CI 可配 Xvfb 后自动启用）"
-)
+from conftest import needs_display  # noqa: E402 - 由 tests/conftest.py 统一提供
 
 
 # ---------- 纯逻辑：截断规则 ----------
