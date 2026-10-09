@@ -1239,6 +1239,52 @@ def test_release_notes_survive_powershell_escaping():
         assert name in expanded, f"展开后的 notes 里文件名不完整: {name}"
 
 
+def test_pascal_comments_contain_no_bare_braces():
+    """``[Code]`` 段的注释里不许出现裸的花括号。
+
+    Pascal Script 的注释用花括号包起来，**不配对**：注释里出现一个
+    左花括号之后，解析会一直吃到下一个右花括号，把中间的字面量
+    当代码——编译期报 ``Syntax error``，而**行号落在下一行**，真凶
+    在上一行的注释里。
+
+    CI 上真栽过：注释里为了说明「为什么不用安装临时目录」写了
+    ``**{tmp}**``，结果报在下一行 Column 14，看不出是注释的问题。
+    本地没有 ISCC，这类错误只能靠静态检查拦。
+
+    判据：逐字符扫，维护一个「当前是否在注释内」的状态。进入注释
+    时遇到的是 ``{``；**在注释内**再遇到任何花括号就是裸的——Inno
+    不支持嵌套注释，注释里写 ``{app}`` 这种写法必然踩坑。
+    """
+    code = _section(ISS.read_text(encoding="utf-8-sig"), "Code")
+    in_comment = False
+    opened_at = 0
+    for lineno, line in enumerate(code.splitlines(), 1):
+        for ch in line:
+            if ch == "{":
+                if in_comment:
+                    pytest.fail(
+                        f"[Code] 段第 {lineno} 行的**注释内部**出现了裸的左花"
+                        f"括号（这段注释从第 {opened_at} 行开始）："
+                        f"{line.strip()[:60]}\n"
+                        "Inno 的注释不支持嵌套：解析会从注释里的这个左花括号"
+                        "一直吃到下一个右花括号，把中间的字面量当代码——"
+                        "编译期报 Syntax error 且行号落在**下一行**，"
+                        "真凶在上一行的注释里。注释里别写花括号常量名。"
+                    )
+                in_comment = True
+                opened_at = lineno
+            elif ch == "}":
+                if not in_comment:
+                    pytest.fail(
+                        f"[Code] 段第 {lineno} 行出现了没有配对的右花括号"
+                        f"：{line.strip()[:60]}"
+                    )
+                in_comment = False
+    assert not in_comment, (
+        f"[Code] 段第 {opened_at} 行开始的注释没有闭合"
+    )
+
+
 def _strip_pascal_comments(text: str) -> str:
     """剥掉 Pascal Script 的注释（``{...}`` 块注释与 ``//`` 行注释）。
 
