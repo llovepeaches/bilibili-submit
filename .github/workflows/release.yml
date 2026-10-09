@@ -218,7 +218,10 @@ jobs:
           # /CURRENTUSER 同样是为了绕开 UAC：静默安装 + PrivilegesRequired=admin
           # 会让安装器 fork 自己去提权，父进程立即退出、子进程等 UAC 确认，
           # 无人值守的 CI 上就是永久挂起（详见 build-installer.yml 的注释）。
-          $setupArgs = @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/CURRENTUSER")
+          # /LANGCHECK：打开 installer.iss [Code] 段里的语言探针，让安装器
+          # 把「运行时真正生效的那几条消息里有没有汉字」写成 ASCII 报告。
+          # 只在这个开关存在时才动作，正常用户安装不会多出文件。
+          $setupArgs = @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/CURRENTUSER","/LANGCHECK")
           Write-Host "开始静默安装..."
           $setupProc = Start-Process -FilePath $setup -ArgumentList $setupArgs -PassThru
           $waited = 0
@@ -295,12 +298,13 @@ jobs:
         # 逻辑放在 tools/verify_installer_zh.ps1 而不是内联在这里：
         # release.yml 也要跑同一段，两份内联副本迟早漂移。
         #
-        # 刻意传 dist\ 下的**产物路径**，而不是复用安装步骤里的 $setup
-        # 变量——那个是「拷到中立目录后准备安装的那一份」，两者路径
-        # 含义完全相反。同名会让 test_ci_installs_setup_from_a_neutral_
-        # directory 的判据（扫 $setup 赋值里有没有 dist）以为安装也用了
-        # dist\，而那条防的正是 {src} 碰巧正确的 bug。
-        run: ./tools/verify_installer_zh.ps1 -Path "dist\bilibili-submit-setup.exe"
+        # 读的是上一步静默安装时，installer.iss [Code] 段的 /LANGCHECK
+        # 探针写下的报告——那是**运行时真正生效**的消息，而不是我们对
+        # 配置的猜测。曾经试过直接扫 setup.exe 的字节，不可行：消息被
+        # lzma2 压缩，明文不落盘（细节见脚本头部注释）。
+        #
+        # {tmp} 在安装器里展开成 %TEMP%，CI runner 上就是这个路径。
+        run: ./tools/verify_installer_zh.ps1 -ReportPath "$env:TEMP\lang-report.txt"
 
       - name: 组装两个分发包
         shell: pwsh

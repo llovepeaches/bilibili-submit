@@ -55,7 +55,7 @@ config / scheduler / cli     编排：配置、任务执行、命令行
 | `bili_submit.spec` | 打包配置。`INSTALLER=1` 走 onedir（安装版），否则 onefile | 业务代码 |
 | `installer.iss` | Inno Setup 安装器脚本（只装文件，不含代码逻辑） | 运行时行为 |
 | `installer_languages/` | 安装向导的中文翻译 + 英文原文（只为逐键比对） | 运行时行为 |
-| `tools/verify_installer_zh.ps1` | CI 扫产物确认向导是中文（字节搜索 + 自证锚点） | 仅 CI |
+| `tools/verify_installer_zh.ps1` | CI 读安装器的语言探针报告，确认向导是中文 | 仅 CI |
 
 ## 关键设计决策
 
@@ -846,18 +846,25 @@ onedir 把 ffmpeg 放 exe 同目录，`ffmpeg.py` 本来就优先找那个位置
 
 这一组是 Windows runner 上真实踩出来的，本地（Linux）一个都测不到：
 
-- **扫编译产物里的中文向导只能用字节搜索，不能整流解码**。
-  `[Encoding]::Unicode.GetString($bytes)` 只在偏移 0 对齐时解得出正确
-  字符，而 `setup.exe` 里 UTF-16LE 文本的起始偏移是任意的（PE 资源段
-  的对齐要求决定的）。落在奇数偏移时解出来是逐字错位的乱码，
-  `Contains` 必然匹配不上——表现是自证锚点先报「连程序名都找不到」，
-  而程序名（纯 ASCII）在字节里明明存在。报错指向「产物不对」，
-  真原因是那段代码自己的解码方式，排查方向会被带偏。
-  正确做法是字节级子序列搜索（首字节筛候选 + 逐字节比），与偏移无关。
-  逻辑在 `tools/verify_installer_zh.ps1`，两个 workflow 共用一份——
-  内联两份必然漂移，改一边忘了另一边就会「build 绿着、release 红着」。
-  本地 `tests/test_packaging.py::test_zh_verifier_finds_messages_at_odd_byte_offsets`
-  用 Python 复刻同一套逻辑，在奇数偏移的样本上验过两个方向。
+- **「装出来是中文的」只能让安装器自己说**。扫 `setup.exe` 的字节
+  走不通：`[Messages]` 编进去时是 lzma2 压缩的，明文不落盘（实测能
+  字节搜到未压缩存根里的品牌串，但中文一条搜不到）。所以改成
+  `installer.iss` 的 `[Code]` 段带一个探针：`/LANGCHECK` 开关存在时
+  用 `{cm:...}` 取四条向导文案，在进程内判「有没有汉字」，把 ASCII
+  结论写进 `%TEMP%\lang-report.txt`，CI 读它断言 4/4。
+
+  两个细节别踩：
+
+  - **报告必须只含 ASCII**。`SaveStringToFile` 按系统 ACP 编码，
+    CI runner 是 1252——中文原样写出去全变问号，CI 读到「???」时分
+    不清是「不是中文」还是「编码路过损了」。
+  - **判「有没有汉字」而不是「等不等于某句中文」**。判有无汉字与措辞
+    无关：翻译把「选择目标位置」改成「请选择安装位置」不该让 CI 变红
+    ——那是翻译换了词，不是向导变英文了。
+
+  探针只在开关下动作，正常用户安装不会凭空多出文件。它也**不碰
+  `{src}`**、不查产物存在性——那两条禁令仍然有效（见上面那条）。
+
 - **PowerShell 的字符串定界符只有 ASCII 单/双引号**。中文文案里的
   全角引号不是定界符，写进双引号字符串里会让后续内容被当成代码，
   整个 step `ParserError`——而且报错行号指向那句中文，看起来像

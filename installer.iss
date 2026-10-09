@@ -140,8 +140,99 @@ Filename: "{app}\user-guide.html"; Description: "查看使用说明"; Flags: she
 Type: filesandordirs; Name: "{app}\_internal"
 
 ; ============================================================
-;  这里**故意不写** [Code] 段。
+;  [Code] 段：只干一件事——**把「向导用的是哪份消息」报给 CI**。
 ;
+;  ⚠️ 这里曾经**故意不写** [Code] 段，理由已写在下面的注释里。
+;     现在加回来，是因为它做的是完全另一件事：不碰 {src}、不碰产物
+;     存在性、只在传了 /LANGCHECK 时才动手。
+;
+;  为什么不改成扫 setup.exe 的字节：
+;    试过了，扫不出来。Inno Setup 把 [Messages] 编进 setup.exe 的数据段
+;    时是**压缩**的（lzma2），明文不落盘。CI 上实测：未压缩的 SetupLdr
+;    存根里能字节搜到「Inno Setup」（自证锚点命中），但
+;    「选择目标位置」一条都搜不到——不是搜索方法不对，是那三个字
+;    根本不在文件里。这个方向再优化搜索算法也没用。
+;
+;  为什么不能把中文原样写进文件让 CI 去读：
+;    SaveStringToFile 按**系统 ACP** 编码。GitHub runner 的 ACP 是
+;    1252（西欧），中文会全变成问号——CI 读到一堆「???」，分不清是
+;    「不是中文」还是「编码路过损了」。让 Pascal 自己在进程内判定
+;    「这条消息里有没有中日韩字符」，只把 ASCII 结论写出来，编码这层
+;    就不参与经过了。
+;
+;  为什么只在 /LANGCHECK 时才跑：
+;    正常用户安装不该多出一个文件。这是给 CI 的探针，不是功能。
+; ============================================================
+[Code]
+function ParamExists(const S: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(I), S) = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
+{ 这条消息里有没有中日韩统一表意文字（U+4E00–U+9FFF）？
+  不查「等不等于某句中文」——那句话改个措辞就得同步改这里，
+  忘了改的表现是 CI 报「不是中文」，而实际只是措辞变了。
+  判「有没有汉字」则与具体措辞无关。 }
+function HasCjk(const S: String): Boolean;
+var
+  I, C: Integer;
+begin
+  Result := False;
+  for I := 1 to Length(S) do
+  begin
+    C := Ord(S[I]);
+    if (C >= $4E00) and (C <= $9FFF) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
+procedure WriteLangReport;
+var
+  F: String;
+  { cm: 展开的是**当前生效的消息文件**里那一条。这是整个问题的关键：
+    MessagesFile 指向 Default.isl 时，这里展开出来的就是英文。 }
+  SelDir, SelGroup, Ready, Finish: String;
+begin
+  SelDir  := ExpandConstant('{cm:WizardSelectDir}');
+  SelGroup := ExpandConstant('{cm:WizardSelectProgramGroup}');
+  Ready   := ExpandConstant('{cm:FinishedHeadingLabel}');
+  Finish  := ExpandConstant('{cm:FinishedLabel}');
+
+  F := 'lang=' + ActiveLanguage + #13#10
+     + 'seldir_cjk='   + IntToStr(Ord(HasCjk(SelDir)))  + #13#10
+     + 'selgroup_cjk=' + IntToStr(Ord(HasCjk(SelGroup))) + #13#10
+     + 'ready_cjk='    + IntToStr(Ord(HasCjk(Ready)))   + #13#10
+     + 'finish_cjk='   + IntToStr(Ord(HasCjk(Finish)))  + #13#10;
+  { 只写 0/1 与 ASCII 键名：这份报告的**全部内容**都保证与文件编码
+    无关，见上面关于 ACP 的那段。 }
+  SaveStringToFile(ExpandConstant('{tmp}\lang-report.txt'), F);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  { ssInstall 是「真的要开始装了」，此时消息文件已经定下来。
+    更早的 InitializeSetup 也行，但 CurStepChanged 顺带能确认
+    前面几页都没中止掉——探针跑在真正安装的路径上，测的才是
+    用户会遇到的那条路。 }
+  if CurStep = ssInstall then
+    if ParamExists('/LANGCHECK') then
+      WriteLangReport;
+end;
+
+; ============================================================
 ;  曾经在这里用 InitializeSetup() 检查打包产物是否存在，找不到就让
 ;  Result := False 中止安装。本意是好的——「别让产物不全的安装器流出去」，
 ;  但它跑在**安装器启动那一刻**，而 {src} 是安装器 exe 所在的目录：
@@ -154,7 +245,8 @@ Type: filesandordirs; Name: "{app}\_internal"
 ;  结果就是 CI 永远绿、用户永远装不上，而且报的错对用户毫无意义
 ;  （他是下载来装的人，不是打包的人）。
 ;
-;  产物齐不齐全应该在**构建期**查，那里才有 dist\ 可看：
-;  tools/check_installer.py 会校验 dist\<BuildDir> 下的主程序，
-;  编译安装器之前跑它即可（build_windows.bat 与 release.yml 都已接上）。
+;  所以那条检查**不许再回来**。产物齐不齐全应该在**构建期**查，
+;  那里才有 dist\ 可看：tools/check_installer.py 会校验
+;  dist\<BuildDir> 下的主程序，编译安装器之前跑它即可
+;  （build_windows.bat 与 release.yml 都已接上）。
 ; ============================================================

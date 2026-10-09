@@ -283,20 +283,27 @@ def test_section_parsing_ignores_section_names_inside_comments():
     # 光有内联样本不够，还得拿**真实的 installer.iss** 跑一遍：
     # 内联样本证明不了真实文件里没有别的干扰项。
     real = ISS.read_text(encoding="utf-8-sig")
-    # 真实文件里 "[Code]" 三个字还在——在末尾那段解释「为什么故意不写
-    # [Code] 段」的注释里。段切分必须认出它**不是**段名：否则
-    # _section(real, "Code") 会返回文件尾巴，任何针对 [Code] 的断言
-    # 都变成对着一段注释做检查，一路绿到有人真的往里塞 {src}。
-    assert "[Code]" in real, (
-        "installer.iss 末尾应当还留着讲 [Code] 段的注释——这条断言拿它当反例"
+    # 真实文件里 "[Messages]" 三个字还在——在语言探针那段注释里
+    # （解释「消息被压缩了，扫产物扫不出来」）。段切分必须认出它
+    # **不是**段名：否则 _section(real, "Messages") 会返回文件尾巴，
+    # 任何针对该段的断言都变成对着一段注释做检查，一路绿到有人
+    # 真的往那个段里塞写错的东西。
+    #
+    # 这里刻意用 [Messages] 而不是 [Code]：installer.iss 现在**真的有**
+    # [Code] 段（语言探针，见
+    # :func:`test_installer_ships_a_language_probe_for_ci`），拿它当
+    # 「只出现在注释里的段名」的反例，这条守卫就永久失去了判别力。
+    assert "[Messages]" in real, (
+        "installer.iss 里应当还有 [Messages] 这个字样（语言探针的注释里"
+        "提到它）——这条断言拿它当反例"
     )
-    assert not re.search(r"^\[Code\][ \t]*$", real, re.MULTILINE), (
-        "installer.iss 现在没有 [Code] 段，这条断言才拿注释里的 [Code] 当"
-        "反例。真要加回来，请换一个只出现在注释里的段名当反例"
+    assert not re.search(r"^\[Messages\][ \t]*$", real, re.MULTILINE), (
+        "installer.iss 里出现了真的 [Messages] 段，这条断言才拿注释里的"
+        "[Messages] 当反例。真要加回来，请换一个只出现在注释里的段名"
     )
-    assert _section(real, "Code") == "", (
-        "注释里提到的 [Code] 被当成了真段——用 text.split('[Code]')[-1] "
-        "切就会切出文件尾巴"
+    assert _section(real, "Messages") == "", (
+        "注释里提到的 [Messages] 被当成了真段——用 text.split('[Messages]')"
+        "[-1] 切就会切出文件尾巴"
     )
     assert "recursesubdirs" in _directives(real, "Files"), (
         "段切分在真实文件上失效：没从 [Files] 段取到 recursesubdirs"
@@ -713,112 +720,51 @@ def test_installer_language_keys_match_the_default_english_set():
 
 
 def test_ci_proves_the_built_installer_is_chinese():
-    """两个 workflow 都必须真的扫一遍编译产物里的中文。
+    """两个 workflow 都必须真的验一遍「装出来的向导是中文的」。
 
     ``installer.iss``、翻译文件、检查器全对，只说明「配置写对了」，
-    说明不了「编出来是这个样子」——静默安装全程不渲染界面，谁也没看过
-    那个向导一眼。只有扫产物里的消息文本才算端到端。
+    说明不了「跑起来是这个样子」——静默安装全程不渲染界面，谁也没看过
+    那个向导一眼。只有让安装器把运行时生效的消息报告出来才算端到端。
 
     两个 workflow 都要有：``build-installer.yml`` 是改安装相关时的
     验证，``release.yml`` 是真正发出去的那次——只加前者的话，
     「改了没触发 build workflow」时会一路发出去。
-
-    顺带把「断言用的文案确实来自翻译文件」也钉住：CI 里那几句中文是
-    手抄的，改了翻译就会对不上，而对不上的表现是 CI 报
-    「找不到中文文案」——报的是**安装器坏了**，而真正的原因是断言过时了，
-    排查方向会被带偏。
     """
-    zh_keys = _parse_isl_section(ISL.read_text(encoding="utf-8-sig"), "Messages")
-    # 断言文案住在 tools/verify_installer_zh.ps1 里（内联在两个 workflow
-    # 各一份的话，改一边忘了另一边就会漂移），所以校验文案的来源时
-    # 要连脚本一起看。
     script = VERIFY_ZH_PS1.read_text(encoding="utf-8")
-    assert "选择目标位置" in script, (
-        "verify_installer_zh.ps1 没有校验安装器里的中文向导文案——"
-        "扫编译产物是唯一能证明 MessagesFile 生效的手段"
-    )
-    assert "Select Destination Directory" in script, (
-        "verify_installer_zh.ps1 缺反向断言：出现英文向导文案才说明 MessagesFile 失效"
-    )
+    iss = ISS.read_text(encoding="utf-8-sig")
 
-    # CI 里断言的每句中文都必须真能在翻译文件里找到
-    for phrase in _asserted_phrases(script):
-        assert any(phrase in v for v in zh_keys.values()), (
-            f"verify_installer_zh.ps1 断言了「{phrase}」，但翻译文件里没有这句——"
-            "改了翻译就会让 CI 报「安装器坏了」，而真原因是断言过时了"
+    # 校验的是探针报告里的 cjk 标记，**不是**某句具体中文。
+    # 判「有没有汉字」与措辞无关：把「选择目标位置」改成「请选择安装
+    # 位置」不该让 CI 变红——那是翻译换了词，不是向导变英文了。
+    keys = _asserted_phrases_in(script, "mustHave")
+    assert len(keys) >= 3, (
+        f"校验脚本只查了 {len(keys)} 条向导文案——太少的话，"
+        "改坏一两条 MessagesFile 键还照样绿"
+    )
+    for key in keys:
+        assert key.endswith("_cjk"), (
+            f"校验项「{key}」不是 cjk 标记——报告里写的是「有没有汉字」，"
+            "不是文案原文"
+        )
+        # 每一项都要能在 installer.iss 的探针里找到出处，否则就是
+        # 「校验脚本查了一个探针从不写的东西」，恒等于没查
+        assert key in iss, (
+            f"校验项「{key}」在 installer.iss 的探针里没有对应项——"
+            "要么改了一边忘了另一边，要么探针少写了一句话"
         )
 
-    # 两个 workflow 都得真的调这个脚本，且传的是 dist\ 下**刚编出来**
-    # 的那份产物。
+    # 两个 workflow 都得真的调这个脚本，且传的是探针报告的路径
     for path in (INSTALLER_YML, RELEASE_YML):
         body = path.read_text(encoding="utf-8")
         assert "verify_installer_zh.ps1" in body, (
             f"{path.name} 没有调用 tools/verify_installer_zh.ps1——"
             "只在一个 workflow 里验证的话，「改了没触发另一个」时照样发出去"
         )
-        # 只认真正传给脚本的那个路径。注意这里是**行内**匹配而不是全文
-        # 搜文件名：上传 artifact 那步也写着 dist\bilibili-submit-setup.exe，
-        # 全文搜会把它当成「校验脚本扫的是产物」，而实际上传的是目录。
         assert re.search(
-            r"run:[^\n]*verify_installer_zh\.ps1[^\n]*dist\\+bilibili-submit-setup\.exe",
-            body,
-        ), (
-            f"{path.name} 没把 dist\\ 下刚编出来的产物传给校验脚本——"
-            "扫错文件等于没扫（比如扫成安装步骤里拷去中立目录的那份）"
+            r"run:[^\n]*verify_installer_zh\.ps1[^\n]*lang-report\.txt", body), (
+            f"{path.name} 没把探针报告的路径传给校验脚本——"
+            "读不到文件等于没验"
         )
-
-
-def test_zh_verifier_searches_bytes_rather_than_decoding():
-    """校验脚本必须做**字节级**子序列搜索，不能整流解码再 ``Contains``。
-
-    这不是风格偏好，是正确性：``[System.Text.Encoding]::Unicode
-    .GetString($bytes)`` 只在偏移 0 对齐时才解得出正确字符，而 setup.exe
-    里 UTF-16LE 文本的起始偏移是任意的（PE 资源段的对齐决定的）。
-    落在奇数偏移时解出来是逐字错位的乱码，``Contains`` 永远匹配不上。
-
-    CI 上真踩过：自证锚点是纯 ASCII 的程序名 ``bilibili-submit``，
-    它在字节里明明存在，只因整流解码错位，脚本第一步就抛了
-    「连自己的文件名都找不到」——而这句话把方向带偏到「产物不对」，
-    真原因（解码方式）是这段代码自己的毛病。
-    """
-    script = VERIFY_ZH_PS1.read_text(encoding="utf-8")
-
-    assert "Encoding]::Unicode.GetString" not in script, (
-        "校验脚本里出现了整流解码（Encoding]::Unicode.GetString）——"
-        "偏移不对齐时解出来是乱码，Contains 必然匹配不上；改用字节搜索"
-    )
-    assert "Test-ByteSubsequence" in script, (
-        "校验脚本没有字节级子序列搜索——与偏移无关，是这里唯一可靠的读法"
-    )
-    # 自证锚点：坏尺子量东西，比不量更糟。
-    # 判据是**真的会因为锚点全灭而抛错**，不是「脚本里出现过 anchors
-    # 这个词」——把 `if (-not $anchorHit)` 改成 `if ($false)` 就能
-    # 让一个只查关键词的守卫变绿，而那正是「尺子坏了却当量到了」
-    # 的改法。逐行找那个 throw 才抓得住。
-    anchor_lines = script.splitlines()
-    branch = [
-        i for i, line in enumerate(anchor_lines)
-        if "$anchorHit" in line and line.strip().startswith("if")
-    ]
-    assert branch, "校验脚本里找不到检查 $anchorHit 的分支"
-    idx = branch[0]
-    assert "not" in anchor_lines[idx], (
-        "锚点检查被短路了（没有 not）——自证锚点失效时脚本会静默"
-        "得出「没找到中文」的结论，把排查方向带偏到产物上"
-    )
-    # throw 必须在**这个分支里面**（下一个同缩进的非空行之前）。
-    # 只查「脚本里有没有 throw」太松：脚本里有三处 throw，
-    # 把锚点分支整个删掉都照样绿。
-    tail = []
-    body_indent = " " * (len(anchor_lines[idx]) - len(anchor_lines[idx].lstrip()) + 1)
-    for line in anchor_lines[idx + 1:]:
-        if line.strip() and not line.startswith(body_indent):
-            break
-        tail.append(line)
-    assert any("throw" in line for line in tail), (
-        "锚点全灭的分支里没有 throw——脚本会继续往下跑，"
-        "拿着失效的尺子把「没找到中文」当成结论报出去"
-    )
 
 
 def _asserted_phrases(script_body: str) -> list[str]:
@@ -964,17 +910,28 @@ def test_artifacts_are_checked_at_build_time_not_install_time():
     ``dist\\``，拼出来是 ``dist\\dist\\bilibili-submit-gui\\``。两个坑
     长在同一行代码里。
 
-    所以那段代码整个删了，校验挪到 ``tools/check_installer.py``——那里
-    才有 ``dist\\`` 可看。这条守卫盯两头：安装器里别再冒出运行期的
-    文件系统检查；构建期的校验真的接进了两条打包路径，否则它就是个
-    没人调用的死脚本。
+    所以那段**代码**整个删了，校验挪到 ``tools/check_installer.py``——
+    那里才有 ``dist\\`` 可看。这条守卫盯两头：安装器的可执行代码里别再
+    冒出运行期的产物文件系统检查；构建期的校验真的接进了两条打包路径，
+    否则它就是个没人调用的死脚本。
+
+    2026-10 起 ``[Code]`` 段又回来了，但做的是另一件事：语言探针
+    （见 :func:`test_installer_ships_a_language_probe_for_ci`）。它不碰
+    ``{src}``、不查产物存在性、只在传了 ``/LANGCHECK`` 时才动作。
     """
     text = ISS.read_text(encoding="utf-8-sig")
     code = _section(text, "Code")
-    assert "{src}" not in code, (
-        "[Code] 段里出现了 {src}——它是**安装器 exe 所在目录**，在用户机器上"
-        "是「下载」文件夹而不是 dist\\。拿它拼路径做运行期检查，会让每个"
-        "下载者都装不上，而 CI 上永远绿。产物校验属于构建期，"
+    # 只看**代码行**，不看注释：注释里为了把这个坑讲清楚，必然要提到
+    # {src} 三个字（不然读者不知道它在说什么）。规则禁的是「运行期拿它
+    # 拼路径做检查」，不是「文档里不许提」。
+    code_only = "\n".join(
+        line for line in code.splitlines()
+        if not line.strip().startswith((";", "{", "}"))
+    )
+    assert "{src}" not in code_only, (
+        "[Code] 段的**代码**里出现了 {src}——它是**安装器 exe 所在目录**，"
+        "在用户机器上是「下载」文件夹而不是 dist\\。拿它拼路径做运行期检查，"
+        "会让每个下载者都装不上，而 CI 上永远绿。产物校验属于构建期，"
         "见 tools/check_installer.py"
     )
 
@@ -1282,74 +1239,84 @@ def test_release_notes_survive_powershell_escaping():
         assert name in expanded, f"展开后的 notes 里文件名不完整: {name}"
 
 
-def _replica_subseq(hay: bytes, needle: bytes) -> bool:
-    """Python 复刻 ``Test-ByteSubsequence``：首字节筛候选 + 逐字节比。"""
-    if not needle or len(hay) < len(needle):
-        return False
-    i = hay.find(needle[0])
-    while i != -1 and i <= len(hay) - len(needle):
-        if hay[i:i + len(needle)] == needle:
-            return True
-        i = hay.find(needle[0], i + 1)
-    return False
+def test_installer_ships_a_language_probe_for_ci():
+    """``installer.iss`` 的 ``[Code]`` 段必须带一个**只在开关下动作**的语言探针。
 
+    没有它就只剩两条路能证明「装出来是中文」，两条都不成立：
 
-def _replica_any_utf(hay: bytes, text: str) -> bool:
-    """Python 复刻 ``Test-AnyUtf``：UTF-8 与 UTF-16LE 任一命中即可。"""
-    return _replica_subseq(hay, text.encode("utf-8")) or _replica_subseq(
-        hay, text.encode("utf-16-le"))
+    - 扫 setup.exe 的字节：**试过了，走不通**。``[Messages]`` 编进去时是
+      lzma2 压缩的，明文不落盘。CI 实测能字节搜到未压缩存根里的
+      「Inno Setup」（证明搜索方法本身没问题），但「选择目标位置」
+      一条都搜不到——那三个字根本不在文件里。搜索算法再怎么优化
+      也没用。
+    - 只做静态检查：那只证明「配置写对了」，而这个 bug 恰恰是
+      「配置看着没问题、MessagesFile 却指向了英文」。
 
+    所以探针必须真的调 ``{cm:...}``——那是**运行时**才展开的，取的是
+    **当前生效**的消息文件——并把判定结果落到文件里让 CI 读。
 
-def _fake_setup(messages: list[str]) -> bytes:
-    """造一个 UTF-16LE 落在**奇数偏移**的假 setup.exe。
+    两条容易被改坏的性质各有守卫：
 
-    长度刻意取奇数（MZ 头 8 字节 + 99 字节填充 = 107），
-    整流解码必然错位——这正是 CI 上那次失败的场景。
+    1. **只在开关下动作**：正常用户安装不该凭空多出一个报告文件。
+    2. **只写 ASCII**：``SaveStringToFile`` 按系统 ACP 编码，CI runner
+       是 1252（西欧）——中文原样写出去会全变问号，CI 读到「???」
+       时分不清是「不是中文」还是「编码路过损了」。
     """
-    body = b"MZ" + b"\x90\x00" * 3 + b"\xAB" * 99
-    assert len(body) % 2 == 1, "样本必须是奇数长度，否则测不到错位"
-    for s in messages:
-        body += s.encode("utf-16-le") + b"\x00\x00"
-    return body
-
-
-def test_zh_verifier_finds_messages_at_odd_byte_offsets():
-    """字节搜索在 UTF-16LE 落在**奇数偏移**时照样找得到——这正是 CI 上翻车的那次。
-
-    这里用 Python 精确复刻 ``tools/verify_installer_zh.ps1`` 里的
-    ``Test-ByteSubsequence`` / ``Test-AnyUtf``（同样的首字节筛选 +
-    逐字节比），在两种编造的 ``setup.exe`` 上跑：
-
-    * 中文版：三条 mustHave 全中、mustNot 全不中 → 判定「是中文向导」
-    * 英文版：mustHave 全不中、mustNot 命中英文向导页 → 判定「不是」
-
-    为什么不只在 CI 上验：那边只能拿到「绿/红」，红的时候也只有一句
-    throw 文案，分不清是搜索逻辑坏了、产物不对、还是安装器真是英文的。
-    这里能把三种情况在本地就分开。
-    """
-    script = VERIFY_ZH_PS1.read_text(encoding="utf-8")
-    must_have = _asserted_phrases(script)
-    must_not = _asserted_phrases_in(script, "mustNot")
-    assert must_have and must_not, "断言文案不能是空的，否则这条测试是空断言"
-
-    zh_exe = _fake_setup(must_have)
-    for phrase in must_have:
-        assert _replica_any_utf(zh_exe, phrase), f"字节搜索在奇数偏移下漏了「{phrase}」"
-    for phrase in must_not:
-        assert not _replica_any_utf(zh_exe, phrase), f"中文产物里不该出现「{phrase}」"
-
-    en_exe = _fake_setup(["Select Destination Directory"])
-    for phrase in must_have:
-        assert not _replica_any_utf(en_exe, phrase), f"英文产物里不该命中「{phrase}」"
-    assert _replica_any_utf(en_exe, "Select Destination Directory"), (
-        "反向断言失效：英文向导页没被检出，这条检查就只会单向通过"
+    code = _section(ISS.read_text(encoding="utf-8-sig"), "Code")
+    assert "{cm:" in code, (
+        "[Code] 段里没有 {cm:...}——探针没在读运行时生效的消息，"
+        "那它验的就不是「装出来是什么样」而是「配置写成了什么样」"
+    )
+    assert "LANGCHECK" in code, (
+        "[Code] 段没认 /LANGCHECK 开关——探针会在每次正常安装时都跑，"
+        "凭空给用户多出一个报告文件"
+    )
+    assert "SaveStringToFile" in code, (
+        "[Code] 段没把结果写出来——CI 读不到，等于没验"
     )
 
-    # 旧做法的对照：同一份字节，整流解码必然失败
-    decoded = zh_exe.decode("utf-16-le", errors="replace")
-    assert not any(p in decoded for p in must_have), (
-        "样本没能复现错位——CI 上那次失败的前提（奇数偏移）已经不成立了，"
-        "这条测试就变成了空断言"
+    # 报告内容必须全是 ASCII：写出去的是「有没有汉字」这个 0/1，
+    # 不是文案原文。
+    report = re.search(
+        r"SaveStringToFile\(\s*ExpandConstant\([^)]*\)\s*,\s*(\w+)\s*\);",
+        code, re.DOTALL)
+    assert report, "[Code] 段里找不到 SaveStringToFile 的完整调用"
+    var = report.group(1)
+    # 写出去的是个变量，内容在别处拼的——顺着赋值追进去。
+    # 直接搜 SaveStringToFile 那一行的内容没用：HasCjk 在 F := ... 里。
+    assign = re.search(rf"\b{re.escape(var)}\s*:=\s*(.+?);", code, re.DOTALL)
+    assert assign, f"探针里找不到 {var} 的赋值——写出去的内容无从检查"
+    written = assign.group(1)
+    assert "HasCjk" in written, (
+        "报告内容里没有 HasCjk 的判定——把中文原样写出来的话，ACP 一路"
+        f"编码就变成问号：{written.strip()[:80]}"
+    )
+
+    # 探针取消息的**每一条赋值**都得走 {cm:...}。
+    # 只查「[Code] 段里出现过 {cm:}」是不够的：把其中一条改成硬编码
+    # 字符串，守卫照样绿，而那条消息验的是我们自己写死的常量——安装器
+    # 是不是中文的，它一点没验。
+    assigns = re.findall(
+        r"^\s*(\w+)\s*:=\s*ExpandConstant\('\{cm:(\w+)\}'\)", code, re.MULTILINE)
+    assert len(assigns) >= 4, (
+        f"探针里只有 {len(assigns)} 条消息走了 {{cm:...}}——"
+        "向导第一页、开始菜单页、完成页标题与正文这四条都得从"
+        "**当前生效的消息文件**取，不能硬编码"
+    )
+    msg_keys = {key for _, key in assigns}
+    # 四条必须覆盖不同的消息键：同一个键取两遍，判据就少了一半
+    assert len(msg_keys) == len(assigns), (
+        f"探针重复取同一个消息键（{msg_keys}）——"
+        "不同页面用的是不同消息，取两遍同一个等于少验了一半"
+    )
+
+    # 判 CJK 的那段必须真的在查码位区间，而不是恒返回 True/False：
+    # 恒 True 会让英文向导也通过，恒 False 会让中文向导误报。
+    has_cjk = re.search(r"function HasCjk\(.*?\nend;", code, re.DOTALL)
+    assert has_cjk, "[Code] 段里找不到 HasCjk 的实现"
+    assert "$4E00" in has_cjk.group(0) and "$9FFF" in has_cjk.group(0), (
+        "HasCjk 没查 U+4E00–U+9FFF 区间——恒返回 True 会让英文向导也通过，"
+        "恒返回 False 会让中文向导误报，两种都是这条检查彻底失效"
     )
 
 
@@ -1359,3 +1326,27 @@ def _asserted_phrases_in(script_body: str, array_name: str) -> list[str]:
         r"\$" + array_name + r"\s*=\s*@\((.*?)\)", script_body, re.DOTALL)
     assert match, f"校验脚本里找不到 ${array_name} 数组"
     return re.findall(r"'([^']+)'", match.group(1))
+
+
+def test_langcheck_flag_reaches_both_install_invocations():
+    """两个 workflow 的静默安装都必须传 ``/LANGCHECK``。
+
+    探针在 ``installer.iss`` 里是「开关下才动作」，而 CI 读的是探针
+    写出来的报告。哪一步漏了这个开关，报告就不存在——校验脚本会报
+    「找不到语言报告」，那句话指向「[Code] 没编进去」，而真原因只是
+    命令行少了个参数，排查方向会被带偏。
+
+    顺带钉住 ``/VERYSILENT`` 还在：这两个开关是**同时**才成立的，
+    只留其一时这条守卫也该红。
+    """
+    for path in (INSTALLER_YML, RELEASE_YML):
+        body = path.read_text(encoding="utf-8")
+        m = re.search(r"\$setupArgs\s*=\s*@\((.*?)\)", body, re.DOTALL)
+        assert m, f"{path.name} 里找不到 $setupArgs 数组"
+        args = m.group(1)
+        for flag, why in (
+            ("/LANGCHECK", "探针不会动作，语言校验那步会因为读不到报告而失败，"
+                           "且报错指向错误的方向"),
+            ("/VERYSILENT", "改成非静默跑的话，CI runner 上会挂在那儿等人点下一步"),
+        ):
+            assert flag in args, f"{path.name} 的静默安装没传 {flag} —— {why}"
