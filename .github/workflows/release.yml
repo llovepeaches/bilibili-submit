@@ -309,8 +309,19 @@ jobs:
             throw "在安装器里连程序名都找不到——UTF-16/UTF-8 扫描方法不对"
           }
 
-          # 刻意挑长的、只在向导里出现的句子。
-          $mustHave = @("选择目标位置", "完成 [name] 安装向导", "点击“下一步”继续")
+          # 刻意挑三条**不含引号、不含 [name] 占位符**的完整句子：
+          #   · 不含引号——全角引号「」在 PowerShell 里不是字符串定界符，
+          #     写进双引号字符串里会被解析成结束引号，整个 step ParserError
+          #     （build-installer.yml 上真踩过一次这个）；
+          #   · 不含 [name]——编译时会被替换成实际应用名，拿带占位符的
+          #     原文去 Contains 永远匹配不上；
+          #   · 够长——「下一步」这种两三个字的在别处也可能命中，捡到
+          #     一次假阳性这个检查就废了。
+          $mustHave = @(
+            "选择目标位置",          # WizardSelectDir
+            "选择开始菜单文件夹",     # WizardSelectProgramGroup
+            "正在创建目录"           # StatusCreateDirs
+          )
           foreach ($phrase in $mustHave) {
             if (-not $either.Contains($phrase)) {
               throw "安装器里找不到中文文案「$phrase」——向导多半还是英文的"

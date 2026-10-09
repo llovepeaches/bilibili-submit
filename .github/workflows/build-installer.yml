@@ -266,13 +266,20 @@ jobs:
           }
           Write-Host "扫描手段自检通过（能在安装器里找到程序名）"
 
-          # 刻意挑长的、只在向导里出现的句子。「下一步」这种两三个字的
-          # 不行——它在别处也可能命中（比如用户指南的目录），捡到一次
-          # 假阳性就等于这个检查废了。
+          # 刻意挑三条**不含引号、不含 [name] 占位符**的完整句子：
+          #   · 不含引号——全角引号「」在 PowerShell 里不是字符串定界符，
+          #     写进双引号字符串里会被解析成结束引号，整段脚本 ParserError
+          #     （CI 上真踩过：选了含「」的 SelectDirBrowseLabel 直接语法
+          #     报错，19 行之前的东西全没跑到）；
+          #   · 不含 [name]——编译时它会被替换成实际应用名
+          #     （「哔哩哔哩自动投稿程序」），拿带占位符的原文去
+          #     Contains 永远匹配不上；
+          #   · 够长——「下一步」这种两三个字的在别处也可能命中，
+          #     捡到一次假阳性这个检查就废了。
           $mustHave = @(
-            "选择目标位置",                # WizardSelectDir
-            "完成 [name] 安装向导",         # FinishedHeadingLabel
-            "点击“下一步”继续"            # SelectDirBrowseLabel
+            "选择目标位置",                     # WizardSelectDir
+            "选择开始菜单文件夹",                # WizardSelectProgramGroup
+            "正在创建目录"                     # StatusCreateDirs
           )
           foreach ($phrase in $mustHave) {
             if (-not $either.Contains($phrase)) {

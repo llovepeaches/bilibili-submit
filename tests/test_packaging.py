@@ -721,7 +721,13 @@ def test_ci_proves_the_built_installer_is_chinese():
     两个 workflow 都要有：``build-installer.yml`` 是改安装相关时的
     验证，``release.yml`` 是真正发出去的那次——只加前者的话，
     「改了没触发 build workflow」时会一路发出去。
+
+    顺带把「断言用的文案确实来自翻译文件」也钉住：CI 里那几句中文是
+    手抄的，改了翻译就会对不上，而对不上的表现是 CI 报
+    「找不到中文文案」——报的是**安装器坏了**，而真正的原因是断言过时了，
+    排查方向会被带偏。
     """
+    zh_keys = _parse_isl_section(ISL.read_text(encoding="utf-8-sig"), "Messages")
     for path in (INSTALLER_YML, RELEASE_YML):
         body = path.read_text(encoding="utf-8")
         assert "选择目标位置" in body, (
@@ -731,6 +737,81 @@ def test_ci_proves_the_built_installer_is_chinese():
         assert "Select Destination Directory" in body, (
             f"{path.name} 缺反向断言：出现英文向导文案才说明 MessagesFile 失效"
         )
+
+        # CI 里断言的每句中文都必须真能在翻译文件里找到
+        for phrase in _ci_asserted_phrases(body):
+            assert any(phrase in v for v in zh_keys.values()), (
+                f"{path.name} 断言了「{phrase}」，但翻译文件里没有这句——"
+                "改了翻译就会让 CI 报「安装器坏了」，而真原因是断言过时了"
+            )
+
+    # 两个 workflow 断言的文案必须一致：改一边忘了另一边，
+    # 会出现「build 绿着、release 红着」而没人知道该信谁。
+    build_phrases = _ci_asserted_phrases(INSTALLER_YML.read_text(encoding="utf-8"))
+    release_phrases = _ci_asserted_phrases(RELEASE_YML.read_text(encoding="utf-8"))
+    assert build_phrases == release_phrases, (
+        f"两个 workflow 断言的中文文案不一致：build={build_phrases}、"
+        f"release={release_phrases}"
+    )
+
+
+def _ci_asserted_phrases(workflow_body: str) -> list[str]:
+    """从 workflow 里取出 ``$mustHave = @(...)`` 那几条中文。
+
+    只认数组字面量的内容，不扫全文里所有中文——否则注释里解释
+    「为什么不能带引号」的中文也会被当成断言。
+    """
+    match = re.search(r"\$mustHave\s*=\s*@\((.*?)\)", workflow_body, re.DOTALL)
+    assert match, "workflow 里找不到 $mustHave 数组"
+    return re.findall(r'"([^"]+)"', match.group(1))
+
+
+#: PowerShell 里的字符串定界符只有 ASCII 的单/双引号。
+#: 中文文案里的全角引号「」『』不是定界符——写进双引号字符串里，
+#: PowerShell 仍会把后续内容当成代码，于是整段脚本 ParserError。
+#: CI 上真踩过一次：$mustHave 里放了一句带「」的文案，
+#: 整个 step 在第 31 行语法报错，前面 30 行一行都没跑到。
+_FULLWIDTH_QUOTES = "“”‘’"
+
+
+def test_ci_chinese_assertions_survive_powershell_parsing():
+    """CI 里断言用的中文不能含全角引号，否则整个 step 语法报错。
+
+    这条不是假设：上一版断言里写了 ``点击“下一步”继续``，CI 上直接
+    ``ParserError: Unexpected token '下一步”继续'``——报错行号指向那句
+    中文，而看的人只会觉得「脚本怎么有语法问题」，不会立刻想到是
+    中文文案里的全角引号。
+
+    同时把「断言文案里没有 ASCII 双引号」一起钉住：那会让
+    ``"..."`` 提前闭合，症状一样但更隐蔽。
+    """
+    for path in (INSTALLER_YML, RELEASE_YML):
+        for phrase in _ci_asserted_phrases(path.read_text(encoding="utf-8")):
+            bad = [c for c in _FULLWIDTH_QUOTES if c in phrase]
+            assert not bad, (
+                f"{path.name} 的断言文案「{phrase}」含全角引号 {bad}——"
+                "PowerShell 不把它当字符串定界符，会让整个 step 语法报错"
+            )
+            assert '"' not in phrase and "'" not in phrase, (
+                f"{path.name} 的断言文案「{phrase}」含 ASCII 引号，"
+                "会提前闭合字符串字面量"
+            )
+
+
+def test_ci_chinese_assertions_avoid_placeholders():
+    """断言文案不能含 ``[name]`` 这类编译期占位符。
+
+    编译时它们会被替换成实际应用名（本项目是「哔哩哔哩自动投稿程序」），
+    拿带占位符的**原文**去 ``Contains`` 永远匹配不上——CI 会报
+    「找不到中文文案」，而真正的原因是断言写错了，不是安装器坏了。
+    排查方向会被直接带偏。
+    """
+    for path in (INSTALLER_YML, RELEASE_YML):
+        for phrase in _ci_asserted_phrases(path.read_text(encoding="utf-8")):
+            assert "[" not in phrase and "]" not in phrase, (
+                f"{path.name} 的断言文案「{phrase}」含占位符方括号——"
+                "编译时会被替换掉，拿原文匹配不上；取占位符之外的那一段"
+            )
 
 
 def _parse_isl_section(text: str, section: str) -> dict[str, str]:
