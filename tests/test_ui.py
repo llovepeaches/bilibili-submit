@@ -1811,3 +1811,141 @@ def test_upload_page_collects_the_new_options(tmp_path):
         assert task.hires == 0
     finally:
         root.destroy()
+
+
+@needs_display
+def test_material_button_variants_map_to_material_terms():
+    """按钮三档必须各就各位：实心 / 描边 / 文字，一档都不许错位。
+
+    改名那阵最容易出的错不是「忘了改」，而是「改串了」——``FilledButton``
+    拿到 ``TEXT`` 变体，于是本该最醒目的主按钮变成了最淡的一个，而所有
+    截图都看不出问题：按钮还在、还能点，只是全都不是重点了。这里把
+    三档钉死，改串了立刻红。
+
+    顺带钉住继承链：三档都必须直接继承 ``MaterialButton``。有人为了
+    「让 Outlined 少几个像素」插一个中间基类时，行为差异就会从两个地方
+    分叉出去。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.widgets import (
+        FilledButton,
+        MaterialButton,
+        OutlinedButton,
+        TextButton,
+    )
+
+    for cls in (FilledButton, OutlinedButton, TextButton):
+        assert issubclass(cls, MaterialButton), f"{cls.__name__} 应继承 MaterialButton"
+    assert MaterialButton.__bases__ == (tk.Canvas,), (
+        "MaterialButton 应直接继承 tk.Canvas——它就是靠自绘才画出药丸的"
+    )
+
+    root = tk.Tk()
+    try:
+        assert FilledButton(root, "x", None)._variant == MaterialButton.ACCENT, (
+            "实心按钮必须是 accent（主色填充）"
+        )
+        assert OutlinedButton(root, "x", None)._variant == MaterialButton.STANDARD, (
+            "描边按钮必须是 standard"
+        )
+        assert TextButton(root, "x", None)._variant == MaterialButton.TEXT, (
+            "文字按钮必须是 text（无边框）"
+        )
+    finally:
+        root.destroy()
+
+
+def test_widgets_no_longer_expose_legacy_names():
+    """Fluent 时代的类名必须彻底消失，含 ``__all__``。
+
+    这里明确**不接受**兼容别名。看着像贴一层向后兼容，实际是让两套
+    术语长期共存：下一个人照着旧名继续写新代码，这轮重构就白做了。
+    而且这些名字只在包内使用（无外部插件依赖），留别名没有任何收益。
+
+    守卫要连 ``__all__`` 一起查：改类名忘了改 ``__all__`` 时，
+    ``from ... import *`` 仍会导出旧名，而它不会报错、只会让人困惑。
+    """
+    import bilibili_submit.ui.widgets as widgets
+
+    legacy = (
+        "FluentButton",
+        "PrimaryButton",
+        "SecondaryButton",
+        "TertiaryButton",
+        "NavItem",
+        "StatusPill",
+        "Collapsible",
+    )
+    for name in legacy:
+        assert not hasattr(widgets, name), (
+            f"{name} 是 Fluent 时代的名字，应当随术语对齐一起消失。"
+            "真需要兼容就写 alias = NewName，但那会让两套术语共存。"
+        )
+        assert name not in widgets.__all__, f"__all__ 里还留着 {name}"
+
+
+@needs_display
+def test_assist_chip_reads_tones_and_glyphs():
+    """AssistChip 的配色与记号都必须来自 theme，不许自带一套。
+
+    记号不是装饰。状态如果只靠颜色传达，色盲用户看到的是一排不同底色
+    的色块，读不出哪个是失败——所以 ``theme.TONE_GLYPHS`` 给每个状态配
+    了形状不同的记号（✓✕!◐?·○），颜色和形状是**双通道**。这条钉住
+    「配色和记号都从 theme 取」：谁把 glyph 写成空串，可访问性就悄悄
+    退回去了，而界面看上去一切正常。
+
+    空文案时 glyph 仍占位，这样状态从有字变成没字（比如「就绪」被清空）
+    不会让整行文字左右跳。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui import theme
+    from bilibili_submit.ui.widgets import AssistChip
+
+    # 每个语义色都得有配对的记号，缺一个就有一个状态只能靠颜色传达
+    for name in theme.TONES:
+        assert name in theme.TONE_GLYPHS, f"{name} 没有配对的形状记号"
+    assert set(theme.TONE_GLYPHS) == set(theme.TONES), (
+        "记号与语义色必须一一对应，多出来的记号说明语义色改名了"
+    )
+
+    root = tk.Tk()
+    try:
+        chip = AssistChip(root, "就绪", "ok")
+        assert chip.cget("text").startswith(theme.tone_glyph("ok")), (
+            "文字必须以该状态的记号开头——这是双通道编码，不是装饰"
+        )
+        chip.set("", "busy")
+        assert chip.cget("text") == theme.tone_glyph("busy"), (
+            "文案为空时记号仍要占位，否则整行文字会左右跳"
+        )
+    finally:
+        root.destroy()
+
+
+def test_expansion_panel_hover_color_stays_distinct():
+    """展开面板的悬停色不许退化成通用 HOVER。
+
+    这条钉的是一个真实存在的巧合：``COLLAPSE_BG`` 与通用的 ``HOVER``
+    在浅色板里**恰好是同一个值**（``#F1E9EC``）。所以悬停色如果写成
+    ``HOVER``，看起来是「加了悬停反馈」，实际刷新前后一个像素都不差——
+    悬停等于没做，而且没有任何测试会发现，因为值确实变了（只是变成了
+    常态色自己）。
+
+    ``COLLAPSE_HOVER`` 必须既不同于常态色、也不同于通用 HOVER。
+    """
+    from bilibili_submit.ui import theme
+
+    assert theme.COLLAPSE_HOVER != theme.COLLAPSE_BG, (
+        "悬停色与常态色相同 = 没有悬停反馈"
+    )
+    assert theme.COLLAPSE_HOVER != theme.HOVER, (
+        f"COLLAPSE_HOVER 与通用 HOVER 同值（都是 {theme.HOVER}）——"
+        "浅色板下 COLLAPSE_BG 也正好是这个值，于是悬停刷了等于没刷。"
+        "要用一个专门的 COLLAPSE_HOVER。"
+    )
+    assert theme.COLLAPSE_HOVER != theme.NAV_HOVER, (
+        "导航悬停色与展开面板悬停色相同：两者不在同一处，用同一个值"
+        "会让其中一处的悬停反馈看不出来"
+    )
