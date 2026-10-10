@@ -6,13 +6,19 @@
 所有值得记录的变更都会写进这里。格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [未发布]
+## [0.2.9] - 2026-10-10
 
 ### 性能 —— 界面卡顿
 
+用户反馈「客户端卡」和「每次进设置页都在重新加载」。两者都查了：
+卡顿**不是**网络阻塞主线程，也**不是**内存无上限增长，而是四段在主线程
+上反复重排。完整分析（含定位过程与逐项实测）见
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md)。
+
 新增 `tools/bench_ui.py`：把「优化前 / 优化后」两种写法放进同一份脚本，
 一次运行同时跑出两组数字（Xvfb 下 `xvfb-run -a python3 tools/bench_ui.py`）。
-另加 `tests/test_ui_perf.py` 8 条守卫，逐条做过变异自检（撤掉优化必红）。
+另加 `tests/test_ui_perf.py` 8 条守卫 + `tests/test_settings.py` 6 条，
+逐条做过变异自检（撤掉优化必红）。
 
 | 热点 | 触发场景 | 优化前 | 优化后 |
 | --- | --- | --- | --- |
@@ -23,7 +29,6 @@
 
 四项合计约 1892 → 11.4 ms（**165×**，被最后一项主导；去掉它约 10×）。
 每项跑 3 遍取最快——Xvfb 上的抖动来自同机其它负载，只会让某次变慢。
-完整分析见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md)。
 
 - **日志**：真凶是每行都调 `Text.see("end")`（它每次都要让 Text 重排一遍
   再算滚动位置，占写入耗时 94%）。改为批量 `insert` + 滚动合并到
