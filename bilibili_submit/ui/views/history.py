@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
@@ -32,6 +33,24 @@ _COLUMN_MIN_WIDTHS = {"time": 140, "bvid": 130, "name": 240}
 VISIBLE_LIMIT = 200
 
 
+#: 还没渲染过。要和「文件不存在」区分开——否则第一次切到本页会被
+#: 指纹判成「没变过」，直接空着什么都不显示。
+_UNSET: object = object()
+
+
+def _file_stamp(path: str) -> tuple[int, int] | None:
+    """历史文件的指纹：``(mtime_ns, 字节数)``，读不到就 None。
+
+    只用来判断「文件变没变」，不用来判断内容——历史是追加写，
+    内容一改 mtime 和大小必然至少变一个，够用了。
+    """
+    try:
+        stat = os.stat(os.path.expanduser(path))
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
 class HistoryView(ttk.Frame):
     """投稿历史页。"""
 
@@ -40,6 +59,10 @@ class HistoryView(ttk.Frame):
         self.app = app
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
+        #: 上一次量到的表格总宽，见 :meth:`_resize_columns`
+        self._last_width = 0
+        #: 已渲染内容对应的文件指纹，见 :meth:`refresh`
+        self._stamp: object = _UNSET
         self._build()
 
     def _build(self) -> None:
@@ -54,7 +77,9 @@ class HistoryView(ttk.Frame):
 
         actions = ttk.Frame(card, style="Card.TFrame")
         actions.grid(row=0, column=0, sticky="w", pady=(0, theme.PAD_SM))
-        OutlinedButton(actions, "刷新", self.refresh).pack(side="left")
+        OutlinedButton(actions, "刷新", lambda: self.refresh(force=True)).pack(
+            side="left"
+        )
 
         holder = ttk.Frame(card, style="Card.TFrame")
         holder.grid(row=1, column=0, sticky="nsew")
@@ -95,18 +120,38 @@ class HistoryView(ttk.Frame):
 
         宽度没量出来时不动手：``<Configure>`` 在布局的每一步都会触发，
         拿 1px 去算比例会把列压成下限，再也没恢复回来。
+
+        宽度没变时也不动手——列宽只由总宽决定，缓存总宽就够了。
+        这里原本只挡了「没量出来」，于是每一次 Configure 都要写三列，
+        拖窗口时和任务页的表格一起抖。
         """
         total = self._tree.winfo_width()
-        if total < 100:
+        if total < 100 or total == self._last_width:
             return
+        self._last_width = total
         widths = layout.column_widths(
             COLUMNS, _COLUMN_WEIGHTS, _COLUMN_MIN_WIDTHS, total
         )
         for column, width in widths.items():
             self._tree.column(column, width=width)
 
-    def refresh(self) -> None:
-        """重新读取历史文件并填充列表。"""
+    def refresh(self, force: bool = False) -> None:
+        """重新读取历史文件并填充列表。
+
+        文件没变就不重建：主窗口每次切到本页都会调一次 ``refresh()``，
+        而历史文件是**追加写**的——投得越多越大，切一次页就要把整个
+        JSON 读进来 parse 一遍，再删掉、插回 200 行 Treeview。条目到
+        几百条时点导航能感觉到一下顿，而这下顿里绝大部分工作是在重画
+        一模一样的内容。
+
+        指纹变了才动手。``force=True`` 留给「刷新」按钮：用户点了就是
+        想重读，不看指纹。
+        """
+        stamp = _file_stamp(str(DEFAULT_HISTORY_FILE))
+        if not force and self._stamp is not _UNSET and stamp == self._stamp:
+            return
+        self._stamp = stamp
+
         self._tree.delete(*self._tree.get_children())
         # 每次刷新重置日志：refresh 会在每次切到本页时调用，
         # 不清空的话同一句「共 N 条」会重复叠很多行。

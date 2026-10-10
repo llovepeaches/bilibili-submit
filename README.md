@@ -346,6 +346,7 @@ xvfb-run -a python -m pytest      # 612 项
 |---|---|
 | [更新日志](CHANGELOG.md) | 每个版本的增删改，升级前先看一眼 |
 | [架构说明](docs/ARCHITECTURE.md) | 分层与依赖方向、关键设计决策、如何加新命令 |
+| [性能报告](docs/PERFORMANCE.md) | 卡顿排查：四个重写热点的定位、改法与实测对比 |
 | [自行打包](docs/BUILD.md) | 本地 / Actions 打包、发版要同步的版本号 |
 | [部署指南](docs/DEPLOY.md) | 源码部署：三平台安装、代理、ffmpeg、定时任务 |
 | [常见问题](docs/FAQ.md) | 按症状排查：错误码、二维码、上传慢、杀软误报 |

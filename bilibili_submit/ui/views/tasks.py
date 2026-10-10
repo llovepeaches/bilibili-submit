@@ -1245,8 +1245,16 @@ class TasksView(ttk.Frame):
             return COPYRIGHT_OPTIONS[0]
 
     def _update_summary(self) -> None:
-        """刷新汇总条：共多少、选了多少、成败各多少。"""
-        total = len(self._tree.get_children())
+        """刷新汇总条：共多少、选了多少、成败各多少。
+
+        ⚠️ 全表只遍历**一遍**。这里每完成一个任务就被调用一次（见
+        ``tasks_run`` 的 Event 分支），批量跑几百个任务时它是被调用
+        最密的一段；早先它把 ``get_children()`` 取了三遍、又各推一遍
+        ``picked`` 与 ``tones``、再对 tones 做两次 ``count``——同一个
+        循环跑了六遍。行数是 n、调用次数也是 O(n)，六遍就是六倍。
+        """
+        rows = self._tree.get_children()
+        total = len(rows)
         # 导航角标同步：批量队列里还有几件没跑完的事，用户在别的页
         # 也该看见。getattr 防御——主窗口不一定有这个钩子（测试替身）。
         setter = getattr(self.app, "set_nav_badge", None)
@@ -1258,13 +1266,22 @@ class TasksView(ttk.Frame):
             self._refresh_action_bar()
             return
 
-        picked = sum(1 for iid in self._tree.get_children() if self._picked.get(iid))
-        tones = [self._tones.get(iid, "idle") for iid in self._tree.get_children()]
+        picked = 0
+        ok = error = 0
+        for iid in rows:
+            if self._picked.get(iid):
+                picked += 1
+            tone = self._tones.get(iid, "idle")
+            if tone == "ok":
+                ok += 1
+            elif tone == "error":
+                error += 1
+
         parts = [f"共 {total}", f"已选 {picked}"]
-        for label, tone_name in (("成功", "ok"), ("失败", "error")):
-            count = tones.count(tone_name)
-            if count:
-                parts.append(f"{label} {count}")
+        if ok:
+            parts.append(f"成功 {ok}")
+        if error:
+            parts.append(f"失败 {error}")
         if self._missing:
             parts.append(f"缺失 {len(self._missing)}")
 
@@ -1273,7 +1290,7 @@ class TasksView(ttk.Frame):
         # 每完成一项 _mark 都会触发本方法，不在这里判 running 的话，
         # 执行途中出现第一个失败项时按钮就会被解开，而 _run 会因为
         # 「已有任务在运行」直接 return，变成按了没反应的假按钮。
-        if tones.count("error") and self._editable():
+        if error and self._editable():
             self._retry_button.state(["!disabled"])
         else:
             self._retry_button.state(["disabled"])

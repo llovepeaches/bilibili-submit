@@ -118,6 +118,8 @@ class TaskTable:
         self.errors: dict[str, str] = {}
         #: iid -> 语义色名，见 :data:`~.theme.TONES`
         self.tones: dict[str, str] = {}
+        #: 上一次量到的表格总宽。见 :meth:`resize_columns`
+        self._last_width = 0
 
         self.tree = ttk.Treeview(master, columns=COLUMNS, show="headings", height=8)
         for column in COLUMNS:
@@ -209,10 +211,17 @@ class TaskTable:
 
         只在宽度真的变了时动手：``<Configure>`` 在布局的每一步都会触发，
         无脑重算会让 Treeview 反复重排，拖窗口时能看出明显抖动。
+
+        .. note::
+           列宽只由总宽决定，所以缓存总宽就等于缓存了全部七列——
+           宽度没变时一次 ``self.tree.column()`` 都不用调。之前这里只
+           挡了「还没布局出来」，实测拖一次窗口能派发上百个 Configure，
+           每个都写七列，是拖窗口发涩的直接来源。
         """
         total = self.tree.winfo_width()
-        if total < 100:  # 还没布局出来，别拿 1px 去算比例
+        if total < 100 or total == self._last_width:
             return
+        self._last_width = total
         for column, width in _column_widths(total).items():
             self.tree.column(column, width=width)
 

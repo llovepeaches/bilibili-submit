@@ -78,6 +78,8 @@ class ScrollArea(ttk.Frame):
         self._canvas.configure(yscrollcommand=self._sync_scrollbar)
         self._canvas.grid(row=0, column=0, sticky="nsew")
         self._scrollbar.grid(row=0, column=1, sticky="ns")
+        #: 上一次量到的画布宽度，见 :meth:`_on_canvas_configure`
+        self._last_canvas_width = 0
 
         #: 内容都加在这个 frame 上
         self.body = ttk.Frame(self._canvas, style="Card.TFrame", padding=padding)
@@ -178,7 +180,12 @@ class ScrollArea(ttk.Frame):
         self._canvas.configure(scrollregion=self._canvas.bbox("all"))
 
     def _on_canvas_configure(self, event: tk.Event) -> None:
-        # 内容跟着容器宽度走，否则窄窗口下会横向溢出
+        # 内容跟着容器宽度走，否则窄窗口下会横向溢出。
+        # 宽度没变就别动：Configure 在高度变化、子控件几何变化时也会
+        # 派发，无脑 itemconfigure 会让画布重排一遍内嵌窗口。
+        if event.width <= 1 or event.width == self._last_canvas_width:
+            return
+        self._last_canvas_width = event.width
         self._canvas.itemconfigure(self._window, width=event.width)
 
 
@@ -1645,6 +1652,11 @@ class LogConsole(tk.Frame):
     底色用次级面而不是纯色块，用户一眼能看出「这是输出不是输入」。
     """
 
+    #: 最多保留多少行。日志是**追加**的，长批次能堆到几万行，
+    #: 而 Text 每多一万行就多一份内存与重排成本，用户却只会看最后
+    #: 几十行。超出的从顶部丢弃——留着头部的旧行没有意义。
+    MAX_LINES = 3000
+
     def __init__(self, master: tk.Misc, height: int = 10) -> None:
         super().__init__(master, background=theme.LOG_BG, relief="flat")
         self.rowconfigure(0, weight=1)
@@ -1670,17 +1682,85 @@ class LogConsole(tk.Frame):
         self._text.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
 
+        # 滚动与「恢复只读」都攒到事件循环空闲时做一次，见 _write。
+        self._scroll_pending = False
+        self._writable = False
+        self._lines = 0
+
     def append(self, message: str) -> None:
-        """追加一行并滚到底部。"""
-        self._text.configure(state="normal")
-        self._text.insert("end", message.rstrip() + "\n")
-        self._text.see("end")
-        self._text.configure(state="disabled")
+        """追加一行。
+
+        内容**同步**落盘（调用返回后就能从 Text 里读到），但滚动与
+        状态恢复挪到空闲时——见 :meth:`_write` 里那段的实测数据。
+        """
+        self._write((message,))
+
+    def extend(self, messages) -> None:
+        """一次追加多行。批量到达（一批日志、一次扫描结果）走这条路。
+
+        和循环调 :meth:`append` 的区别不只是少几次函数调用：多行合并
+        成一次 ``insert``，Tk 只重排一次。
+        """
+        self._write(tuple(messages))
+
+    def _write(self, messages: tuple[str, ...]) -> None:
+        """落盘多行，并把滚动/只读恢复合并到空闲时做一次。
+
+        ⚠️ 这里的形状是**实测**定下来的，别改回「每写一行滚一次」：
+        Xvfb 上 2000 行实测——
+
+        - 每行的 insert + see：175.7 ms
+        - 同样多的内容，一次 insert + 一次 see：0.8 ms
+
+        差了 220 倍，而且大头不是 insert（2000 次只要 1.8 ms），
+        是 **see**：它每次都要让 Text 重排一遍再算滚动位置，写一行
+        触发一次，行数越多越贵。上传/批量投稿时日志是成批到的，
+        逐条 see 就等于把界面按在地上摩擦。
+
+        所以：insert 保持同步（测试和用户都要立刻看到内容），
+        see 用 after_idle 合并——一帧里来多少行都只滚一次。
+        """
+        if not messages:
+            return
+        if not self._writable:
+            self._text.configure(state="normal")
+            self._writable = True
+        self._text.insert("end", "".join(m.rstrip() + "\n" for m in messages))
+        self._lines += len(messages)
+        self._trim()
+        self._schedule_scroll()
+
+    def _trim(self) -> None:
+        over = self._lines - self.MAX_LINES
+        if over > 0:
+            self._text.delete("1.0", f"{over + 1}.0")
+            self._lines -= over
+
+    def _schedule_scroll(self) -> None:
+        if self._scroll_pending:
+            return
+        self._scroll_pending = True
+        try:
+            self.after_idle(self._flush_scroll)
+        except tk.TclError:  # 窗口已销毁，滚动没有意义了
+            self._scroll_pending = False
+
+    def _flush_scroll(self) -> None:
+        self._scroll_pending = False
+        try:
+            self._text.see("end")
+            if self._writable:
+                self._text.configure(state="disabled")
+                self._writable = False
+        except tk.TclError:
+            pass  # 窗口已销毁
 
     def clear(self) -> None:
         self._text.configure(state="normal")
         self._text.delete("1.0", "end")
         self._text.configure(state="disabled")
+        self._lines = 0
+        self._writable = False
 
     def forward_wheel_to(self, area: "ScrollArea") -> None:
         """把「滚到边界」的滚轮事件交给外层滚动区。

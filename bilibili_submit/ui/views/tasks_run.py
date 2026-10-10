@@ -266,7 +266,11 @@ class BatchRunController:
                 self._table.errors[str(message.index)] = message.error
                 self._progress.set_value(message.percent)
                 self._set_task_status(f"{message.position}/{message.total}")
-            self._update_summary()
+            # ⚠️ 这里**不要**再调一次 _update_summary。
+            # mark() 内部已经通过 on_changed 通知过一次（TaskTable 把它
+            # 和行状态绑在一起，就是怕「列表里有两个红的、汇总说 0 失败」）。
+            # 每个任务来 2 个 Event，重复一次就等于把全表多扫一遍——
+            # 跑几百个任务时这段是最密的循环。
             return
         self._log.append(message)
 
@@ -287,10 +291,15 @@ class BatchRunController:
         self._progress.set_value(100)
         self._progress.set_text(f"完成 {ok}/{len(outcomes)}")
         self._set_task_status(f"完成 {ok}/{len(outcomes)}")
-        self._log.append(f"全部结束：成功 {ok}/{len(outcomes)}")
-        for outcome in outcomes:
-            if outcome.success:
-                self._log.append(f"  {outcome.bvid}  {outcome.url}")
+        # 一次性写完：跑完几百个任务时这里是最后一批日志，逐条 append
+        # 会让每条都各自排一次滚动定位。
+        lines = [f"全部结束：成功 {ok}/{len(outcomes)}"]
+        lines += [
+            f"  {outcome.bvid}  {outcome.url}"
+            for outcome in outcomes
+            if outcome.success
+        ]
+        self._log.extend(lines)
         self._update_summary()
 
     def on_error(self, exc: BaseException) -> None:

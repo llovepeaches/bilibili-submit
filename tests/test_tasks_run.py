@@ -61,6 +61,10 @@ class _FakeLog:
     def append(self, text):
         self.lines.append(text)
 
+    def extend(self, texts):
+        """批量写入。成批到达的日志走这条路（见 LogConsole.extend）。"""
+        self.lines.extend(texts)
+
     def clear(self):
         self.cleared += 1
         self.lines.clear()
