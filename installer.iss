@@ -207,58 +207,68 @@ begin
   end;
 end;
 
-{ 写报告前先把目录建出来。
-  ssInstall 触发时 app 目录**可能还不存在**：Inno 是在复制文件那一步才
-  建目标目录的，而 SaveStringToFile 不会替我们建——它一失败，探针就
-  落进下面那个 except，CI 只看到「找不到报告」，看不出到底是目录不
-  存在、还是探针压根没跑。两种原因的修法完全不同。
+{ 落盘。三件事一起做，是为了让「探针炸在哪一步」自己说出来：
+  目录先建（ssInstall 时 app 目录可能还没建出来，而 SaveStringToFile
+  不会替我们建）、结果以 ASCII 串返回、写入失败**吞掉**。
+
+  为什么吞：这个函数要被下面的 Stage2 用来**记录进度**，记录本身再抛
+  一次异常就把真异常盖掉了，CI 又只剩一句「找不到报告」。
+
+  为什么要返回串而不是空着：0/1 加上异常长度，是唯一能穿过 ACP 编码
+  带回主线的信号——异常消息是中文的，原样写出去会变问号。
   注释里不写 Inno 的常量名：花括号会提前结束 Pascal 注释（踩过）。 }
-procedure SaveReport(const Dir: String; const S: String);
+function TrySaveReport(const Dir: String; const S: String): String;
 begin
-  ForceDirectories(Dir);
-  SaveStringToFile(Dir + '\lang-report.txt', S, False);
+  Result := '1';
+  try
+    ForceDirectories(Dir);
+    SaveStringToFile(Dir + '\lang-report.txt', S, False);
+  except
+    Result := '0:' + IntToStr(Length(GetExceptionMessage));
+  end;
+end;
+
+{ 同一份进度写两处：app 目录那份是权威位置，系统临时目录那份备查。
+  两处的有无组合能区分「探针压根没跑」与「跑了、但 app 目录当时
+  还不可用」——这两种的修法完全不同，别再混成一种报错。 }
+procedure Stage2(const S: String);
+begin
+  TrySaveReport(ExpandConstant('{app}'), S);
+  TrySaveReport(ExpandConstant('{%TEMP}'), S);
 end;
 
 procedure WriteLangReport;
 var
-  F: String;
+  Base, F: String;
   { cm: 展开的是**当前生效的消息文件**里那一条。这是整个问题的关键：
     MessagesFile 指向 Default.isl 时，这里展开出来的就是英文。 }
   SelDir, SelGroup, Ready, Finish: String;
 begin
-  SelDir  := ExpandConstant('{cm:WizardSelectDir}');
-  SelGroup := ExpandConstant('{cm:WizardSelectProgramGroup}');
-  Ready   := ExpandConstant('{cm:FinishedHeadingLabel}');
-  Finish  := ExpandConstant('{cm:FinishedLabel}');
+  Base := 'lang=' + ActiveLanguage + #13#10;
 
-  F := 'lang=' + ActiveLanguage + #13#10
+  { 每一步都落一次盘：最后留在报告里的 stage 就是爆炸点。
+    非这么做不可的原因是——探针的异常消息是中文的，经 ACP 编码写
+    不出来（见上面那段），「炸在哪一步」没有别的渠道能告诉 CI。 }
+  Stage2(Base + 'stage=start' + #13#10);
+
+  SelDir  := ExpandConstant('{cm:WizardSelectDir}');
+  Stage2(Base + 'stage=seldir' + #13#10);
+  SelGroup := ExpandConstant('{cm:WizardSelectProgramGroup}');
+  Stage2(Base + 'stage=selgroup' + #13#10);
+  Ready   := ExpandConstant('{cm:FinishedHeadingLabel}');
+  Stage2(Base + 'stage=ready' + #13#10);
+  Finish  := ExpandConstant('{cm:FinishedLabel}');
+  Stage2(Base + 'stage=finish' + #13#10);
+
+  { 只写 0/1 与 ASCII 键名：这份报告的**全部内容**都保证与文件编码
+    无关，见上面关于 ACP 的那段。 }
+  F := Base
      + 'seldir_cjk='   + CjkFlag(SelDir)  + #13#10
      + 'selgroup_cjk=' + CjkFlag(SelGroup) + #13#10
      + 'ready_cjk='    + CjkFlag(Ready)   + #13#10
-     + 'finish_cjk='   + CjkFlag(Finish)  + #13#10;
-  { 只写 0/1 与 ASCII 键名：这份报告的**全部内容**都保证与文件编码
-    无关，见上面关于 ACP 的那段。 }
-  { 第三个参数 Append 必须显式给 False——SaveStringToFile 是三参数的
-    形式，省掉它编译期就报 "Invalid number of parameters"（CI 上真报在
-    这一行，报错文案完全指不到「少了第三个参数」上）。}
-  { 落在安装目录而不是安装临时目录：后者的路径形如
-    %TEMP%\is-XXXXX\，安装一结束就被删掉。写到那儿的话，CI 读的时候
-    文件已经没了，而报错是「找不到语言报告」——指向「探针没跑起来」，
-    而真原因是「跑了，但写到了会被删掉的地方」。
-    安装目录在卸载之前一直存在，CI 装完立刻读得到。
-
-    ⚠️ 这段注释里刻意不写 Inno 的花括号常量名。Pascal Script 的注释
-    用花括号包起来，而花括号**不配对**：注释里出现一个左花括号之后，
-    解析会一直吃到下一个右花括号，把中间的字面量当代码，编译期报
-    "Syntax error" 且行号落在**下一行**（本次 CI 报在 232 行
-    Column 14，真凶是上面那行注释里的一个左花括号）。百分号与
-    反斜杠都没问题，只有花括号有这个坑。}
-  SaveReport(ExpandConstant('{app}'), F);
-  { 同一份再写到系统临时目录：app 那份是权威位置，但它万一因为权限
-    或路径没写成，CI 还有第二处能读到「探针到底跑没跑」——好把
-    「没写成功」和「写到了别处」两种原因分开，而不是混成一句
-    「找不到语言报告」。 }
-  SaveReport(ExpandConstant('{%TEMP}'), F);
+     + 'finish_cjk='   + CjkFlag(Finish)  + #13#10
+     + 'stage=done' + #13#10;
+  Stage2(F);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -293,10 +303,10 @@ begin
     Err := GetExceptionMessage;
     { 异常分支同样双写：报告是「探针有没有跑成」的唯一证据，
       它本身再失败一次，CI 就只剩一句「找不到报告」可看。 }
-    SaveReport(ExpandConstant('{app}'),
+    TrySaveReport(ExpandConstant('{app}'),
       'lang=' + ActiveLanguage + #13#10 + 'probe_error=1' + #13#10
       + 'probe_error_len=' + IntToStr(Length(Err)) + #13#10);
-    SaveReport(ExpandConstant('{%TEMP}'),
+    TrySaveReport(ExpandConstant('{%TEMP}'),
       'lang=' + ActiveLanguage + #13#10 + 'probe_error=1' + #13#10
       + 'probe_error_len=' + IntToStr(Length(Err)) + #13#10);
   end;

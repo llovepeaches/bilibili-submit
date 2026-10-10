@@ -66,10 +66,27 @@ Write-Host "语言报告内容：$($report | Out-String)"
 #    这一条必须排在最前面，否则下面会报「语言是 chinese 但四项
 #    都缺」，而真原因是探针压根没跑完。
 if ($report.ContainsKey('probe_error')) {
+    # 探针的异常消息是中文的，经 ACP 编码写不进报告（报告只留了
+    # ASCII）。所以两件事必须先做再抛：
+    #   1) 把报告里的 stage 打出来——探针每完成一步覆写一次报告，
+    #      最后留下的 stage 就是它炸的那一处（取消息？建目录？写文件？）
+    #   2) 把 Inno 自己那份 UTF-16 安装日志里的异常行打出来——
+    #      那里才存着中文原文，是唯一能读到「为什么」的地方。
+    Write-Host "探针最后到达的阶段: $($report['stage'])"
+    $innoLog = Get-ChildItem "$env:TEMP\Setup Log*.txt" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($innoLog) {
+        Write-Host "--- Inno 安装日志 $($innoLog.Name) 里的异常/错误行 ---"
+        Get-Content -LiteralPath $innoLog.FullName -Encoding Unicode |
+            Select-String -Pattern 'Exception|Error|错误|异常' |
+            Select-Object -Last 15 | ForEach-Object { Write-Host "  $($_.Line)" }
+    } else {
+        Write-Host "没找到 Inno 安装日志（$env:TEMP 下没有 Setup Log*.txt）"
+    }
     throw ("安装器里的探针自己抛异常了（异常消息长度 " +
-        "$($report['probe_error_len']) 字符）。看 %TEMP% 下 Inno 自己" +
-        '的安装日志（CI 那步传了 /LOG）——消息是中文的，ACP 编码后' +
-        '这里读不到内容。**不是向导的问题，是探针没跑成**。')
+        "$($report['probe_error_len']) 字符，阶段 $($report['stage'])）。" +
+        '看上面贴出的 Inno 日志行——那是中文原文，报告里读不到。' +
+        '**不是向导的问题，是探针没跑成**。')
 }
 
 # 1) 语言名。Name 写的是 chinese，但那只是下拉框显示的名字，

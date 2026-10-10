@@ -1357,23 +1357,36 @@ def test_installer_ships_a_language_probe_for_ci():
 
     # 报告内容必须全是 ASCII：写出去的是「有没有汉字」这个 0/1，
     # 不是文案原文。
-    # 落盘这一步被收进了 SaveReport 过程——它要先 ForceDirectories
-    # （ssInstall 时 app 目录可能还没建出来）再往两处写，所以这里两种
-    # 写法都认：经 SaveReport，或直接调 SaveStringToFile。
+    # 落盘这一步被收进了 TrySaveReport（要先建目录、失败返回 ASCII 串、
+    # 不掩盖真异常），探针经 Stage2 调它写两处，所以这里三种写法都认：
+    # 经 TrySaveReport / SaveReport，或直接调 SaveStringToFile。
     # 守卫的意图没变：探针必须把判定结果**写到 app 目录**，不能只算不写。
-    report = re.search(
+    report = None
+    for pattern in (
+        r"TrySaveReport\(\s*ExpandConstant\('\{app\}[^)]*\)\s*,\s*(\w+)\s*\)",
         r"SaveReport\(\s*ExpandConstant\('\{app\}[^)]*\)\s*,\s*(\w+)\s*\)",
-        code)
-    if not report:
-        report = re.search(
-            r"SaveStringToFile\(\s*ExpandConstant\('\{app\}[^)]*\)\s*,\s*(\w+)\s*"
-            r",\s*(?:True|False)\s*\)",
-            code)
+        r"SaveStringToFile\(\s*ExpandConstant\('\{app\}[^)]*\)\s*,\s*(\w+)\s*"
+        r",\s*(?:True|False)\s*\)",
+    ):
+        report = re.search(pattern, code)
+        if report:
+            break
     assert report, "[Code] 段里找不到往 app 目录写报告的调用"
-    var = report.group(1)
+
     # 写出去的是个变量，内容在别处拼的——顺着赋值追进去。
-    # 直接搜 SaveStringToFile 那一行的内容没用：CjkFlag 在 F := ... 里。
+    # 直接搜写文件那一行的内容没用：CjkFlag 在 F := ... 里。
+    # 经 Stage2 中转时，落盘点上的形参名是中转过程的参数，得再往回
+    # 追一层到探针真正拼好的那个变量。
+    var = report.group(1)
     assign = re.search(rf"\b{re.escape(var)}\s*:=\s*(.+?);", code, re.DOTALL)
+    if not assign:
+        # 落盘点拿到的是中转过程的形参名（探针经 Stage2 写两处）——
+        # 形参名不在调用处出现，往回追一层：找探针传给中转过程的变量。
+        relay = re.search(r"\bStage2\(\s*(\w+)\s*\)", code)
+        if relay:
+            var = relay.group(1)
+            assign = re.search(rf"\b{re.escape(var)}\s*:=\s*(.+?);",
+                               code, re.DOTALL)
     assert assign, f"探针里找不到 {var} 的赋值——写出去的内容无从检查"
     written = assign.group(1)
     assert "CjkFlag" in written, (
