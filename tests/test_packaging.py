@@ -1343,9 +1343,19 @@ def test_installer_ships_a_language_probe_for_ci():
        时分不清是「不是中文」还是「编码路过损了」。
     """
     code = _section(ISS.read_text(encoding="utf-8-sig"), "Code")
-    assert "{cm:" in code, (
-        "[Code] 段里没有 {cm:...}——探针没在读运行时生效的消息，"
-        "那它验的就不是「装出来是什么样」而是「配置写成了什么样」"
+    # ⚠️ 取内置消息必须走 SetupMessage，不能用 cm 常量展开——这两者
+    # 不是一回事：cm 只解析 [CustomMessages] 段里我们自己定义的消息，
+    # 而 WizardSelectDir 这些是 Inno 自带的 [Messages]，走 cm 会抛
+    #   Unknown custom message name "WizardSelectDir" in "cm" constant
+    # CI 上连炸四轮才查出来，而且异常是中文的、进不了 ASCII 报告。
+    assert "SetupMessage(msg" in code, (
+        "[Code] 段没有用 SetupMessage 取内置消息——探针没在读运行时"
+        "生效的那一条，那它验的就不是「装出来是什么样」而是"
+        "「配置写成了什么样」"
+    )
+    assert "{cm:" not in code, (
+        "[Code] 段还在用 cm 常量取内置消息——cm 只认 [CustomMessages]，"
+        "取内置消息会抛「Unknown custom message name」，探针必炸"
     )
     assert "LANGCHECK" in code, (
         "[Code] 段没认 /LANGCHECK 开关——探针会在每次正常安装时都跑，"
@@ -1399,9 +1409,9 @@ def test_installer_ships_a_language_probe_for_ci():
     # 字符串，守卫照样绿，而那条消息验的是我们自己写死的常量——安装器
     # 是不是中文的，它一点没验。
     assigns = re.findall(
-        r"^\s*(\w+)\s*:=\s*ExpandConstant\('\{cm:(\w+)\}'\)", code, re.MULTILINE)
+        r"^\s*(\w+)\s*:=\s*SetupMessage\(msg(\w+)\)", code, re.MULTILINE)
     assert len(assigns) >= 4, (
-        f"探针里只有 {len(assigns)} 条消息走了 {{cm:...}}——"
+        f"探针里只有 {len(assigns)} 条消息走了 SetupMessage——"
         "向导第一页、开始菜单页、完成页标题与正文这四条都得从"
         "**当前生效的消息文件**取，不能硬编码"
     )

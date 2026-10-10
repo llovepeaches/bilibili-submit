@@ -242,8 +242,17 @@ end;
 procedure WriteLangReport;
 var
   Base, F: String;
-  { cm: 展开的是**当前生效的消息文件**里那一条。这是整个问题的关键：
-    MessagesFile 指向 Default.isl 时，这里展开出来的就是英文。 }
+  { ⚠️ 内置消息必须用 SetupMessage 取，**不能**用 cm 常量展开。
+
+    这两者不是一回事：cm 常量只解析 [CustomMessages] 段里我们自己
+    定义的消息；而 WizardSelectDir / FinishedHeadingLabel 这些是
+    Inno 自带的 [Messages]，走 cm 展开会抛
+      「Unknown custom message name "WizardSelectDir" in "cm" constant」
+    ——CI 上就是这样连炸四轮的，而且异常消息是中文，报告里带不出来。
+
+    SetupMessage 取的是**当前生效语言**的那一条：MessagesFile 指向
+    英文 Default.isl 时它返回英文，指向中文文件才返回中文。这正是
+    探针要验的东西，换了这个取法，语义一点没变。 }
   SelDir, SelGroup, Ready, Finish: String;
 begin
   Base := 'lang=' + ActiveLanguage + #13#10;
@@ -253,13 +262,13 @@ begin
     不出来（见上面那段），「炸在哪一步」没有别的渠道能告诉 CI。 }
   Stage2(Base + 'stage=start' + #13#10);
 
-  SelDir  := ExpandConstant('{cm:WizardSelectDir}');
+  SelDir  := SetupMessage(msgWizardSelectDir);
   Stage2(Base + 'stage=seldir' + #13#10);
-  SelGroup := ExpandConstant('{cm:WizardSelectProgramGroup}');
+  SelGroup := SetupMessage(msgWizardSelectProgramGroup);
   Stage2(Base + 'stage=selgroup' + #13#10);
-  Ready   := ExpandConstant('{cm:FinishedHeadingLabel}');
+  Ready   := SetupMessage(msgFinishedHeadingLabel);
   Stage2(Base + 'stage=ready' + #13#10);
-  Finish  := ExpandConstant('{cm:FinishedLabel}');
+  Finish  := SetupMessage(msgFinishedLabel);
   Stage2(Base + 'stage=finish' + #13#10);
 
   { 只写 0/1 与 ASCII 键名：这份报告的**全部内容**都保证与文件编码
