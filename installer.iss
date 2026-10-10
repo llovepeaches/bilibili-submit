@@ -207,6 +207,18 @@ begin
   end;
 end;
 
+{ 写报告前先把目录建出来。
+  ssInstall 触发时 app 目录**可能还不存在**：Inno 是在复制文件那一步才
+  建目标目录的，而 SaveStringToFile 不会替我们建——它一失败，探针就
+  落进下面那个 except，CI 只看到「找不到报告」，看不出到底是目录不
+  存在、还是探针压根没跑。两种原因的修法完全不同。
+  注释里不写 Inno 的常量名：花括号会提前结束 Pascal 注释（踩过）。 }
+procedure SaveReport(const Dir: String; const S: String);
+begin
+  ForceDirectories(Dir);
+  SaveStringToFile(Dir + '\lang-report.txt', S, False);
+end;
+
 procedure WriteLangReport;
 var
   F: String;
@@ -241,7 +253,12 @@ begin
     "Syntax error" 且行号落在**下一行**（本次 CI 报在 232 行
     Column 14，真凶是上面那行注释里的一个左花括号）。百分号与
     反斜杠都没问题，只有花括号有这个坑。}
-  SaveStringToFile(ExpandConstant('{app}\lang-report.txt'), F, False);
+  SaveReport(ExpandConstant('{app}'), F);
+  { 同一份再写到系统临时目录：app 那份是权威位置，但它万一因为权限
+    或路径没写成，CI 还有第二处能读到「探针到底跑没跑」——好把
+    「没写成功」和「写到了别处」两种原因分开，而不是混成一句
+    「找不到语言报告」。 }
+  SaveReport(ExpandConstant('{%TEMP}'), F);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -274,8 +291,13 @@ begin
       当「有没有出错」的信号，不指望读到内容。要看原文得让安装器
       带 /LOG，那会另开一个日志文件。 }
     Err := GetExceptionMessage;
-    SaveStringToFile(ExpandConstant('{app}\lang-report.txt'),
+    { 异常分支同样双写：报告是「探针有没有跑成」的唯一证据，
+      它本身再失败一次，CI 就只剩一句「找不到报告」可看。 }
+    SaveReport(ExpandConstant('{app}'),
       'lang=' + ActiveLanguage + #13#10 + 'probe_error=1' + #13#10
-      + 'probe_error_len=' + IntToStr(Length(Err)) + #13#10, False);
+      + 'probe_error_len=' + IntToStr(Length(Err)) + #13#10);
+    SaveReport(ExpandConstant('{%TEMP}'),
+      'lang=' + ActiveLanguage + #13#10 + 'probe_error=1' + #13#10
+      + 'probe_error_len=' + IntToStr(Length(Err)) + #13#10);
   end;
 end;

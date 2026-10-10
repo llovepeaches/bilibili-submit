@@ -1357,11 +1357,19 @@ def test_installer_ships_a_language_probe_for_ci():
 
     # 报告内容必须全是 ASCII：写出去的是「有没有汉字」这个 0/1，
     # 不是文案原文。
+    # 落盘这一步被收进了 SaveReport 过程——它要先 ForceDirectories
+    # （ssInstall 时 app 目录可能还没建出来）再往两处写，所以这里两种
+    # 写法都认：经 SaveReport，或直接调 SaveStringToFile。
+    # 守卫的意图没变：探针必须把判定结果**写到 app 目录**，不能只算不写。
     report = re.search(
-        r"SaveStringToFile\(\s*ExpandConstant\('\{app\}[^)]*\)\s*,\s*(\w+)\s*"
-        r",\s*(?:True|False)\s*\)",
+        r"SaveReport\(\s*ExpandConstant\('\{app\}[^)]*\)\s*,\s*(\w+)\s*\)",
         code)
-    assert report, "[Code] 段里找不到 SaveStringToFile 的完整调用"
+    if not report:
+        report = re.search(
+            r"SaveStringToFile\(\s*ExpandConstant\('\{app\}[^)]*\)\s*,\s*(\w+)\s*"
+            r",\s*(?:True|False)\s*\)",
+            code)
+    assert report, "[Code] 段里找不到往 app 目录写报告的调用"
     var = report.group(1)
     # 写出去的是个变量，内容在别处拼的——顺着赋值追进去。
     # 直接搜 SaveStringToFile 那一行的内容没用：CjkFlag 在 F := ... 里。

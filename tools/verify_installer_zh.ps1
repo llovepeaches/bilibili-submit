@@ -32,14 +32,28 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path -LiteralPath $ReportPath)) {
-    throw ("找不到语言报告：$ReportPath —— 安装器里的 /LANGCHECK 探针" +
-        '没跑起来。可能是 [Code] 段没编进去，也可能是静默安装那一步' +
-        '漏传了 /LANGCHECK。先看安装日志，别直接改判据。')
+# 主路径是 app 目录那一份（权威位置）。它缺席时先看系统临时目录的
+# 副本——探针会往两处都写，两处的有无组合能区分三种情况：
+#   两处都没有 → 探针压根没跑（没传 /LANGCHECK，或 [Code] 没编进去）
+#   只有临时目录有 → 探针跑了，但 app 目录当时还不存在/不可写
+#   两处都有 → 正常
+# 判据本身不变：读到的报告要满足的条件一条没少。
+$fallback = Join-Path $env:TEMP 'lang-report.txt'
+$actual = $ReportPath
+if (-not (Test-Path -LiteralPath $actual)) {
+    if (Test-Path -LiteralPath $fallback) {
+        Write-Host ("主路径没有报告，但系统临时目录有副本：$fallback —— " +
+            '探针跑了，app 目录那一份没写成（目录当时不存在或不可写）')
+        $actual = $fallback
+    } else {
+        throw ("两处都找不到语言报告：$ReportPath 与 $fallback —— " +
+            '安装器里的 /LANGCHECK 探针没跑起来。可能是 [Code] 段没编进去，' +
+            '也可能是静默安装那一步漏传了 /LANGCHECK。先看安装日志，别直接改判据。')
+    }
 }
 
 $report = @{}
-foreach ($line in Get-Content -LiteralPath $ReportPath -Encoding ASCII) {
+foreach ($line in Get-Content -LiteralPath $actual -Encoding ASCII) {
     if ($line -match '^([a-z_]+)=(.+)$') {
         $report[$Matches[1]] = $Matches[2].Trim()
     }
