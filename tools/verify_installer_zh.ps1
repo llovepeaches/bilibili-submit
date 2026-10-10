@@ -76,9 +76,9 @@ if ($report.ContainsKey('probe_error')) {
     $innoLog = Get-ChildItem "$env:TEMP\Setup Log*.txt" -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($innoLog) {
-        Write-Host "--- Inno 安装日志 $($innoLog.Name) 里的异常/错误行 ---"
+        Write-Host "--- Inno 安装日志 $($innoLog.Name) 里的探针异常行 ---"
         Get-Content -LiteralPath $innoLog.FullName -Encoding Unicode |
-            Select-String -Pattern 'Exception|Error|错误|异常' |
+            Select-String -Pattern 'LangProbe|Exception|Error|错误|异常' |
             Select-Object -Last 15 | ForEach-Object { Write-Host "  $($_.Line)" }
     } else {
         Write-Host "没找到 Inno 安装日志（$env:TEMP 下没有 Setup Log*.txt）"

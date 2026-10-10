@@ -207,21 +207,23 @@ begin
   end;
 end;
 
-{ 落盘。三件事一起做，是为了让「探针炸在哪一步」自己说出来：
-  目录先建（ssInstall 时 app 目录可能还没建出来，而 SaveStringToFile
-  不会替我们建）、结果以 ASCII 串返回、写入失败**吞掉**。
+{ 落盘。返回 ASCII 结果串，写入失败**吞掉**。
 
-  为什么吞：这个函数要被下面的 Stage2 用来**记录进度**，记录本身再抛
-  一次异常就把真异常盖掉了，CI 又只剩一句「找不到报告」。
+  为什么吞：这个函数被下面的 Stage2 用来**记录进度**——记录本身再抛
+  异常，就把真异常盖掉了，CI 又只剩一句「找不到报告」。
+  为什么返回串：0/1 加上异常长度，是唯一能穿过 ACP 编码带回主线的
+  信号——异常消息是中文的，原样写出去会变问号。
 
-  为什么要返回串而不是空着：0/1 加上异常长度，是唯一能穿过 ACP 编码
-  带回主线的信号——异常消息是中文的，原样写出去会变问号。
+  这里**刻意不建目录**：探针挂在 ssPostInstall，目录是 Inno 自己建
+  好的；真去建（ForceDirectories）反而会因为它对空路径/未展开的
+  常量抛异常，把「目录还不存在」变成「探针炸了」——两种原因的
+  修法完全不同，别再让它俩混成一种报错。
+
   注释里不写 Inno 的常量名：花括号会提前结束 Pascal 注释（踩过）。 }
 function TrySaveReport(const Dir: String; const S: String): String;
 begin
   Result := '1';
   try
-    ForceDirectories(Dir);
     SaveStringToFile(Dir + '\lang-report.txt', S, False);
   except
     Result := '0:' + IntToStr(Length(GetExceptionMessage));
@@ -275,11 +277,22 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   Err: String;
 begin
-  { ssInstall 是「真的要开始装了」，此时消息文件已经定下来。
-    更早的 InitializeSetup 也行，但 CurStepChanged 顺带能确认
-    前面几页都没中止掉——探针跑在真正安装的路径上，测的才是
-    用户会遇到的那条路。 }
-  if (CurStep <> ssInstall) or not ParamExists('/LANGCHECK') then
+  { ⚠️ 挂在 ssPostInstall 而不是 ssInstall——这是探针能写成功的
+    前提，不是随意选的时机。
+
+    ssInstall 是「即将开始装」，此刻**目标目录还不存在**（Inno 到复制
+    文件那一步才建）。探针在那时候写报告只有两条路：先自己建目录
+    （ForceDirectories 在 Pascal Script 里对空路径/未展开常量会抛
+    异常，CI 上实测就是这么炸的），或者写失败。两条路都指向
+    「报告不存在」，而报告恰恰是唯一的证据。
+
+    ssPostInstall 是「文件都装完了」：目录一定在、且是 Inno 自己
+    建的，直接写就行，一次都不用去猜目录在不在。消息文件在这个
+    时间点同样已经定下来，探针验到的仍然是当前生效的那一套。
+
+    ⚠️ 注释里刻意不写 Inno 的花括号常量名：Pascal 注释不配对，
+    注释里出现一个左花括号就会把后面的字面量当代码。 }
+  if (CurStep <> ssPostInstall) or not ParamExists('/LANGCHECK') then
     Exit;
 
   { ⚠️ 探针**必须**吞掉自己的异常。
@@ -301,6 +314,12 @@ begin
       当「有没有出错」的信号，不指望读到内容。要看原文得让安装器
       带 /LOG，那会另开一个日志文件。 }
     Err := GetExceptionMessage;
+    { 异常原文进 Inno 自己的安装日志：报告那边只能带出「长度」，
+      因为它是中文的、经 ACP 编码会变问号。Log 写的是安装器带
+      /LOG 时那份 UTF-16 日志，中文能原样留下——CI 读那份日志才
+      看得到「为什么」。这一步是排查链里缺的最后一段。 }
+    Log('LangProbe exception: ' + Err);
+    Log('LangProbe app dir: ' + ExpandConstant('{app}'));
     { 异常分支同样双写：报告是「探针有没有跑成」的唯一证据，
       它本身再失败一次，CI 就只剩一句「找不到报告」可看。 }
     TrySaveReport(ExpandConstant('{app}'),
