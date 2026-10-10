@@ -533,3 +533,243 @@ def test_settings_view_is_not_config_driven(monkeypatch):
         )
     finally:
         root.destroy()
+
+
+# ---------- 切到本页不该重跑检测 ----------
+
+
+def _counting_probe(calls, **result):
+    """每跑一次记一笔，返回固定快照。
+
+    只记**设置页**发起的那次：状态栏探测 ``include_ffmpeg_version=False``
+    （它不要版本号，省得起子进程），设置页是 ``True``。不分流的话，
+    ``App`` 启动时那次自动探测会混进计数里。
+    """
+
+    def probe(_cookie_file, include_ffmpeg_version=False, **_kwargs):
+        if include_ffmpeg_version:
+            calls.append(_cookie_file)
+        return env_mod.EnvironmentSnapshot(
+            logged_in=result.get("logged_in", True),
+            ffmpeg=_FakeFfmpeg(),
+            ffmpeg_version=result.get("version", "6.0"),
+        )
+
+    return probe
+
+
+@needs_display
+def test_switching_to_settings_does_not_reprobe(monkeypatch, tmp_path):
+    """输入没变时切到设置页，不许再跑一次检测。
+
+    检测的第一步是把三行摆成「检测中…」再等线程回来，ffmpeg 版本要
+    启动子进程读——慢的时候用户看到的就是「每次进来都在重新加载一遍」。
+
+    数 ``_probe_generation`` 而不是数探测函数的调用次数：前者在发起
+    那一刻就 +1，不受线程时序影响，撤掉缓存必然从 0 变成 3。
+    """
+    import tkinter as tk
+
+    cookie = tmp_path / "cookie.json"
+    cookie.write_text("{}", encoding="utf-8")
+    calls: list[str] = []
+
+    root = tk.Tk()
+    try:
+        app, view = _build(root, monkeypatch, probe=_counting_probe(calls))
+        app.ctx.cookie_file = str(cookie)
+
+        view.refresh()
+        run_until(root, lambda: "已登录" in view._env.text())
+        assert len(calls) == 1
+
+        generation = view._probe_generation
+        for _ in range(3):
+            view.refresh()
+        assert view._probe_generation == generation, (
+            f"切 3 次页发起了 {view._probe_generation - generation} 次探测"
+        )
+        # 结果还在，不是被清成「检测中」等下一次
+        assert "已登录" in view._env.text()
+        assert "检测中" not in view._env.text()
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_reprobe_when_the_cookie_file_changes(monkeypatch, tmp_path):
+    """cookie 文件变了必须重测——缓存不许永不失效。
+
+    用户在登录页扫完码，cookie 文件被重写；回到设置页如果还显示上一次
+    的「未登录」，那就是缓存挡过头了。
+    """
+    import tkinter as tk
+
+    cookie = tmp_path / "cookie.json"
+    cookie.write_text("{}", encoding="utf-8")
+    calls: list[str] = []
+
+    root = tk.Tk()
+    try:
+        app, view = _build(root, monkeypatch, probe=_counting_probe(calls))
+        app.ctx.cookie_file = str(cookie)
+
+        view.refresh()
+        # 等结果**落地**而不是等探测被调用：后者在 on_done 之前就成立，
+        # 那时 _env_snapshot 还是 None，第二次 refresh 必然重跑——测试假绿
+        run_until(root, lambda: view._env_snapshot is not None)
+        generation = view._probe_generation
+
+        cookie.write_text('{"SESSDATA": "x"}', encoding="utf-8")
+        view.refresh()
+
+        assert view._probe_generation > generation, "cookie 文件变了却没重测"
+        run_until(root, lambda: len(calls) == 2)
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_reprobe_when_the_proxy_changes(monkeypatch, tmp_path):
+    """改了代理也要重测——它同样是检测的输入。"""
+    import tkinter as tk
+
+    cookie = tmp_path / "cookie.json"
+    cookie.write_text("{}", encoding="utf-8")
+    calls: list[str] = []
+
+    root = tk.Tk()
+    try:
+        app, view = _build(root, monkeypatch, probe=_counting_probe(calls))
+        app.ctx.cookie_file = str(cookie)
+
+        view.refresh()
+        # 等结果**落地**而不是等探测被调用：后者在 on_done 之前就成立，
+        # 那时 _env_snapshot 还是 None，第二次 refresh 必然重跑——测试假绿
+        run_until(root, lambda: view._env_snapshot is not None)
+        generation = view._probe_generation
+
+        app.ctx.proxy = "http://127.0.0.1:7890"
+        view.refresh()
+
+        assert view._probe_generation > generation, "代理变了却没重测"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_refresh_force_reprobes_on_demand(monkeypatch, tmp_path):
+    """「重新检测」按钮要能真的重测——用户点了就是想等这一次。"""
+    import tkinter as tk
+
+    cookie = tmp_path / "cookie.json"
+    cookie.write_text("{}", encoding="utf-8")
+    calls: list[str] = []
+
+    root = tk.Tk()
+    try:
+        app, view = _build(root, monkeypatch, probe=_counting_probe(calls))
+        app.ctx.cookie_file = str(cookie)
+
+        view.refresh()
+        # 等结果**落地**而不是等探测被调用：后者在 on_done 之前就成立，
+        # 那时 _env_snapshot 还是 None，第二次 refresh 必然重跑——测试假绿
+        run_until(root, lambda: view._env_snapshot is not None)
+        generation = view._probe_generation
+
+        view.refresh(force=True)
+
+        assert view._probe_generation > generation, "force 之后应重新探测"
+        run_until(root, lambda: len(calls) == 2)
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_a_failed_probe_clears_the_cached_result(monkeypatch, tmp_path):
+    """检测失败要把缓存清掉，不能留着上一次的成功结果。
+
+    场景：先成功过一次，用户点「重新检测」时炸了。界面已经显示
+    「检测失败」，缓存里却还是上一次的「已登录」——下次切页会突然跳回
+    旧结果，和刚才那行失败自相矛盾。
+
+    .. note::
+       必须是「先成功、再失败」才有意义：从没成功过时 ``_env_snapshot``
+       本来就是 None，清不清都看不出差别，测试会变成恒真的假绿。
+    """
+    import tkinter as tk
+
+    cookie = tmp_path / "cookie.json"
+    cookie.write_text("{}", encoding="utf-8")
+    state = {"fail": False}
+
+    def probe(_cookie_file, include_ffmpeg_version=False, **_kwargs):
+        if not include_ffmpeg_version:
+            # 状态栏那次不参与本用例，别把它的失败算进来
+            return env_mod.EnvironmentSnapshot(
+                logged_in=True, ffmpeg=_FakeFfmpeg(), ffmpeg_version=""
+            )
+        if state["fail"]:
+            raise RuntimeError("探测线程里炸了")
+        return env_mod.EnvironmentSnapshot(
+            logged_in=True, ffmpeg=_FakeFfmpeg(), ffmpeg_version="6.0"
+        )
+
+    root = tk.Tk()
+    try:
+        app, view = _build(root, monkeypatch, probe=probe)
+        app.ctx.cookie_file = str(cookie)
+
+        view.refresh()
+        run_until(root, lambda: view._env_snapshot is not None)
+        assert "已登录" in view._env.text()
+
+        state["fail"] = True
+        view.refresh(force=True)
+        run_until(root, lambda: "检测失败" in view._env.text())
+
+        assert view._env_snapshot is None, (
+            "失败了还留着上一次的成功结果——下次切页会跳回「已登录」"
+        )
+
+        # 清掉之后下次切页会重试，而不是一直卡在「检测失败」
+        state["fail"] = False
+        generation = view._probe_generation
+        view.refresh()
+        assert view._probe_generation > generation, "失败之后应能重试"
+        run_until(root, lambda: "已登录" in view._env.text())
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_fill_form_does_not_rewrite_state_on_every_switch(monkeypatch):
+    """切页回填表单不该顺手写一次用户偏好文件。
+
+    ``_theme_var`` 上挂着 trace，``set`` 一次就落一次盘。值没变还 set，
+    每次切到设置页都白写一遍磁盘。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.views import settings as settings_mod
+
+    writes: list[object] = []
+    monkeypatch.setattr(
+        settings_mod, "save_app_state", lambda state: writes.append(state)
+    )
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, monkeypatch)
+        view.refresh()
+        root.update_idletasks()
+        # 第一次回填可能写一次（把存的偏好同步到下拉框），之后不再写
+        baseline = len(writes)
+
+        for _ in range(3):
+            view.refresh()
+        assert len(writes) == baseline, (
+            f"切 3 次页多写了 {len(writes) - baseline} 次偏好文件"
+        )
+    finally:
+        root.destroy()

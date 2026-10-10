@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
@@ -58,6 +59,20 @@ if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
 #: 下拉框选项顺序。跟随系统放第一个：它是默认值，也最不需要用户操心。
 THEME_OPTIONS = [THEME_MODE_LABELS[key] for key in ("system", "light", "dark")]
 
+
+def _cookie_stamp(path: str) -> tuple[int, int] | None:
+    """cookie 文件的 ``(mtime_ns, 字节数)``，读不到就 None。
+
+    只用来判断「探测的输入变没变」。文件不存在也是一个**稳定**值——
+    不这样的话，首次使用前每次切页都要重跑一遍探测。
+    """
+    try:
+        stat = os.stat(os.path.expanduser(path))
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
 #: 更新检查的结果。第二项是「到底查到了没有」——手动点的那一次要能
 #: 区分「已是最新」和「网络不通」，否则断网时界面会说「已是最新」，
 #: 那是骗人。自动检查不看这一项：它失败就该完全安静。
@@ -86,6 +101,10 @@ class SettingsView(ttk.Frame):
         #: Worker 是因为它们可以随时各来一次，共用一个会互相把对方丢掉。
         self._update_worker: Worker[_UpdateResult] | None = None
         self._update_generation = 0
+        #: 上一次探测**成功**的结果，以及它对应的输入指纹。见 :meth:`refresh`。
+        #: 探测失败不写这里——失败的状态不该被缓存成「已知结果」。
+        self._env_snapshot: EnvironmentSnapshot | None = None
+        self._env_key: tuple | None = None
         self._build()
 
     def _build(self) -> None:
@@ -172,6 +191,16 @@ class SettingsView(ttk.Frame):
         )
         self._env = KeyValueList(env_box, label_width=12)
         self._env.grid(row=1, column=0, sticky="w")
+        # 有了结果缓存就得给用户一个手动重测的入口，否则装完 ffmpeg
+        # 想让它重新认一次就只能重启客户端
+        row = FormRow(
+            env_box,
+            "重新检测",
+            hint="换代理、换新 cookie 文件、或刚装好 ffmpeg 时点这里。"
+            "切到本页不会自动重跑——没必要每次都等一遍探测。",
+        )
+        row.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+        row.add(OutlinedButton, text="重新检测", command=self._start_env_probe)
 
         # ④ 更新
         ttk.Label(update_box, text="更新", style="Heading.TLabel").grid(
@@ -216,9 +245,29 @@ class SettingsView(ttk.Frame):
 
     # ---------- 行为 ----------
 
-    def refresh(self) -> None:
-        """切到本页时用当前设置回填表单，并异步跑一次环境自检。"""
+    def refresh(self, force: bool = False) -> None:
+        """切到本页时回填表单，只有必要时才重跑环境自检。
+
+        自检**不是**每次切页都跑。``App.show()`` 每次切过来都会调一次
+        ``refresh()``，而探测的第一步是把三行摆成「检测中…」，再等线程
+        回来——ffmpeg 版本号要启动子进程读，慢的时候那三行就亮着
+        「检测中」停一下，用户看到的就是「进来又重新加载了一遍」。
+
+        输入没变就直接用上次的结果，连过渡态都不摆。输入 = cookie 文件
+        的内容 + 代理：换 cookie 路径、改代理、扫码登录成功（cookie 文件
+        被重写）这三种情况指纹都会变，剩下的切页一律复用。
+
+        ``force=True`` 留给「重新检测」按钮，也留给换完 cookie 路径后的
+        主动重测。
+        """
         self._fill_form()
+        if (
+            not force
+            and self._env_snapshot is not None
+            and self._probe_key() == self._env_key
+        ):
+            self._render_env(self._env_snapshot)
+            return
         self._start_env_probe()
 
     def _fill_form(self) -> None:
@@ -228,7 +277,19 @@ class SettingsView(ttk.Frame):
             self._proxy_var.set(ctx.proxy or "")
         if not self._cookie_var.get():
             self._cookie_var.set(ctx.cookie_file)
-        self._theme_var.set(THEME_MODE_LABELS[load_app_state().theme_mode])
+        # 值没变就别 set：StringVar 上挂着 trace，set 一次就写一次
+        # 用户偏好文件——每次切页都白写一遍磁盘
+        theme_label = THEME_MODE_LABELS[load_app_state().theme_mode]
+        if self._theme_var.get() != theme_label:
+            self._theme_var.set(theme_label)
+
+    def _probe_key(self) -> tuple:
+        """环境自检的输入指纹：cookie 文件的内容标识 + 代理。
+
+        登录成功就是往 cookie 文件里写东西，所以文件一变（扫码登录、
+        换了路径）指纹必变；代理是探测的另一半输入。
+        """
+        return (_cookie_stamp(self.app.ctx.cookie_file), self.app.ctx.proxy)
 
     def _on_proxy_change(self, *_: object) -> None:
         value = self._proxy_var.get().strip()
@@ -269,6 +330,9 @@ class SettingsView(ttk.Frame):
         self._probe_generation += 1
         generation = self._probe_generation
         ctx = self.app.ctx
+        # 记下**发起时**的输入：探测期间用户可能又改了代理，回来时再算
+        # 的话这锅结果会被算成「属于新输入」，改完代理反而看不到更新
+        self._env_key = self._probe_key()
 
         self._env.set_rows(
             [
@@ -301,6 +365,14 @@ class SettingsView(ttk.Frame):
         if generation != self._probe_generation:
             return
 
+        self._env_snapshot = snapshot
+        self._render_env(snapshot)
+
+    def _render_env(self, snapshot: EnvironmentSnapshot) -> None:
+        """把一份快照填进自检列表。
+
+        和探测分开：命中缓存时直接调它，不用再摆一次「检测中」的过渡态。
+        """
         ctx = self.app.ctx
         if snapshot.login_error:
             login_value, login_tone = f"读取失败：{snapshot.login_error}", "error"
@@ -331,6 +403,9 @@ class SettingsView(ttk.Frame):
         self._show_env_failed(str(exc))
 
     def _show_env_failed(self, reason: str) -> None:
+        # 失败的结果不进缓存：下次切页还能重试，而不是把「检测失败」
+        # 当成既定事实一直显示下去
+        self._env_snapshot = None
         ctx = self.app.ctx
         self._env.set_rows(
             [
