@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
@@ -51,6 +53,29 @@ def _file_stamp(path: str) -> tuple[int, int] | None:
     return (stat.st_mtime_ns, stat.st_size)
 
 
+def _reveal_history_dir() -> bool:
+    """在系统文件管理器里打开历史文件所在的文件夹。
+
+    页头不再打印完整路径——``/root/.config/bilibili_submit/history.json``
+    这种字符串对用户没有意义，还把内部目录结构暴露在界面上。要找文件
+    的用户点一下按钮就够了，不想找的用户不该被迫读它。
+    """
+    path = os.path.abspath(os.path.expanduser(str(DEFAULT_HISTORY_FILE)))
+    directory = os.path.dirname(path)
+    if not os.path.isdir(directory):
+        return False
+    try:
+        if sys.platform == "win32":
+            os.startfile(directory)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", directory])
+        else:
+            subprocess.Popen(["xdg-open", directory])
+    except OSError:
+        return False
+    return True
+
+
 class HistoryView(ttk.Frame):
     """投稿历史页。"""
 
@@ -67,7 +92,7 @@ class HistoryView(ttk.Frame):
 
     def _build(self) -> None:
         PageHeader(
-            self, "投稿历史", f"记录文件：{DEFAULT_HISTORY_FILE}"
+            self, "投稿历史", "只存在本机，按时间倒序，成功和失败都会记一条"
         ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_LG))
 
         card = Card(self)
@@ -80,8 +105,15 @@ class HistoryView(ttk.Frame):
         OutlinedButton(actions, "刷新", lambda: self.refresh(force=True)).pack(
             side="left"
         )
+        OutlinedButton(actions, "打开所在文件夹", self._open_folder).pack(
+            side="left", padx=(theme.PAD_XS, 0)
+        )
 
+        # 和占位图共用 card 的 row 1，两者**互斥**：只切里面的 Treeview
+        # 是不够的——容器本身还留在网格里，滚动条和空白底会一直压在占位
+        # 图后面（批量任务页踩过同一个坑）。
         holder = ttk.Frame(card, style="Card.TFrame")
+        self._list_holder = holder
         holder.grid(row=1, column=0, sticky="nsew")
         holder.columnconfigure(0, weight=1)
         holder.rowconfigure(0, weight=1)
@@ -107,6 +139,9 @@ class HistoryView(ttk.Frame):
             "失败原因。可以直接复制链接发到动态里。",
         )
         self._placeholder.grid(row=1, column=0, sticky="nsew")
+        # 建完先藏列表容器：空表格压在占位图下面会露出一块白底和一条
+        # 滚动条。有记录时 refresh() 会换回来。
+        self._list_holder.grid_remove()
 
         self._log = LogConsole(card, height=4)
         self._log.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
@@ -165,12 +200,13 @@ class HistoryView(ttk.Frame):
             return
 
         if not entries:
-            self._set_placeholder("暂无投稿历史")
-            self._log.append("暂无投稿历史")
+            self._set_placeholder(
+                "暂无投稿历史", "投完一条稿件，这里就会出现记录"
+            )
             return
 
         self._placeholder.grid_remove()
-        self._tree.grid()
+        self._list_holder.grid()
 
         # 倒序：最近的在最上面
         for entry in list(entries)[-VISIBLE_LIMIT:][::-1]:
@@ -187,21 +223,28 @@ class HistoryView(ttk.Frame):
         suffix = f"（只显示最近 {shown} 条）" if shown < len(entries) else ""
         self._log.append(f"共 {len(entries)} 条记录{suffix}")
 
+    def _open_folder(self) -> None:
+        """打开历史文件所在文件夹；打不开就把原因写进日志区。"""
+        if not _reveal_history_dir():
+            self._log.append("打不开所在文件夹，请手动前往配置目录查看")
+
     def _show_problem(self, problem: str) -> None:
         """历史文件读不了时给出明确提示，而不是干巴巴一个空列表。"""
-        self._set_placeholder("历史文件读取失败，详见下方说明")
+        self._set_placeholder(
+            "历史文件读取失败", "记录还在硬盘上，只是这个程序读不出来，原因见下方日志"
+        )
         self._log.clear()
         self._log.append(f"⚠ {problem}")
 
-    def _set_placeholder(self, text: str) -> None:
-        """显示空状态占位并设置文案。"""
-        self._tree.grid_remove()
+    def _set_placeholder(self, text: str, hint: str = "") -> None:
+        """显示空状态占位并设置文案。
+
+        ``hint`` 是第二行说明，和 ``text`` 是两回事——都传同一句的话
+        屏幕上会出现两行一模一样的字。
+        """
+        self._list_holder.grid_remove()
         self._placeholder.grid()
-        # 复用同一个 Label 实例改文案，不重建——
-        # 重建会丢掉内部状态，而且两种文案要能来回切。
-        for child in self._placeholder.winfo_children():
-            if isinstance(child, ttk.Label):
-                child.configure(text=text)
+        self._placeholder.set_text(text, hint)
 
 
 def _format_time(stamp: object) -> str:

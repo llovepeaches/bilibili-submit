@@ -1085,6 +1085,13 @@ class NavRailItem(tk.Frame):
             theme.NAV_ITEM_HEIGHT / 2,
             window=self._text, anchor="w",
         )
+        # 建完先按「展开」摆好，而且**两个状态都显式写出来**：canvas
+        # window item 的 ``state`` 没设过时 ``itemcget`` 返回空串，
+        # 调用方/测试就没法判断它到底显不显示。图标等
+        # :meth:`set_collapsed` 真的收成图标栏时再放出来——不这么做，
+        # 调用方还没来得及调 set_collapsed 的那一瞬间会露出「登 登录」。
+        self._pill.itemconfigure(self._text_win, state="normal")
+        self._pill.itemconfigure(self._icon_win, state="hidden")
         # 角标：粉底墨字的胶囊，右端对齐药丸内侧
         self._badge = tk.Canvas(
             self._pill,
@@ -1159,13 +1166,21 @@ class NavRailItem(tk.Frame):
         窗口窄到一定程度时，导航那 200px 里大半是空白，而内容区正
         挤得看不全文件名——折叠把那 144px 还给内容区。
 
+        .. important::
+           展开态**只显示文字**，图标一起藏掉。图标是标签的第一个字
+           （「登录」→「登」），两个都挂上就是「登 登录」——同一个词
+           在一行里出现两遍，第一眼看上去像渲染重影。
+
         隐藏用 ``itemconfigure(state="hidden")``（可逆，item 还在），
-        理由见类文档。图标重新居中靠 :meth:`_relayout` 按药丸实际
+        理由见类文档。文字/图标重新居中靠 :meth:`_relayout` 按药丸实际
         宽度现算，比手算 padx 稳。
         """
         self._collapsed = collapsed
         self._pill.itemconfigure(
             self._text_win, state="hidden" if collapsed else "normal"
+        )
+        self._pill.itemconfigure(
+            self._icon_win, state="normal" if collapsed else "hidden"
         )
         self._relayout()
 
@@ -1229,8 +1244,11 @@ class NavRailItem(tk.Frame):
     def _relayout(self, _event: object = None) -> None:
         """重画圆角底并重排图标/文字/角标。
 
-        折叠态把图标挪到底片正中；展开态图标靠左、文字跟在后面，
-        角标贴右缘。坐标现算而不是记死——宽度随折叠/展开变化。
+        两种形态**互斥**：折叠态图标居中、文字隐藏；展开态文字靠左、
+        图标隐藏、角标贴右缘。_icon 和 _text 不同时出现——同一个词
+        在一行里显示两遍没有意义。
+
+        坐标现算而不是记死——宽度随折叠/展开变化。
         """
         self._paint_pill()
         icon_w = self._icon.winfo_reqwidth()
@@ -1244,13 +1262,7 @@ class NavRailItem(tk.Frame):
             x = max((pill_w - icon_w) / 2, 0)
             self._pill.coords(self._icon_win, x, theme.NAV_ITEM_HEIGHT / 2)
         else:
-            self._pill.coords(
-                self._icon_win, self._INSET, theme.NAV_ITEM_HEIGHT / 2
-            )
-            self._pill.coords(
-                self._text_win,
-                self._INSET + icon_w + 2, theme.NAV_ITEM_HEIGHT / 2,
-            )
+            self._pill.coords(self._text_win, self._INSET, theme.NAV_ITEM_HEIGHT / 2)
 
     def _render(self) -> None:
         color = self._pill_color()
@@ -1657,10 +1669,21 @@ class LogConsole(tk.Frame):
     #: 几十行。超出的从顶部丢弃——留着头部的旧行没有意义。
     MAX_LINES = 3000
 
-    def __init__(self, master: tk.Misc, height: int = 10) -> None:
+    def __init__(
+        self, master: tk.Misc, height: int = 10,
+        on_change: Callable[[], None] | None = None,
+    ) -> None:
+        """``on_change`` 在有内容和没内容之间切换时被调用一次。
+
+        宿主页面靠它决定要不要把日志区显示出来：空闲时一块空的深色
+        输出区纯占地方，而它在页面上是**固定**的，占了就抢走列表的
+        高度。见批量任务页的 ``_sync_bottom``。
+        """
         super().__init__(master, background=theme.LOG_BG, relief="flat")
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
+        self._on_change = on_change
+        self._was_empty = True
 
         theme.register_fonts()
         self._text = tk.Text(
@@ -1729,6 +1752,21 @@ class LogConsole(tk.Frame):
         self._lines += len(messages)
         self._trim()
         self._schedule_scroll()
+        self._notify()
+
+    def _notify(self) -> None:
+        """内容从「空」变「有」或反过来时通知宿主；其余时候一声不出。"""
+        empty = self._lines == 0
+        if empty == self._was_empty:
+            return
+        self._was_empty = empty
+        if self._on_change is not None:
+            self._on_change()
+
+    @property
+    def has_content(self) -> bool:
+        """日志区里有没有内容。宿主要不要显示它靠这个判断。"""
+        return self._lines > 0
 
     def _trim(self) -> None:
         over = self._lines - self.MAX_LINES
@@ -1761,6 +1799,7 @@ class LogConsole(tk.Frame):
         self._text.configure(state="disabled")
         self._lines = 0
         self._writable = False
+        self._notify()
 
     def forward_wheel_to(self, area: "ScrollArea") -> None:
         """把「滚到边界」的滚轮事件交给外层滚动区。
@@ -1800,18 +1839,34 @@ class Placeholder(ttk.Frame):
         super().__init__(master, style="Card.TFrame")
         self.columnconfigure(0, weight=1)
 
-        ttk.Label(
+        self._title = ttk.Label(
             self, text=text, style="Heading.TLabel", justify="center"
-        ).grid(row=0, column=0, pady=(theme.PAD_XL, theme.PAD_XS))
+        )
+        self._title.grid(row=0, column=0, pady=(theme.PAD_XL, theme.PAD_XS))
         if hint:
-            ttk.Label(
+            self._hint = ttk.Label(
                 self, text=hint, style="Card.Secondary.TLabel", justify="center",
                 wraplength=360,
-            ).grid(row=1, column=0, pady=(0, theme.PAD_SM))
+            )
+            self._hint.grid(row=1, column=0, pady=(0, theme.PAD_SM))
+        else:
+            self._hint = None
         if action_text and on_action:
             OutlinedButton(self, action_text, on_action).grid(
                 row=2, column=0, pady=(theme.PAD_SM, theme.PAD_XL)
             )
+
+    def set_text(self, text: str, hint: str = "") -> None:
+        """换文案，复用现有 Label 不重建。
+
+        重建会丢掉内部状态，而空状态的文案要能在「没数据」和「读不了」
+        之间来回切。标题和说明是**两个不同的控件**——之前有调用方图省事
+        遍历所有 Label 一把设成同一句，结果同屏出现两行一模一样的字，
+        看着像渲染错了。
+        """
+        self._title.configure(text=text)
+        if self._hint is not None and hint:
+            self._hint.configure(text=hint)
 
 
 class KeyValueList(ttk.Frame):

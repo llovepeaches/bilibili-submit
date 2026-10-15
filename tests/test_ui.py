@@ -908,19 +908,276 @@ def test_tasks_log_area_is_not_squashed():
         root.update()
 
         view = app._views["批量任务"]
+        # 先写一行，让进度/日志那块确定处于显示状态——它现在是按需出现
+        # 的，空日志时整块收起，读它的几何就会读到上一次的残留值。
+        view._log.append("预检：测试用的一行")
+        root.update()
+        assert view._bottom_shown, "日志有内容时进度/日志那块必须显示"
         assert view._log.winfo_height() > theme.ROW_HEIGHT, (
             f"日志区被压成 {view._log.winfo_height()}px，投稿报错会看不见"
         )
-        # 滚到底之后日志要能完整看到
-        view._area._canvas.yview_moveto(1.0)
-        root.update()
-        canvas_bottom = (
-            view._area._canvas.winfo_rooty() + view._area._canvas.winfo_height()
-        )
+        # 它不在滚动区里，所以**一次都不用滚**就该完整可见。
+        # 之前它挂在滚动内容的最末尾，最小窗口下要手动滚到底才看得到
+        # ——而投稿报错恰恰是用户最不会去滚的时候。
+        view_bottom = view.winfo_rooty() + view.winfo_height()
         log_bottom = view._log.winfo_rooty() + view._log.winfo_height()
-        assert log_bottom <= canvas_bottom + 2, (
-            f"滚到底后日志区仍被裁：{log_bottom} > 视口底 {canvas_bottom}"
+        assert log_bottom <= view_bottom + 2, (
+            f"日志区被裁：{log_bottom} > 页面底 {view_bottom}"
         )
+        assert view._log.winfo_rooty() >= view.winfo_rooty(), "日志区跑到页面上方去了"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_tasks_bottom_area_only_shows_when_it_has_something_to_say(tmp_path):
+    """进度 + 日志那块：空闲时收起，跑起来或日志有内容时出现。
+
+    它是**钉在底部**的，占了就从任务列表身上割高度。空闲时一条 0% 的
+    进度条加一块空的深色输出区纯属浪费——实测割掉 186px，正好是列表
+    两行的高度。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui.app import App
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        view = app._views["批量任务"]
+        # 隔离界面偏好：默认位置那份残留状态会让本页一进来就异步重扫
+        # 上次的目录，扫完还要往日志里补一行——那行会把底部区重新顶出
+        # 来，测出来的显隐就不是本用例想要的状态了。
+        view._state_file = tmp_path / "ui-state.json"
+        root.geometry(f"{theme.DEFAULT_WIDTH}x{theme.DEFAULT_HEIGHT}")
+        root.update()
+        app.show("批量任务")
+        root.update()
+
+        view._log.clear()
+        root.update()
+        assert not view._bottom_shown, "日志空、又没在跑时不该占着底部"
+
+        # 写了日志就要出现——报错被藏起来比占点地方严重得多
+        view._log.append("有一条要说的话")
+        root.update()
+        assert view._bottom_shown, "日志有内容时必须显示，否则报错被吞"
+
+        # 清空后自己收回去，不用调用方记得手动收
+        view._log.clear()
+        root.update()
+        assert not view._bottom_shown, "日志清空后底部那块该自己收起来"
+
+        # 运行中无条件显示：此刻用户要看的就是进度
+        view._set_busy(True)
+        root.update()
+        assert view._bottom_shown, "运行中不显示进度等于把用户蒙在鼓里"
+        view._set_busy(False)
+        root.update()
+        assert not view._bottom_shown, "跑完且日志已清空，那块该收回"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_tasks_progress_bar_only_appears_while_running(tmp_path):
+    """进度条只在真的有进度时出现。空闲时一条 0% 的进度条什么也没说。"""
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui.app import App
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        view = app._views["批量任务"]
+        # 隔离界面偏好：默认位置那份残留状态会让本页一进来就异步重扫
+        # 上次的目录，扫完还要往日志里补一行——那行会把底部区重新顶出
+        # 来，测出来的显隐就不是本用例想要的状态了。
+        view._state_file = tmp_path / "ui-state.json"
+        root.geometry(f"{theme.DEFAULT_WIDTH}x{theme.DEFAULT_HEIGHT}")
+        root.update()
+        app.show("批量任务")
+        root.update()
+
+        view._log.clear()
+        root.update()
+        assert not view._progress.winfo_ismapped(), "空闲时不该显示 0% 的进度条"
+
+        # 关键的一条：**底部区已经显示**（日志有内容）时进度条仍应藏着。
+        # 只断言 ``winfo_ismapped`` 是不够的——底部区一收起，进度条自然
+        # 就「看不见」了，于是「恒定挂上」的写法也能蒙混过关。
+        view._log.append("有一条要说的话")
+        root.update()
+        assert view._bottom_shown, "日志有内容时底部区该显示"
+        assert not view._progress_visible, "只是日志有内容、没在跑，进度条不该出来"
+        assert not view._progress.winfo_ismapped(), "同上：不该真的画出来"
+
+        view._set_busy(True)
+        root.update()
+        assert view._progress.winfo_ismapped(), "运行中必须看得到进度"
+
+        view._set_busy(False)
+        view._log.clear()
+        root.update()
+        assert not view._progress.winfo_ismapped(), "跑完该收回"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_tasks_list_and_placeholder_never_overlap(tmp_path):
+    """任务列表和空状态占位图必须互斥，不能同屏叠着。
+
+    两者都 grid 在 card 的 row 6。曾经只切里面的 Treeview，容器本身
+    还留在网格里——一条空白表格加滚动条一直压在占位图后面，看着像
+    一条去不掉的灰色横条。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui.app import App
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        view = app._views["批量任务"]
+        # 隔离界面偏好：默认位置那份残留状态会让本页一进来就异步重扫
+        # 上次的目录，扫完还要往日志里补一行——那行会把底部区重新顶出
+        # 来，测出来的显隐就不是本用例想要的状态了。
+        view._state_file = tmp_path / "ui-state.json"
+        root.geometry(f"{theme.DEFAULT_WIDTH}x{theme.DEFAULT_HEIGHT}")
+        root.update()
+        app.show("批量任务")
+        root.update()
+
+        assert view._placeholder.winfo_ismapped(), "没有任务时该显示空状态"
+        assert not view._list_holder.winfo_ismapped(), (
+            "空状态下列表容器必须整个撤掉，不能只藏 Treeview"
+        )
+
+        view._on_table_filled(True)
+        root.update()
+        assert view._list_holder.winfo_ismapped(), "有任务时该显示列表"
+        assert not view._placeholder.winfo_ismapped(), "有任务时不该还压着占位图"
+
+        view._on_table_filled(False)
+        root.update()
+        assert view._placeholder.winfo_ismapped()
+        assert not view._list_holder.winfo_ismapped(), "切回空状态要能收干净"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_history_list_and_placeholder_never_overlap(tmp_path, monkeypatch):
+    """历史页的列表和占位图必须互斥，而且**来回切换**都要干净。
+
+    只测「空 → 藏」是不够的：建界面时那一次 ``grid_remove()`` 已经把
+    容器收起来了，于是「只切 Treeview 不切容器」的写法也能蒙混过关。
+    必须先让它显示过一次，再切回空状态来看收得干不干净。
+    """
+    import json
+    import time
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit import scheduler
+    from bilibili_submit.ui.app import App
+
+    history_file = tmp_path / "history.json"
+    monkeypatch.setattr(scheduler, "DEFAULT_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(
+        "bilibili_submit.ui.views.history.DEFAULT_HISTORY_FILE", str(history_file)
+    )
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        root.geometry(f"{theme.DEFAULT_WIDTH}x{theme.DEFAULT_HEIGHT}")
+        root.update()
+        app.show("历史")
+        root.update()
+
+        view = app._views["历史"]
+        view.refresh(force=True)
+        root.update()
+        assert view._placeholder.winfo_ismapped(), "没有记录时该显示空状态"
+        assert not view._list_holder.winfo_ismapped(), "空状态下列表容器该收起"
+
+        history_file.write_text(
+            json.dumps(
+                [{"name": "任务一", "bvid": "BV1xx411c7mD", "time": time.time()}],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        view.refresh(force=True)
+        root.update()
+        assert view._list_holder.winfo_ismapped(), "有记录时该显示列表"
+        assert not view._placeholder.winfo_ismapped(), "有记录时不该还压着占位图"
+
+        history_file.write_text("[]", encoding="utf-8")
+        view.refresh(force=True)
+        root.update()
+        assert view._placeholder.winfo_ismapped()
+        assert not view._list_holder.winfo_ismapped(), (
+            "切回空状态要能把列表容器整个收掉，不能只藏 Treeview"
+        )
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_nav_item_shows_either_icon_or_label_not_both():
+    """导航项：展开只显示文字，折叠只显示图标。
+
+    图标就是标签的第一个字（「登录」→「登」），两个一起挂上就是
+    「登 登录」——同一个词在一行里出现两遍，看着像渲染重影。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui.widgets import NavRailItem
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        theme.apply(style)
+
+        item = NavRailItem(root, text="登录", icon="登")
+        item.pack(fill="x")
+        root.update()
+
+        assert item._pill.itemcget(item._text_win, "state") == "normal"
+        assert item._pill.itemcget(item._icon_win, "state") == "hidden", (
+            "展开态不该再显示图标，否则变成「登 登录」"
+        )
+
+        item.set_collapsed(True)
+        root.update()
+        assert item._pill.itemcget(item._icon_win, "state") == "normal", (
+            "折叠态只剩图标，不然这一栏是空的"
+        )
+        assert item._pill.itemcget(item._text_win, "state") == "hidden"
+
+        item.set_collapsed(False)
+        root.update()
+        assert item._pill.itemcget(item._text_win, "state") == "normal"
+        assert item._pill.itemcget(item._icon_win, "state") == "hidden"
     finally:
         root.destroy()
 
@@ -1248,6 +1505,102 @@ def test_history_view_reports_problems(tmp_path, monkeypatch, content, expect_pr
 
 
 @needs_display
+def test_placeholder_keeps_title_and_hint_different():
+    """空状态的标题和说明必须是两句不同的话。
+
+    曾经的写法是遍历所有 Label 一把设成同一句，结果标题和说明两行显示
+    一模一样的「暂无投稿历史」——用户第一反应是界面渲染错了。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui.widgets import Placeholder
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        theme.apply(style)
+
+        box = Placeholder(root, "原标题", "原说明")
+        box.pack()
+
+        box.set_text("新标题", "新说明")
+        texts = [
+            child.cget("text")
+            for child in box.winfo_children()
+            if isinstance(child, ttk.Label)
+        ]
+        assert texts == ["新标题", "新说明"]
+
+        # 只给标题时，说明保留原来的——不该被清空，也不该被覆盖成标题
+        box.set_text("换个标题")
+        texts = [
+            child.cget("text")
+            for child in box.winfo_children()
+            if isinstance(child, ttk.Label)
+        ]
+        assert texts == ["换个标题", "新说明"]
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_history_empty_state_does_not_repeat_itself(tmp_path, monkeypatch):
+    """历史页空状态：同一句话不许在屏幕上出现两次。"""
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit import scheduler
+    from bilibili_submit.ui.app import App
+
+    history_file = tmp_path / "history.json"
+    monkeypatch.setattr(scheduler, "DEFAULT_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(
+        "bilibili_submit.ui.views.history.DEFAULT_HISTORY_FILE", str(history_file)
+    )
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        view = app._views["历史"]
+        view.refresh()
+        root.update_idletasks()
+
+        labels = [
+            child.cget("text")
+            for child in view._placeholder.winfo_children()
+            if isinstance(child, ttk.Label)
+        ]
+        assert len(labels) == len(set(labels)), f"空状态文案重复了：{labels}"
+        # 空表格不能压在占位图后面：容器要整个撤掉，只藏 Treeview 会
+        # 留下一条白底加滚动条（批量任务页踩过同一个坑）
+        assert not view._list_holder.winfo_ismapped(), "空状态下列表容器该收起"
+        # 页头不该把内部路径甩给用户
+        header = view.winfo_children()[0]
+        subtitles = [
+            child.cget("text")
+            for child in header.winfo_children()
+            if isinstance(child, tk.Label)
+        ]
+        assert not any(str(history_file) in text for text in subtitles), (
+            f"页头暴露了内部路径：{subtitles}"
+        )
+    finally:
+        root.destroy()
+
+
+@needs_display
 def test_history_view_shows_list_when_entries_exist(tmp_path, monkeypatch):
     """有记录时显示列表、隐藏占位；损坏后恢复也要正确切换。"""
     import json
@@ -1311,7 +1664,7 @@ def test_history_view_shows_list_when_entries_exist(tmp_path, monkeypatch):
 
 
 @needs_display
-def test_history_columns_keep_fixed_content_fixed():
+def test_history_columns_keep_fixed_content_fixed(tmp_path, monkeypatch):
     """历史页列宽：定长列不被拉伸，任务名吸收剩余空间。
 
     时间和 BV 号是定长内容（``2026-05-01 12:34:56`` / ``BV1xx411c7mD``），
@@ -1324,9 +1677,12 @@ def test_history_columns_keep_fixed_content_fixed():
        换来的其实是「改一处不会漏另一处」，属于可维护性而不是可观测
        行为，别指望有测试替它背书。
     """
+    import json
+    import time
     import tkinter as tk
     from tkinter import ttk
 
+    from bilibili_submit import scheduler
     from bilibili_submit.ui import theme as ui_theme
     from bilibili_submit.ui.app import App
     from bilibili_submit.ui.views import history as history_view
@@ -1338,6 +1694,25 @@ def test_history_columns_keep_fixed_content_fixed():
         app = App(root)
         app.pack(fill="both", expand=True)
         view = app._views["历史"]
+
+        # 先塞两条记录：列宽只在**列表显示着**的时候才算得出来——空状态
+        # 下整个列表容器是收起的，Treeview 量到的宽度是 1，量列宽没意义。
+        history_file = tmp_path / "history.json"
+        history_file.write_text(
+            json.dumps(
+                [{"name": "任务一", "bvid": "BV1xx411c7mD", "time": time.time()}],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(scheduler, "DEFAULT_HISTORY_FILE", str(history_file))
+        monkeypatch.setattr(
+            "bilibili_submit.ui.views.history.DEFAULT_HISTORY_FILE",
+            str(history_file),
+        )
+        view.refresh(force=True)
+        root.update()
+        assert view._list_holder.winfo_ismapped(), "有记录时列表该显示"
 
         def widths() -> dict[str, int]:
             return {c: view._tree.column(c, "width") for c in history_view.COLUMNS}

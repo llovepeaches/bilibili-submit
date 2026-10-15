@@ -167,6 +167,10 @@ class TasksView(ttk.Frame):
         super().__init__(master, style="TFrame")
         self.app = app
         self.columnconfigure(0, weight=1)
+        # 行分配：0 页头 / 1 滚动区（唯一吃剩余高度的那一行）/
+        # 2 进度 + 日志 / 3 操作条。进度和日志**不在**滚动区里——
+        # 塞在里面时默认窗口下它们落在视口外，投稿跑起来用户只看得见
+        # 一条不动的进度条顶部，得手动滚到底才知道发生了什么。
         self.rowconfigure(1, weight=1)
 
         #: 投稿执行用。跑完才结束，所以独占「取消」按钮的时间最长。
@@ -422,8 +426,9 @@ class TasksView(ttk.Frame):
         row = FormRow(
             picker,
             "分P合并",
-            hint="把同一套视频合成一个稿件的 P1/P2/P3：按文件名前缀、按子文件夹，"
-            "或把整个目录直接合并；双击列表行可改各分P标题",
+            # 一行说完。这段原本写满三行（61px），比它上面那个下拉框还
+            # 高一倍——而它只是解释一个四选项的下拉框。
+            hint="把同一套视频合成一个稿件的 P1/P2/P3；双击列表行可改各分P标题",
         )
         row.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_XS, 0))
         self._group_combo = row.add(
@@ -432,12 +437,18 @@ class TasksView(ttk.Frame):
             values=GROUP_OPTIONS,
             state="readonly",
             width=18,
+            # 不拉伸：选项只有四五个固定词，拉到 878px 宽既浪费又像
+            # 一个输入框。宽下拉框还会让人以为可以往里打字。
+            sticky="w",
         )
         self._group_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_group_changed())
 
-        # ③ yaml 入口放次要位置。多数用户不该看见它，也不该需要它。
-        advanced = ttk.Frame(card, style="Card.TFrame")
-        advanced.grid(row=3, column=0, sticky="e", pady=(theme.PAD_XS, theme.PAD_SM))
+        # ③ yaml 入口。**收进「更多设置」里**——注释里就写着「多数用户
+        # 不该看见它」，而它原先占的是**主流程的一整行**：40px 加间距，
+        # 正好把任务列表再往下推一截。放在折叠区里既不占地方，又仍然是
+        # 一个能点到的入口。
+        advanced = ttk.Frame(more, style="Card.TFrame")
+        advanced.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
         ttk.Label(
             advanced,
             text="熟悉配置文件？可从 yaml 加载，逐任务参数与投稿后端以配置为准。",
@@ -463,6 +474,10 @@ class TasksView(ttk.Frame):
         self._summary.add_action("只选失败项", self._select_failed)
 
         list_holder = ttk.Frame(card, style="Card.TFrame")
+        #: 列表容器。和空状态占位图共用 card 的 row 6，两者**互斥**：
+        #: 只切里面的 Treeview 是不够的——容器本身还留在网格里，滚动条
+        #: 和空白底会一直盖在占位图后面，看着像一条去不掉的灰横条。
+        self._list_holder = list_holder
         list_holder.grid(
             row=6, column=0, sticky="nsew", pady=(theme.PAD_XS, theme.PAD_SM)
         )
@@ -502,21 +517,45 @@ class TasksView(ttk.Frame):
             self._pick_dir,
         )
         self._placeholder.grid(row=6, column=0, sticky="nsew")
+        # 建完先藏列表：一个空表格压在占位图下面，是这一页最容易看出
+        # 的「没做完」。有任务时 :meth:`_on_table_filled` 会换回来。
+        self._list_holder.grid_remove()
 
-        self._progress = ProgressBar(card)
-        self._progress.grid(row=7, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+        # 进度 + 日志钉在滚动区**下方**。它们回答的是「现在跑到哪了」，
+        # 而滚动区里那部分是「我要投什么」——前者在执行期间每分钟都要
+        # 看，后者是开工前看。混进滚动区就等于让用户滚到底才能看进度。
+        #
+        # 但它们是**按需出现**的：空闲时一条 0% 的进度条加一块空的深色
+        # 输出区纯占地方，而这块是固定的，占了就抢走列表的高度（实测
+        # 186px，正好是列表的两行）。见 :meth:`_sync_bottom`。
+        bottom = ttk.Frame(self, style="TFrame")
+        bottom.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+        bottom.columnconfigure(0, weight=1)
+        self._bottom = bottom
+        #: 当前是否显示着，避免每次日志写入都动一次网格
+        self._bottom_shown = True
 
-        self._log = LogConsole(card, height=theme.LOG_HEIGHT)
-        self._log.grid(row=8, column=0, sticky="nsew", pady=(theme.PAD_SM, 0))
-        # 这一行**刻意不给 weight**：滚动区里列表（row 6）靠 minsize 兜
-        # 高度，日志再抢一份就会把列表压没——之前正是这样把日志压成
-        # 1px、又把进度条挤出可视区的。日志自己有滚动条，固定高度即可。
+        self._progress = ProgressBar(bottom)
+        # 默认不挂：一条 0% 的进度条在空闲时什么也没说，却占走 45px。
+        # 见 :meth:`_sync_bottom`——跑起来才挂上，跑完收回去。
+        self._progress_visible = False
 
-        # 操作条放在卡片**外面**，钉在页面底部。和投稿页同一个位置、
+        self._log = LogConsole(
+            # 比投稿页矮：那一页的日志在滚动区里，滚一下就能给它更多
+            # 空间；这一页它钉在底部，**每多一行都是从任务列表身上割
+            # 肉**。7 行割掉 125px，5 行割 95px。它有内部滚动条，
+            # 真要回溯往上翻即可。
+            bottom, height=5, on_change=self._sync_bottom
+        )
+        self._log.grid(row=1, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+        # 固定高度，不吃剩余空间：列表才是这一页要长高的那块。
+        # 日志自己有滚动条，也不该靠抢高度来显示更多行。
+
+        # 操作条放在滚动区**外面**，钉在页面底部。和投稿页同一个位置、
         # 同一套交互：底部深色条 + 左边说「将要发生什么」+ 右边主按钮。
         # 两页的主操作在同一处，切换页面时不用重新找按钮。
         self._action_bar = ActionBar(self)
-        self._action_bar.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_MD, 0))
+        self._action_bar.grid(row=3, column=0, sticky="ew", pady=(theme.PAD_MD, 0))
         self._action_bar.set_primary(
             "开始投稿", self._run,
             secondary_text="重试失败项", secondary_command=self._retry_failed,
@@ -542,6 +581,8 @@ class TasksView(ttk.Frame):
         # ——而外层滚动条细得很难拖。理由见 ScrollArea.bind_nested_scroll。
         self._area.bind_nested_scroll(self._tree)
         self._log.forward_wheel_to(self._area)
+        # 开页时日志是空的、也没在跑，底部那块先收起来
+        self._sync_bottom()
 
     def apply_layout(self, spec: "layout.Layout") -> None:
         """按窗口档位调整任务列表的最小高度。
@@ -928,9 +969,9 @@ class TasksView(ttk.Frame):
         """
         if has_rows:
             self._placeholder.grid_remove()
-            self._tree.grid()
+            self._list_holder.grid()
         else:
-            self._tree.grid_remove()
+            self._list_holder.grid_remove()
             self._placeholder.grid()
 
     def _fill_tree(self, tasks: list[TaskConfig]) -> None:
@@ -1167,6 +1208,51 @@ class TasksView(ttk.Frame):
         self._load_button.state(["disabled"] if busy else ["!disabled"])
         self._config_button.state(["disabled"] if busy else ["!disabled"])
         self._summary.set_actions_enabled(not busy)
+        self._sync_bottom()
+
+    def _sync_bottom(self) -> None:
+        """进度 + 日志那块：只在**它有事要说**时出现。
+
+        空闲时（没在跑、日志也是空的）整块藏起来，把 186px 还给任务
+        列表——默认窗口下列表本来就只有两行多一点的可见高度，再被一块
+        空的深色输出区压掉一截，用户就得靠滚才能看见自己要投什么。
+
+        反过来，一旦开跑或者日志里写了东西（包括报错），它就必须出现：
+        这时候用户要看的恰恰是进度和结果，藏起来等于把报错吞了。
+
+        .. note::
+           日志清空后会自动收回——``LogConsole.clear`` 走的是同一个
+           :meth:`~.widgets.LogConsole._notify`。所以「新一批任务」开始
+           时界面会自动回到干净状态，不需要调用方记得手动收。
+        """
+        wanted = self._busy or self._log.has_content
+        if wanted != self._bottom_shown:
+            self._bottom_shown = wanted
+            if wanted:
+                self._bottom.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+            else:
+                self._bottom.grid_remove()
+            # 列高分了，滚动区的可视范围和 scrollregion 都得重算
+            self._area.refresh()
+        # 进度条**每次都要**跟一次，不能只在上面那个分支里做：日志已经
+        # 把底部区顶出来之后再开跑，上面会直接 early-return，进度条就
+        # 永远挂不上——而那正是最需要它的时刻。
+        self._sync_progress()
+
+    def _sync_progress(self) -> None:
+        """进度条只在真的有进度时出现。
+
+        空闲时一条 0% 的进度条什么也没说，却把日志往下推、把列表往上挤。
+        它唯一有意义的时刻是「正在跑」，所以跟着 :attr:`_busy` 走。
+        """
+        wanted = self._busy
+        if wanted == self._progress_visible:
+            return
+        self._progress_visible = wanted
+        if wanted:
+            self._progress.grid(row=0, column=0, sticky="ew")
+        else:
+            self._progress.grid_remove()
 
     def _set_loading(self, loading: bool) -> None:
         """目录扫描/加载期间的界面状态。
@@ -1202,10 +1288,17 @@ class TasksView(ttk.Frame):
             iid for iid in self._tree.get_children() if self._picked.get(iid)
         ]
         if not self._tree.get_children():
-            self._action_bar.set_summary(
-                "批量投稿", "选一个视频文件夹，这里会列出全部任务"
-            )
-            self._action_bar.block("先选一个视频文件夹")
+            # 「没选文件夹」和「选了但里面没任务」是两件事，提示必须分开：
+            # 都给一句「先选一个视频文件夹」的话，选过的人会以为自己没选上，
+            # 回头再点一次「浏览」，白绕一圈。
+            if self._dir_var.get().strip():
+                self._action_bar.set_summary(
+                    "批量投稿", "这个文件夹里没有可投稿的任务"
+                )
+                self._action_bar.block("换个文件夹，或检查 YAML")
+            else:
+                self._action_bar.set_summary("批量投稿", "还没有加载任何任务")
+                self._action_bar.block("先选一个视频文件夹")
             return
         if not picked:
             self._action_bar.set_summary(

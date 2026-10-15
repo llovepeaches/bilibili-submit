@@ -173,7 +173,7 @@ class SettingsView(ttk.Frame):
             look,
             "主题",
             hint="跟随系统即读 Windows 的浅色/深色设置。tk 控件的颜色在建界面时"
-            "就写死了，改这里要**重启客户端**才生效。",
+            "就写死了，改这里要重启客户端才生效。",
         )
         row.grid(row=1, column=0, sticky="ew")
         row.add(
@@ -195,7 +195,7 @@ class SettingsView(ttk.Frame):
         # 想让它重新认一次就只能重启客户端
         row = FormRow(
             env_box,
-            "重新检测",
+            "环境变了",
             hint="换代理、换新 cookie 文件、或刚装好 ffmpeg 时点这里。"
             "切到本页不会自动重跑——没必要每次都等一遍探测。",
         )
@@ -208,7 +208,7 @@ class SettingsView(ttk.Frame):
         )
         row = FormRow(
             update_box,
-            "检查更新",
+            "版本",
             hint="每次启动自动查一次（24 小时内不重复请求）。有新版本才提示，"
             "没有就什么都不做。",
         )
