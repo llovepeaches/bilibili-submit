@@ -6,7 +6,7 @@
 所有值得记录的变更都会写进这里。格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [未发布]
+## [0.2.10] - 2026-10-16
 
 ### 性能 —— 拖窗口卡顿
 
