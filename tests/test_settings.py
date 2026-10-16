@@ -773,3 +773,222 @@ def test_fill_form_does_not_rewrite_state_on_every_switch(monkeypatch):
         )
     finally:
         root.destroy()
+
+
+# ---------- 一键获取 ffmpeg ----------
+
+
+@needs_display
+def test_ffmpeg_fix_row_hidden_when_ffmpeg_is_found(monkeypatch):
+    """ffmpeg 在位时不该露出「一键获取」。
+
+    常驻这个按钮只会让人怀疑自己是不是漏装了什么——绝大多数包
+    自带 ffmpeg，那条提示对 99% 的用户都是噪音。
+
+    .. note::
+       必须走「先缺失、再找到」两步。只测「一开始是藏着的」是假绿：
+       ``_build`` 里本来就 ``grid_remove()`` 了，就算 ``_render_env``
+       忘了收回去，这条也照样通过。
+    """
+    import tkinter as tk
+
+    state = {"found": False}
+
+    def probe(_cookie_file, **_kwargs):
+        return env_mod.EnvironmentSnapshot(
+            logged_in=True, ffmpeg=_FakeFfmpeg() if state["found"] else None
+        )
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, monkeypatch, probe=probe)
+        view.refresh()
+        run_until(root, lambda: "未找到" in view._env.text())
+        assert view._ffmpeg_fix.winfo_manager() == "grid", "缺失时应先露出来"
+
+        state["found"] = True
+        view.refresh(force=True)
+        run_until(root, lambda: "system" in view._env.text())
+        assert view._ffmpeg_fix.winfo_manager() == "", (
+            f"ffmpeg 找到了却还露着一键获取（管理器="
+            f"{view._ffmpeg_fix.winfo_manager()!r}）"
+        )
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_ffmpeg_fix_row_shown_when_ffmpeg_is_missing(monkeypatch):
+    """ffmpeg 没找到时要给一条补救的路。
+
+    源码/pip 运行的人最容易撞上这个：自检说「未找到（仅影响自动抽帧）」，
+    然后就没了——用户要么自己去搜怎么装，要么干脆放弃这个功能。
+    """
+    import tkinter as tk
+
+    def probe(_cookie_file, **_kwargs):
+        return env_mod.EnvironmentSnapshot(logged_in=True, ffmpeg=None)
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, monkeypatch, probe=probe)
+        view.refresh()
+        run_until(root, lambda: "未找到" in view._env.text())
+
+        assert view._ffmpeg_fix.winfo_manager() == "grid", (
+            "ffmpeg 没找到，却没给用户任何补救入口"
+        )
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_install_ffmpeg_runs_off_main_thread(monkeypatch):
+    """一键获取必须跑在工作线程——pip 会阻塞几十秒。
+
+    和探测那条是同一类问题：放在主线程，用户点一下按钮看到的就是
+    界面整个冻住。这里照搬「闸门 + 记线程 id」的写法。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ui.views import settings as settings_mod
+
+    main_thread = threading.get_ident()
+    threads: list[int] = []
+    gate = threading.Event()
+    release = threading.Event()
+
+    def slow_install(**_kwargs):
+        threads.append(threading.get_ident())
+        gate.set()
+        release.wait(10)
+        raise RuntimeError("没装成")  # 本条只关心线程归属，让它失败即可
+
+    monkeypatch.setattr(settings_mod, "install_imageio_ffmpeg", slow_install)
+    # 弹窗在测试里会阻塞等点击，必须换掉
+    errors: list[str] = []
+    monkeypatch.setattr(
+        settings_mod.messagebox,
+        "showerror",
+        lambda *args, **_kwargs: errors.append(str(args)),
+    )
+
+    def probe(_cookie_file, **_kwargs):
+        return env_mod.EnvironmentSnapshot(logged_in=True, ffmpeg=None)
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, monkeypatch, probe=probe)
+        view.refresh()
+        run_until(root, lambda: "未找到" in view._env.text())
+
+        view._on_install_ffmpeg()
+        assert gate.wait(5), "安装线程根本没起来"
+        assert threads and threads[0] != main_thread, (
+            "pip 跑在主线程上了——点一下按钮界面就冻住"
+        )
+        # 等待期间按钮要有反馈，否则用户以为点了没反应
+        assert str(view._ffmpeg_button.cget("text")) == "获取中…"
+        assert "disabled" in view._ffmpeg_button.state()
+
+        release.set()
+        # 结果走 after 回主线程，必须用真事件循环等
+        run_until(root, lambda: bool(errors), timeout_ms=5000)
+        assert "没装成" in errors[0]
+
+        # 失败之后按钮要能再点，不能停在「获取中…」的禁用态
+        assert str(view._ffmpeg_button.cget("text")) == "一键获取 ffmpeg"
+        assert "disabled" not in view._ffmpeg_button.state()
+    finally:
+        release.set()
+        root.destroy()
+
+
+@needs_display
+def test_install_ffmpeg_reprobes_on_success(monkeypatch):
+    """装完要立刻重测，不该让用户自己再点一次「重新检测」。
+
+    界面上那行从「未找到（仅影响自动抽帧）」变成
+    ``ffmpeg（imageio） 7.0.2`` 就是反馈，所以这里刻意**不弹**
+    成功提示——失败才值得打断用户。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.ffmpeg import FfmpegInfo
+    from bilibili_submit.ui.views import settings as settings_mod
+
+    state = {"found": False}
+    installed = {"n": 0}
+
+    def fake_install(**_kwargs):
+        installed["n"] += 1
+        state["found"] = True  # 装完了，下一次探测就能找到
+        return FfmpegInfo("/opt/imageio/ffmpeg", "imageio")
+
+    monkeypatch.setattr(settings_mod, "install_imageio_ffmpeg", fake_install)
+
+    def probe(_cookie_file, **_kwargs):
+        return env_mod.EnvironmentSnapshot(
+            logged_in=True,
+            ffmpeg=FfmpegInfo("/opt/imageio/ffmpeg", "imageio")
+            if state["found"]
+            else None,
+            ffmpeg_version="7.0.2" if state["found"] else "",
+        )
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, monkeypatch, probe=probe)
+        view.refresh()
+        run_until(root, lambda: "未找到" in view._env.text())
+        generation = view._probe_generation
+
+        view._on_install_ffmpeg()
+        run_until(root, lambda: "imageio" in view._env.text(), timeout_ms=5000)
+
+        assert installed["n"] == 1
+        assert view._probe_generation > generation, "装完了却没重新检测"
+        assert "7.0.2" in view._env.text()
+        # 装好了就把补救入口收回去
+        assert view._ffmpeg_fix.winfo_manager() == ""
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_install_ffmpeg_shows_the_hint_not_just_the_title(monkeypatch):
+    """失败提示要带上能往下走的那部分。
+
+    ``BiliError`` 的标题只有「安装超时（180 秒）」，真正有用的
+    「去配代理 / 手动执行 pip」在 ``hint`` 里。只显示标题等于没说。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.exceptions import BiliError
+    from bilibili_submit.ui.views import settings as settings_mod
+
+    def boom(**_kwargs):
+        raise BiliError("安装超时（180 秒）", hint="可在设置页配好代理后重试")
+
+    monkeypatch.setattr(settings_mod, "install_imageio_ffmpeg", boom)
+    shown: list[str] = []
+    monkeypatch.setattr(
+        settings_mod.messagebox,
+        "showerror",
+        lambda _title, body, **_kw: shown.append(body),
+    )
+
+    def probe(_cookie_file, **_kwargs):
+        return env_mod.EnvironmentSnapshot(logged_in=True, ffmpeg=None)
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, monkeypatch, probe=probe)
+        view.refresh()
+        run_until(root, lambda: "未找到" in view._env.text())
+
+        view._on_install_ffmpeg()
+        run_until(root, lambda: bool(shown), timeout_ms=5000)
+        assert "配好代理" in shown[0], f"只显示了标题，没有 hint：{shown[0]!r}"
+    finally:
+        root.destroy()

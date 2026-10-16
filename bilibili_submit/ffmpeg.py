@@ -32,10 +32,16 @@ __all__ = [
     "find_ffmpeg",
     "app_dir",
     "ffmpeg_status",
+    "install_imageio_ffmpeg",
     "video_meta",
 ]
 
 _EXE_NAMES = ("ffmpeg.exe", "ffmpeg", "ffmpeg-win.exe", "avconv.exe")
+
+#: 一键获取时 pip 的超时秒数。装 imageio-ffmpeg 本质是从 PyPI 拖一个
+#: 几十 MB 的二进制，慢网络上一两分钟很常见；但也绝不能无限等——
+#: 界面上必须有反馈，否则用户以为程序死了。
+INSTALL_TIMEOUT = 180
 
 
 def app_dir() -> Path:
@@ -155,6 +161,91 @@ def ffmpeg_status() -> FfmpegInfo | None:
         return find_ffmpeg(required=False)
     except Exception:  # noqa: BLE001
         return None
+
+
+def _pip_tail(text: str, lines: int = 3) -> str:
+    """取输出末尾几行，把 pip 的真实报错贴进提示里。
+
+    pip 失败的真正原因几乎总在最后几行（"No matching distribution"
+    "Connection timed out" "Permission denied"），而完整输出动辄几百行，
+    全塞进提示等于什么都没说。
+    """
+    kept = [line.strip() for line in text.splitlines() if line.strip()]
+    return "\n".join(kept[-lines:])
+
+
+def install_imageio_ffmpeg(
+    *, proxy: str | None = None, timeout: int = INSTALL_TIMEOUT
+) -> FfmpegInfo:
+    """装 imageio-ffmpeg，把它自带的 ffmpeg 拿回来。
+
+    给设置页的「一键获取」按钮用。会走到这里的只有**源码/pip 运行**
+    的人——打包版本来就自带 ffmpeg。frozen 环境下 pip 不可用
+    （打包时把它排除了），所以那里直接给出「重新下载完整版」的指引，
+    而不是抛一个看不懂的 ``ModuleNotFoundError: No module named 'pip'``。
+
+    Args:
+        proxy: 传给 pip 的 ``--proxy``。用户既然在设置页配了代理，
+            装包这一步也该走它——国内网络下这两步常常是同一个问题，
+            只解决一半等于没解决。
+        timeout: 子进程超时秒数。
+
+    Raises:
+        BiliError: 装不上时，``hint`` 里带可操作的下一步。
+
+    .. important::
+       必须**在工作线程**调用：``subprocess.run`` 会阻塞，
+       在主线程跑会把界面冻住。
+    """
+    if getattr(sys, "frozen", False):
+        raise BiliError(
+            "打包版无法自行安装组件",
+            hint="请重新下载自带 ffmpeg 的版本（安装版或便携版）；"
+                 "轻量命令行版请改下完整版，或自己放一个 ffmpeg.exe 在程序旁边",
+        )
+
+    cmd = [sys.executable, "-m", "pip", "install", "imageio-ffmpeg"]
+    if proxy:
+        cmd += ["--proxy", proxy]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.TimeoutExpired:
+        raise BiliError(
+            f"安装超时（{timeout} 秒）",
+            hint="网络太慢或被拦截。可在设置页配好代理后重试，"
+                 "或手动执行 pip install imageio-ffmpeg",
+        ) from None
+    except OSError as exc:  # 例如 pip 被卸载、或没有解释器权限
+        raise BiliError(
+            f"无法启动 pip：{exc}",
+            hint="手动执行 pip install imageio-ffmpeg，"
+                 "或自行安装 ffmpeg 并加入 PATH",
+        ) from exc
+
+    if proc.returncode != 0:
+        detail = _pip_tail(f"{proc.stdout or ''}\n{proc.stderr or ''}")
+        raise BiliError(
+            "安装失败",
+            hint=detail or "手动执行 pip install imageio-ffmpeg 看完整报错",
+        )
+
+    # 装完立刻重新定位：pip 可能把包装到了另一个前缀下，
+    # 「装成功」和「程序找得到」是两件事，必须分开验一次。
+    info = find_ffmpeg(required=False)
+    if info is None:
+        raise BiliError(
+            "包装上了，但程序还没找到它",
+            hint="点「重新检测」再试一次；仍不行就重启客户端",
+        )
+    return info
 
 
 def ffmpeg_version(info: FfmpegInfo | None = None) -> str:

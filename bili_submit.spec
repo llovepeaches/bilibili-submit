@@ -151,13 +151,17 @@ if GUI:
 
 NO_FFMPEG = os.environ.get("NO_FFMPEG") == "1"
 
-# GUI 默认内嵌 ffmpeg（用窗口界面的人不会自己去装），命令行版维持「不带」。
-# _FFMPEG_EXPLICIT 区分「用户明确要求」和「按默认行为」：
-#   * 明确要求（BUNDLE_FFMPEG=1）却找不到 ffmpeg -> 报错。
-#     静默产出一个不含 ffmpeg 的包，用户拿到手才发现 cover 不能用，
-#     不如当场失败。
-#   * 默认行为（GUI 隐式内嵌）却找不到 -> 只警告并降级为不内嵌。
-#     否则一台没准备 ffmpeg 的机器（CI、新同事）连 GUI 包都打不出来。
+# GUI 默认内嵌 ffmpeg（用窗口界面的人不会自己去装）。命令行版维持「不带」。
+# _FFMPEG_EXPLICIT 只用来决定报错文案，不决定要不要失败——
+# 隐式和显式一旦都找不到 ffmpeg，后果是**一样的**：
+# 产出一个不含 ffmpeg 的包，用户拿到手才发现 cover 不能用。
+#
+# 曾经这里对隐式默认「只警告并降级」，理由是怕 CI、新同事打不出包。
+# 但那条理由不成立：CI 装的是完整 requirements.txt（含 imageio-ffmpeg），
+# 本地构建脚本也在打包前就把 ffmpeg 备好了，两者都不会落到这个分支。
+# 真正会落进来的只有「意外」——而意外正需要被拦住，不是被放行。
+#
+# 逃生舱是 NO_FFMPEG=1：明确说「我就是要不带 ffmpeg 的包」，那就照做。
 _FFMPEG_EXPLICIT = os.environ.get("BUNDLE_FFMPEG") == "1"
 
 # onedir（安装版）**从不内嵌**：ffmpeg 由构建脚本复制到 exe 同目录。
@@ -203,31 +207,26 @@ def _resolve_ffmpeg_exe() -> Path | None:
 if BUNDLE_FFMPEG:
     _ffmpeg = _resolve_ffmpeg_exe()
     if _ffmpeg is None:
-        if _FFMPEG_EXPLICIT:
-            raise SystemExit(
-                "[spec] BUNDLE_FFMPEG=1 but ffmpeg.exe was not found.\n"
-                "       Run `python tools/setup_ffmpeg.py --dest vendor` first,\n"
-                "       or set FFMPEG_EXE=<path> to point at one.\n"
-                "       (or unset BUNDLE_FFMPEG to build without it)"
-            )
-        print(
-            "[spec] WARNING: GUI default wants embedded ffmpeg but none was found.\n"
-            "       Falling back to a GUI build WITHOUT ffmpeg (~13MB).\n"
-            "       cover:auto will be unavailable at runtime.\n"
-            "       To fix: run `python tools/setup_ffmpeg.py --dest vendor`."
+        # 不再降级打印警告：警告在几十页的 PyInstaller 输出里会被淹没，
+        # 构建照样绿，坏包照样发出去。要失败，而且要说清怎么修。
+        raise SystemExit(
+            "[spec] ffmpeg.exe not found, but this build requires it "
+            + ("(BUNDLE_FFMPEG=1)" if _FFMPEG_EXPLICIT else "(GUI default)")
+            + ".\n"
+            "       Fix it:  python tools/setup_ffmpeg.py --dest vendor\n"
+            "                (or set FFMPEG_EXE=<path> to point at one)\n"
+            "       Skip it: NO_FFMPEG=1  -- build WITHOUT ffmpeg on purpose."
         )
-        BUNDLE_FFMPEG = False
-    else:
-        # 放到归档根目录，运行时即 sys._MEIPASS/ffmpeg.exe
-        datas.append((str(_ffmpeg), "."))
-        print(
-            f"[spec] embedding ffmpeg: {_ffmpeg.name} "
-            f"({_ffmpeg.stat().st_size / 1048576:.1f} MB)"
-        )
+    # 放到归档根目录，运行时即 sys._MEIPASS/ffmpeg.exe
+    datas.append((str(_ffmpeg), "."))
+    print(
+        f"[spec] embedding ffmpeg: {_ffmpeg.name} "
+        f"({_ffmpeg.stat().st_size / 1048576:.1f} MB)"
+    )
 
-# 判断依据用 BUNDLE_FFMPEG 的**最终值**，而不是「有没有进过 if 分支」——
-# GUI 降级时会把 BUNDLE_FFMPEG 改回 False，那种情况下同样要排掉
-# imageio_ffmpeg：既没内嵌也没 imageio 兜底，留着它只会白白多打 30MB。
+# 判断依据直接用 BUNDLE_FFMPEG：既没内嵌也没 imageio 兜底，
+# 留着它只会白白多打 30MB。要 ffmpeg 却找不到时上面已经 SystemExit 了，
+# 所以走到这里一定是「确实不需要 ffmpeg」，不是降级。
 if not BUNDLE_FFMPEG:
     excludes.append("imageio_ffmpeg")
 

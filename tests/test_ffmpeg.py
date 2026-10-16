@@ -183,3 +183,134 @@ def test_embedded_beats_imageio(tmp_path, monkeypatch):
 
 def test_embedded_describe_is_human_readable():
     assert "exe 内嵌" in ff.FfmpegInfo("/tmp/ffmpeg", "embedded").describe()
+
+
+# ---------------------------------------------------------------------------
+# 一键获取（pip install imageio-ffmpeg）
+# ---------------------------------------------------------------------------
+
+def _fake_pip(monkeypatch, *, returncode: int = 0, stdout: str = "",
+              stderr: str = "", error: Exception | None = None):
+    """替掉 subprocess.run，记下 pip 收到的是什么命令。"""
+    import subprocess
+
+    calls: list[list[str]] = []
+
+    def run(cmd, *args, **kwargs):
+        calls.append(list(cmd))
+        if error is not None:
+            raise error
+        return subprocess.CompletedProcess(
+            cmd, returncode, stdout=stdout, stderr=stderr)
+
+    monkeypatch.setattr(ff.subprocess, "run", run)
+    return calls
+
+
+def test_install_refuses_to_run_in_a_frozen_build(monkeypatch):
+    """打包版不能自己装组件——要给「重新下载完整版」的指引。
+
+    打包时 pip 被排除了，硬跑只会得到
+    ``ModuleNotFoundError: No module named 'pip'``，对用户毫无意义。
+    """
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    with pytest.raises(BiliError) as exc:
+        ff.install_imageio_ffmpeg()
+    assert "打包版" in str(exc.value)
+    assert "重新下载" in exc.value.hint
+
+
+def test_install_runs_pip_for_the_interpreter(tmp_path, monkeypatch):
+    """pip 必须走 ``sys.executable -m pip``。
+
+    直接叫 ``pip`` 会命中 PATH 上那个，可能装到另一个 Python 里去——
+    装完了程序照样找不到，这是这类"一键修复"最常见的失效方式。
+    """
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    calls = _fake_pip(monkeypatch)
+    monkeypatch.setattr(ff, "find_ffmpeg", lambda required=False: None)
+    # 装完定位不到 -> 应当报错（下一条测这个），这里只关心命令本身
+    with pytest.raises(BiliError):
+        ff.install_imageio_ffmpeg()
+
+    assert calls, "一次 pip 都没跑"
+    cmd = calls[0]
+    assert cmd[:3] == [sys.executable, "-m", "pip"], f"pip 调用方式不对: {cmd}"
+    assert "imageio-ffmpeg" in cmd
+
+
+def test_install_forwards_the_proxy(monkeypatch):
+    """设置页配了代理，装包这一步也得走它。
+
+    国内网络下「下载投稿接口」和「从 PyPI 装包」常常是同一个问题；
+    只解决一半，用户会看到「代理配好了但一键获取还是超时」。
+    """
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    calls = _fake_pip(monkeypatch)
+    monkeypatch.setattr(ff, "find_ffmpeg", lambda required=False: None)
+    with pytest.raises(BiliError):
+        ff.install_imageio_ffmpeg(proxy="http://127.0.0.1:7890")
+
+    cmd = calls[0]
+    assert "--proxy" in cmd, f"没有把代理传给 pip: {cmd}"
+    assert cmd[cmd.index("--proxy") + 1] == "http://127.0.0.1:7890"
+
+
+def test_install_reports_timeout_with_a_next_step(monkeypatch):
+    """超时不能只说"超时"——要告诉用户能做什么。"""
+    import subprocess
+
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    _fake_pip(monkeypatch, error=subprocess.TimeoutExpired("pip", 180))
+    with pytest.raises(BiliError) as exc:
+        ff.install_imageio_ffmpeg()
+    assert "超时" in str(exc.value)
+    assert "代理" in exc.value.hint
+
+
+def test_install_shows_pip_tail_on_failure(monkeypatch):
+    """pip 非零退出时，把输出的最后几行贴进提示。
+
+    pip 完整输出几百行，全给等于没给；真正的原因（No matching
+    distribution / Permission denied）几乎总在末尾。
+    """
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    _fake_pip(
+        monkeypatch,
+        returncode=1,
+        stdout=(
+            "Collecting imageio-ffmpeg\n"
+            "  Downloading imageio_ffmpeg-0.4.9-py3-none-any.whl\n"
+            "  Using cached metadata\n"
+            "  Building wheel\n"
+        ),
+        stderr="ERROR: No matching distribution found for imageio-ffmpeg\n",
+    )
+    with pytest.raises(BiliError) as exc:
+        ff.install_imageio_ffmpeg()
+    assert "No matching distribution" in exc.value.hint
+    # 前面几百行的下载过程不该混进来
+    assert "Downloading" not in exc.value.hint
+
+
+def test_install_fails_when_ffmpeg_still_missing(monkeypatch):
+    """包装上了但程序找不到，是另一回事，要说清楚。
+
+    最常见的原因是 pip 装到了别的前缀下。这种情况报"安装成功"
+    最糟——用户刷新几次都没用，只能猜。
+    """
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    _fake_pip(monkeypatch, returncode=0)
+    monkeypatch.setattr(ff, "find_ffmpeg", lambda required=False: None)
+    with pytest.raises(BiliError) as exc:
+        ff.install_imageio_ffmpeg()
+    assert "还没找到" in str(exc.value)
+    assert "重新检测" in exc.value.hint
+
+
+def test_install_returns_the_found_ffmpeg(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    _fake_pip(monkeypatch, returncode=0)
+    expected = ff.FfmpegInfo("/opt/imageio/ffmpeg", "imageio")
+    monkeypatch.setattr(ff, "find_ffmpeg", lambda required=False: expected)
+    assert ff.install_imageio_ffmpeg() is expected

@@ -52,10 +52,29 @@ REM    * 图形界面安装版：要放在 exe 同目录，ffmpeg.py 本来就�
 REM      找这个位置，用户也能自己换版本
 REM ------------------------------------------------------------
 echo [4/8] 准备 ffmpeg ...
-python tools\setup_ffmpeg.py --dest vendor --force
-if errorlevel 1 (
-    echo [!] 未能准备 ffmpeg。程序除 "cover: auto" 自动抽帧外
-    echo     不依赖它，缺了仍可打包，只是该功能不可用。
+REM  这里**必须**成功。曾经失败只打一行警告就继续，于是可能产出一个
+REM  不带 ffmpeg 的图形界面版——用户装完发现 cover:auto 用不了，而我们
+REM  自己从头到尾不会知道（警告早就淹没在 PyInstaller 的输出里）。
+REM  真要出不带 ffmpeg 的包，请显式设 ALLOW_NO_FFMPEG=1。
+set FFMPEG_OK=1
+if "%ALLOW_NO_FFMPEG%"=="1" (
+    set FFMPEG_OK=0
+    echo     [i] ALLOW_NO_FFMPEG=1：跳过，产出的包不带 ffmpeg
+) else (
+    python tools\setup_ffmpeg.py --dest vendor --force
+    if errorlevel 1 (
+        echo [x] 未能准备 ffmpeg。
+        echo.
+        echo     ffmpeg 只影响 "cover: auto" 自动抽帧，其他功能不依赖它，
+        echo     但默认产出的图形界面版**必须**带它。
+        echo.
+        echo     三选一:
+        echo       1. pip install imageio-ffmpeg    ^(自动下载对应平台的二进制^)
+        echo       2. 自己装好 ffmpeg 并加入 PATH 后重跑本脚本
+        echo       3. 确实要出不带 ffmpeg 的包: set ALLOW_NO_FFMPEG=1
+        pause
+        exit /b 1
+    )
 )
 
 echo.
@@ -97,6 +116,11 @@ if not exist "dist\bilibili-submit-gui" (
 )
 if exist vendor\ffmpeg.exe (
     copy vendor\ffmpeg.exe "dist\bilibili-submit-gui\ffmpeg.exe" >nul
+    if errorlevel 1 (
+        echo [x] ffmpeg.exe 复制失败
+        pause
+        exit /b 1
+    )
 ) else (
     echo [!] vendor 里没有 ffmpeg.exe，图形界面版将不带ffmpeg
 )
@@ -158,6 +182,26 @@ if not exist "dist\bilibili-submit-gui\_internal" (
     echo [x] 缺少 _internal\（Python 运行时），图形界面版会双击闪退
     pause
     exit /b 1
+)
+
+REM  ffmpeg 的落点校验。前面备好了却没落到产物里，多半是某次 copy 静默
+REM  失败或目录被 --clean 清掉了——这种包装完照样能开，只是自动抽帧
+REM  永远不可用，任何"exe 能不能跑"的检查都发现不了。
+if "!FFMPEG_OK!"=="1" (
+    if not exist "dist\ffmpeg.exe" (
+        echo [x] dist\ffmpeg.exe 缺失（命令行版的外置 ffmpeg）
+        pause
+        exit /b 1
+    )
+    if not exist "dist\bilibili-submit-gui\ffmpeg.exe" (
+        echo [x] dist\bilibili-submit-gui\ffmpeg.exe 缺失
+        echo     图形界面版要求 ffmpeg 与 exe 同目录，否则自动抽帧不可用
+        pause
+        exit /b 1
+    )
+    echo [OK] ffmpeg 落点校验通过
+) else (
+    echo [i] 本次按 ALLOW_NO_FFMPEG=1 构建，跳过 ffmpeg 校验
 )
 
 "dist\bilibili-submit.exe" --version

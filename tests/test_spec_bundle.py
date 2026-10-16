@@ -196,13 +196,20 @@ def test_missing_ffmpeg_fails_loudly(tmp_path):
     assert "FFMPEG_EXE" in message
 
 
-def test_gui_mode_keeps_tkinter():
+def test_gui_mode_keeps_tkinter(tmp_path):
     """GUI 模式必须把 tkinter 从 excludes 里放出来并补 hiddenimport。
 
     CLI 版为了瘦身默认排除 tkinter，直接拿它打 GUI 会得到一个
     启动即静默退出的 exe（windowed 程序看不到报错），很难排查。
     """
-    ns = _exec_head({"GUI": "1"})
+    # 本条测的是 tkinter，不是 ffmpeg。但收紧之后「GUI 却找不到 ffmpeg」
+    # 会直接 SystemExit（见 test_gui_without_ffmpeg_fails_loudly），
+    # 而刚 checkout 的仓库里本来就没有 vendor/ffmpeg.exe，所以这里得
+    # 先给一份假的——否则这条测试会因为不相干的原因变红。
+    fake = tmp_path / "ffmpeg.exe"
+    fake.write_bytes(b"MZ fake")
+
+    ns = _exec_head({"GUI": "1", "FFMPEG_EXE": str(fake)})
     assert ns["GUI"] is True
     assert "tkinter" not in ns["excludes"], "GUI 模式不能排除 tkinter"
     assert "tk" not in ns["excludes"]
@@ -286,11 +293,19 @@ def test_gui_mode_can_opt_out_of_ffmpeg():
     assert "imageio_ffmpeg" in ns["excludes"]
 
 
-def test_gui_without_ffmpeg_degrades_instead_of_failing(tmp_path):
-    """GUI 默认想带 ffmpeg 但找不到时，只警告并降级，不能硬失败。
+def test_gui_without_ffmpeg_fails_loudly(tmp_path):
+    """GUI 默认想带 ffmpeg 却找不到时，必须硬失败，不能悄悄降级。
 
-    否则一台没准备 ffmpeg 的机器（CI 首次运行、新同事clone 下来）
-    连 GUI 包都打不出来。降级后仍能出包，只是 cover:auto 不可用。
+    曾经这里只打一行 WARNING 就降级出包。问题是：那行警告混在几十页
+    PyInstaller 输出里，构建照样绿，一个不含 ffmpeg 的 GUI 包照样被
+    发布出去——用户装完发现 cover:auto 用不了，我们从头到尾不知道。
+
+    收紧后会不会误伤「CI 首次运行 / 新同事 clone 下来」？不会：
+    * CI 装的是完整 requirements.txt（含 imageio-ffmpeg），
+      setup_ffmpeg.py 一定找得到；
+    * 本地 build_windows.bat 在打包前就把 ffmpeg 备好，备不好直接停。
+
+    真要出不带 ffmpeg 的包，走 NO_FFMPEG=1（下一条测试）。
     """
     empty = tmp_path / "empty"
     empty.mkdir()
@@ -298,12 +313,14 @@ def test_gui_without_ffmpeg_degrades_instead_of_failing(tmp_path):
     with pytest.MonkeyPatch.context() as mp:
         mp.delenv("FFMPEG_EXE", raising=False)
         mp.setenv("GUI", "1")
-        # 不抛 SystemExit 即通过
-        exec(compile(_HEAD, str(SPEC), "exec"), ns)
+        with pytest.raises(SystemExit) as exc:
+            exec(compile(_HEAD, str(SPEC), "exec"), ns)
 
-    assert ns["BUNDLE_FFMPEG"] is False, "找不到 ffmpeg 应降级为不内嵌"
-    assert not any("ffmpeg.exe" in str(d[0]) for d in ns["datas"])
-    assert "imageio_ffmpeg" in ns["excludes"]
+    # 报错必须给出两条可操作的出路：修好它，或者明确跳过它
+    message = str(exc.value)
+    assert "setup_ffmpeg.py" in message
+    assert "FFMPEG_EXE" in message
+    assert "NO_FFMPEG" in message
 
 
 def test_explicit_bundle_still_fails_loudly_without_ffmpeg(tmp_path):

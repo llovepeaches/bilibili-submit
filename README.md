@@ -60,6 +60,20 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 > ffmpeg 只影响 `cover: auto` 自动抽帧，**不影响投稿本身**。
 > 不需要自动封面的话，命令行轻量版（10 MB）完全够用。
 
+**各版本自带不带 ffmpeg，是打包时就定好的**：
+
+| 形态 | ffmpeg | 说明 |
+|---|---|---|
+| 安装版 / 便携版（图形界面） | ✅ 自带 | 安装版放在 exe 旁边，可自行换版本；便携版内嵌进 exe |
+| `standalone`（命令行单文件） | ✅ 内嵌 | 拷走即用 |
+| `full`（命令行 zip） | ✅ 外置 | `ffmpeg.exe` 跟着 exe 走，启动最快 |
+| 轻量 exe / `mini`（命令行） | ❌ 故意不带 | 靠它把体积压在 10 MB。要自动封面就下 `full`，或自己放一个 `ffmpeg.exe` 在 exe 旁边 |
+| 源码 / pip 运行 | ⚠️ 靠 imageio-ffmpeg | `pip install -r requirements.txt` 会带上 |
+
+**缺 ffmpeg 时怎么补**：源码/pip 运行 → 设置页「环境自检」里点
+**「一键获取 ffmpeg」**（装 `imageio-ffmpeg`，会跟着设置页配的代理走）。
+打包版不适用这条路（里面没有 pip），请改下自带 ffmpeg 的安装版或便携版。
+
 ### 用户数据存在哪
 
 登录状态、界面偏好、投稿历史都在**用户目录下**，不在程序目录：

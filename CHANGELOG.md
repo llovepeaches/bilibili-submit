@@ -6,6 +6,38 @@
 所有值得记录的变更都会写进这里。格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [未发布]
+
+### ffmpeg —— 不再可能静默发出不带 ffmpeg 的包
+
+打包链上有一条旧的行为：准备 ffmpeg 失败时**只打一行警告就继续**，
+GUI 包缺 ffmpeg 时也只警告降级。后果是可能产出一个不带 ffmpeg 的图形
+界面版——用户装完发现 `cover: auto` 用不了，而我们自己从头到尾看不到，
+那句警告早就淹没在 PyInstaller 几十页的输出里了。
+
+收紧成三道：
+
+| 位置 | 原来 | 现在 |
+| --- | --- | --- |
+| `build_windows.bat` 第 4 步 | 警告后继续 | `exit /b 1`；要出不带 ffmpeg 的包请显式 `ALLOW_NO_FFMPEG=1` |
+| `build_windows.bat` 第 8 步 | 无 | 校验 `dist\ffmpeg.exe` 与 `dist\bilibili-submit-gui\ffmpeg.exe` 真的在位 |
+| `bili_submit.spec` | GUI 隐式内嵌找不到时降级 | 直接报错，并给出「修好它 / `NO_FFMPEG=1` 跳过」两条路 |
+
+CI 不受影响：三个 workflow 装的都是完整 `requirements.txt`（含
+imageio-ffmpeg），准备步骤失败本就会让 job 变红。
+
+### 新增 —— 设置页「一键获取 ffmpeg」
+
+源码/pip 运行的人最容易撞上「环境自检：ffmpeg 未找到」，而此前界面
+到此为止，用户只能自己去搜怎么装。现在自检发现 ffmpeg 缺失时，环境
+自检区会多出一行**「一键获取 ffmpeg」**，点击后在工作线程跑
+`pip install imageio-ffmpeg`（跟随设置页里配的代理），装完自动重新
+检测。打包版本来就自带 ffmpeg，点到时会明确提示改下完整版，而不是
+抛一句看不懂的 `No module named 'pip'`。
+
+找到 ffmpeg 时这一行是收起的——常驻一个「一键获取」只会让人怀疑自己
+是不是漏装了什么。
+
 ## [0.2.10] - 2026-10-16
 
 ### 性能 —— 拖窗口卡顿

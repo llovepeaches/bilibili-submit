@@ -1519,3 +1519,57 @@ def test_langcheck_flag_reaches_both_install_invocations():
             ("/VERYSILENT", "改成非静默跑的话，CI runner 上会挂在那儿等人点下一步"),
         ):
             assert flag in args, f"{path.name} 的静默安装没传 {flag} —— {why}"
+
+
+# ---------------------------------------------------------------------------
+# ffmpeg：构建链不能再「静默产出不带 ffmpeg 的包」
+# ---------------------------------------------------------------------------
+
+def _bat_step(number: int) -> str:
+    """切出 ``build_windows.bat`` 第 number 步（``[n/8]``）的文本。
+
+    必须按步骤切，不能在全文里搜 ``exit /b 1``——脚本里到处都是，
+    全文搜恒为真，这种守卫拦不住任何东西。
+    """
+    body = BUILD_BAT.read_text(encoding="utf-8")
+    begin = body.find(f"echo [{number}/8]")
+    assert begin >= 0, f"build_windows.bat 里找不到 echo [{number}/8]"
+    end = body.find(f"echo [{number + 1}/8]")
+    return body[begin: end if end >= 0 else len(body)]
+
+
+def test_build_bat_stops_when_ffmpeg_is_missing():
+    """准备 ffmpeg 失败时必须停，不能只打一行警告继续。
+
+    曾经就是那样：``setup_ffmpeg.py`` 返回 1，脚本 echo 一句「缺了仍可
+    打包」就往下走。后果是**可能产出一个不带 ffmpeg 的图形界面版**——
+    用户装完发现 cover:auto 用不了，而我们自己从头到尾看不到：那句警告
+    早就淹没在 PyInstaller 几十页的输出里了。
+
+    想真的出不带 ffmpeg 的包，走显式开关 ALLOW_NO_FFMPEG=1，
+    而不是靠「反正失败了也继续」。
+    """
+    step = _bat_step(4)
+    assert "setup_ffmpeg.py" in step, "第 4 步应当在准备 ffmpeg"
+    assert re.search(r"if errorlevel 1 \(.*?exit /b 1", step, re.DOTALL), (
+        "第 4 步准备 ffmpeg 失败后必须 exit /b 1；"
+        "只 echo 警告继续的话，可能静默产出一个不带 ffmpeg 的图形界面版"
+    )
+    # 逃生舱要存在：否则一台装不了 ffmpeg 的机器连包都打不出来，
+    # 那就从「静默降级」变成了「无法构建」，同样糟糕。
+    assert "ALLOW_NO_FFMPEG" in step, "要有显式跳过 ffmpeg 的开关"
+
+
+def test_build_bat_verifies_ffmpeg_landed_in_the_gui_dir():
+    """第 8 步要核对 ffmpeg.exe 真的落进了图形界面版目录。
+
+    「备好了」不等于「落进去了」：某次 copy 静默失败、目录被 --clean
+    清掉、或者改了 EXE_NAME 却漏改 copy 的目标，都会得到「exe 在、
+    _internal 在、就是没有 ffmpeg」的产物。这种包装完照样能开，
+    只是自动抽帧永远不可用，任何启动类冒烟测试都发现不了。
+    """
+    step = _bat_step(8)
+    assert "dist\\bilibili-submit-gui\\ffmpeg.exe" in step, (
+        "第 8 步应校验图形界面版目录里的 ffmpeg.exe"
+    )
+    assert "exit /b 1" in step, "ffmpeg 落点不对时构建要失败，不能只是提示"

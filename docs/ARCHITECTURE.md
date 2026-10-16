@@ -633,19 +633,25 @@ ttk 的 Treeview 着色只能靠 tag，于是很自然会想「斑马纹一个 t
 | 默认 | 内嵌（约 72 MB） | 不带（约 10 MB） |
 | 理由 | 用窗口界面的人不会自己去装 ffmpeg | 用命令行的人通常已经有了 |
 
-`bili_submit.spec` 里用 `_FFMPEG_EXPLICIT` 区分两种「想要 ffmpeg」：
+`bili_submit.spec` 里两种「想要 ffmpeg」在**报错文案**上分开，在
+**失败与否**上不分开——都硬失败：
 
-- 显式 `BUNDLE_FFMPEG=1` 却找不到 → **硬失败**。用户明确要求的，
-  产出缺 ffmpeg 的包不如当场报错。
-- GUI 的隐式默认却找不到 → **警告并降级**为不内嵌。
-  否则一台没准备 ffmpeg 的机器（CI 首次运行、新同事 clone 下来）
-  连 GUI 包都打不出来。
+- 显式 `BUNDLE_FFMPEG=1` 却找不到 → 报错。用户明确要求的，产出缺
+  ffmpeg 的包不如当场报错。
+- GUI 的隐式默认却找不到 → 同样报错，但文案说明这是 GUI 默认行为，
+  并给出 `NO_FFMPEG=1` 这条逃生舱。
 
-⚠️ 降级后有个容易漏的点：判断「要不要排 `imageio_ffmpeg`」必须用
-`BUNDLE_FFMPEG` 的**最终值**，不能写成 `if/else`。降级路径把变量改回
-`False` 后走不到 `else`，imageio 就会留在包里——既没内嵌也没 imageio
-兜底，白白多打约 30 MB。这个 bug 是 `test_gui_without_ffmpeg_degrades_instead_of_failing`
-抓出来的。
+曾经后者是「警告并降级」，理由是怕 CI、新同事打不出包——那条理由
+不成立：CI 装的是完整 `requirements.txt`（含 imageio-ffmpeg），本地
+`build_windows.bat` 也在打包前就把 ffmpeg 备好了，两者都不会落到这个
+分支。真正会落进来的只有**意外**，而意外正需要被拦住。
+
+⚠️ 判断「要不要排 `imageio_ffmpeg`」必须用 `BUNDLE_FFMPEG` 的最终值，
+不能写成 `if/else`：那种写法在变量被改回 `False` 的路径上走不到
+`else`，imageio 就留在包里——既没内嵌也没 imageio 兜底，白白多打约
+30 MB。收紧之后不会再有「变量被改回 False」这条路径（要 ffmpeg 却
+找不到会直接退出），但判断仍按最终值写，等于给未来的改动上锁。
+守卫是 `test_gui_without_ffmpeg_fails_loudly`。
 
 ## 添加新命令
 

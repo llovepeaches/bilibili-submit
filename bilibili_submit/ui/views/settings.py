@@ -23,6 +23,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
 
 from ... import __version__
+from ...ffmpeg import FfmpegInfo, install_imageio_ffmpeg
 from ...update import (
     ReleaseInfo,
     check_for_update,
@@ -55,6 +56,18 @@ __all__ = ["SettingsView"]
 
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
     from ._host import AppHost
+
+
+def _error_detail(exc: BaseException) -> str:
+    """把异常拼成一句人读的话。
+
+    :class:`~bilibili_submit.exceptions.BiliError` 的 ``str()`` 只有标题
+    （"安装超时（180 秒）"），真正能让人往下走的 ``hint`` 在另一个字段
+    里——只显示标题等于什么都没说。
+    """
+    hint = getattr(exc, "hint", "")
+    return f"{exc}\n\n{hint}" if hint else str(exc)
+
 
 #: 下拉框选项顺序。跟随系统放第一个：它是默认值，也最不需要用户操心。
 THEME_OPTIONS = [THEME_MODE_LABELS[key] for key in ("system", "light", "dark")]
@@ -101,6 +114,10 @@ class SettingsView(ttk.Frame):
         #: Worker 是因为它们可以随时各来一次，共用一个会互相把对方丢掉。
         self._update_worker: Worker[_UpdateResult] | None = None
         self._update_generation = 0
+        #: 装 ffmpeg 也是一次性短任务，但和探测分开两个 Worker：
+        #: 点「一键获取」时上一次探测可能还在跑，共用一个的话
+        #: 第二次会因为「已有任务在运行」直接被丢掉。
+        self._ffmpeg_worker: Worker[FfmpegInfo] | None = None
         #: 上一次探测**成功**的结果，以及它对应的输入指纹。见 :meth:`refresh`。
         #: 探测失败不写这里——失败的状态不该被缓存成「已知结果」。
         self._env_snapshot: EnvironmentSnapshot | None = None
@@ -201,6 +218,22 @@ class SettingsView(ttk.Frame):
         )
         row.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
         row.add(OutlinedButton, text="重新检测", command=self._start_env_probe)
+
+        # ffmpeg 缺失时的补救入口。默认藏起来——绝大多数包自带 ffmpeg，
+        # 常驻一个「一键获取」只会让人怀疑自己是不是漏装了什么。
+        # 只有探测明确说「没找到」时才放出来（见 :meth:`_render_env`）。
+        fix = FormRow(
+            env_box,
+            "自动抽帧",
+            hint="ffmpeg 只影响 cover: auto 自动抽帧，其他功能不依赖它。"
+            "点下面的按钮会装 imageio-ffmpeg（约 30MB），装完自动重新检测。",
+        )
+        fix.grid(row=3, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
+        self._ffmpeg_fix = fix
+        self._ffmpeg_button = fix.add(
+            OutlinedButton, text="一键获取 ffmpeg", command=self._on_install_ffmpeg
+        )
+        fix.grid_remove()
 
         # ④ 更新
         ttk.Label(update_box, text="更新", style="Heading.TLabel").grid(
@@ -388,13 +421,72 @@ class SettingsView(ttk.Frame):
         info = snapshot.ffmpeg
         if info is None:
             rows.append(("ffmpeg", "未找到（仅影响自动抽帧）", "warn"))
+            # 补救入口只在**明确没找到**时露出来。探测失败走
+            # :meth:`_show_env_failed` 那条路，那里不露——失败多半是
+            # cookie 读不了，和 ffmpeg 无关，露出「一键获取」只会误导。
+            self._reset_ffmpeg_button()
+            self._ffmpeg_fix.grid()
         else:
             version = snapshot.ffmpeg_version
             if version and version != "未知":
                 version = version.replace("ffmpeg version ", "").split(" ")[0]
             rows.append((f"ffmpeg（{info.source}）", version or "未知", "ok"))
+            self._ffmpeg_fix.grid_remove()
 
         self._env.set_rows(rows)
+
+    # ---------- 一键获取 ffmpeg（异步） ----------
+
+    def _reset_ffmpeg_button(self) -> None:
+        """把「一键获取」恢复成可点的默认样子。
+
+        装过一次之后按钮可能停在「获取中…」的禁用态——下次再露出来
+        （比如探测又报未找到）时如果不管它，用户会看到一个点不动的按钮。
+        """
+        button = self._ffmpeg_button
+        if str(button.cget("text")) != "一键获取 ffmpeg":
+            button.configure(text="一键获取 ffmpeg")
+        button.state(["!disabled"])
+
+    def _on_install_ffmpeg(self) -> None:
+        """装 imageio-ffmpeg。必须走工作线程——pip 会阻塞几十秒。"""
+        if self._ffmpeg_worker is not None and self._ffmpeg_worker.running:
+            return  # 已在装了；再点一次没有意义
+        proxy = self.app.ctx.proxy
+        self._ffmpeg_button.configure(text="获取中…")
+        self._ffmpeg_button.state(["disabled"])
+
+        worker: Worker[FfmpegInfo] = Worker(self)
+        self._ffmpeg_worker = worker
+        try:
+            worker.run(
+                lambda _report, _cancelled: install_imageio_ffmpeg(proxy=proxy),
+                on_done=lambda info: self._on_ffmpeg_ready(info),
+                on_error=lambda exc: self._on_ffmpeg_failed(exc),
+            )
+        except RuntimeError as exc:
+            # 线程没起来不会有 on_error，得自己收尾
+            self._reset_ffmpeg_button()
+            self._show_ffmpeg_error(str(exc))
+
+    def _on_ffmpeg_ready(self, info: FfmpegInfo) -> None:
+        """装好了：丢掉「未找到」那份缓存，重测一遍让界面自己更新。
+
+        不弹「安装成功」——自检那一行会从「未找到」变成
+        ``ffmpeg（imageio） 7.0.2``，那就是反馈。失败才值得打断用户。
+        """
+        self._ffmpeg_worker = None
+        self._env_snapshot = None
+        self._start_env_probe()
+
+    def _on_ffmpeg_failed(self, exc: BaseException) -> None:
+        self._ffmpeg_worker = None
+        self._reset_ffmpeg_button()
+        self._show_ffmpeg_error(_error_detail(exc))
+
+    def _show_ffmpeg_error(self, detail: str) -> None:
+        """失败要弹窗：原因通常有好几行（pip 的报错），一行塞不下。"""
+        messagebox.showerror("获取 ffmpeg 失败", detail, parent=self)
 
     def _on_env_error(self, generation: int, exc: BaseException) -> None:
         """探测本身炸了要显示出来，不能让界面停在「检测中…」。"""

@@ -177,6 +177,12 @@ python tools/setup_ffmpeg.py --dest .
 # https://www.gyan.dev/ffmpeg/builds/
 ```
 
+图形界面还有一条更省事的路：设置页「环境自检」发现 ffmpeg 缺失时，
+会多出一行**「一键获取 ffmpeg」**，点了就在后台跑
+`pip install imageio-ffmpeg`（跟随设置页里配的代理），装完自动重新
+检测。打包版走不了这条（里面没有 pip），会提示改下自带 ffmpeg 的
+安装版或便携版。
+
 要打包出**内置 ffmpeg 的单文件 exe**：
 
 ```bash
