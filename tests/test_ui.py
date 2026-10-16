@@ -1479,6 +1479,9 @@ def test_history_view_reports_problems(tmp_path, monkeypatch, content, expect_pr
         theme.apply(style)
         app = App(root)
         app.pack(fill="both", expand=True)
+        # 先切到本页：同一时刻只有当前页在网格里，不切的话量到的
+        # 全是被 grid_remove 掉的几何（winfo_ismapped 恒为 0）
+        app.show("历史")
         view = app._views["历史"]
         view.refresh()
         root.update_idletasks()
@@ -1627,6 +1630,9 @@ def test_history_view_shows_list_when_entries_exist(tmp_path, monkeypatch):
         theme.apply(style)
         app = App(root)
         app.pack(fill="both", expand=True)
+        # 先切到本页：同一时刻只有当前页在网格里，不切的话量到的
+        # 全是被 grid_remove 掉的几何（winfo_ismapped 恒为 0）
+        app.show("历史")
         view = app._views["历史"]
 
         history_file.write_text(
@@ -1693,6 +1699,9 @@ def test_history_columns_keep_fixed_content_fixed(tmp_path, monkeypatch):
         theme.apply(style)
         app = App(root)
         app.pack(fill="both", expand=True)
+        # 先切到本页：同一时刻只有当前页在网格里，不切的话量到的
+        # 全是被 grid_remove 掉的几何（winfo_ismapped 恒为 0）
+        app.show("历史")
         view = app._views["历史"]
 
         # 先塞两条记录：列宽只在**列表显示着**的时候才算得出来——空状态

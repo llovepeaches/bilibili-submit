@@ -1,14 +1,16 @@
 # 客户端卡顿排查与优化报告
 
-本文回答四个问题：**为什么会卡**、**什么场景下卡**、**改了什么**、
-**改完快了多少**。所有数字都来自 `tools/bench_ui.py`，可随时复现：
+本文回答五个问题：**为什么会卡**、**什么场景下卡**、**改了什么**、
+**改完快了多少**、**怎么验证没白改**。所有数字都来自同目录下的基准脚本，
+可随时复现：
 
 ```bash
-xvfb-run -a python3 tools/bench_ui.py
+xvfb-run -a python3 tools/bench_ui.py       # 组件级热点：新旧写法同脚本对比
+xvfb-run -a python3 tools/bench_resize.py   # 拖窗口：按页面、按场景统计帧耗时
 ```
 
-脚本把「优化前」和「优化后」两种写法放在同一份文件里，一次运行同时跑出
-两组数字，不存在「两次测量环境不同」的问题。
+两个脚本都把「优化前」和「优化后」放进同一次运行，不存在「两次测量环境
+不同」的问题。
 
 ---
 
@@ -132,22 +134,87 @@ xvfb-run -a python3 tools/bench_ui.py
 
 ---
 
-## 四、怎么验证
+## 四、拖窗口卡顿 —— 五页齐上，每次变尺寸重排五遍
+
+**场景与触发条件**：拖动窗口边框放大缩小。用户原话是「客户端放大缩小
+很卡」。这一类卡顿和上面四个热点不同——它不写日志、不扫目录，**单纯是
+窗口尺寸变化本身触发的**，所以要从事件链上查。
+
+### 根因：被盖住的页也在参与重排
+
+五个页面是「全部 grid 在同一个单元格、靠 `tkraise` 分胜负」的叠放结构。
+问题在于：**Tk 的 grid 尺寸传播不会因为谁被盖住就跳过它**。窗口宽度一变，
+holder 把新宽度分给单元格，五页的控件**全部**重新请求一次尺寸、重算一次
+几何——其中四页用户根本看不见。
+
+`tools/profile_resize.py` 的归因印证了这一点（登录页，拖 30 帧）：
+
+| 指标 | 数值 |
+| --- | --- |
+| 每帧派发进 Python 的 `<Configure>` 事件 | **176 个** |
+| 其中打到 root 绑定 `_on_root_configure` 的 | **167 个**（几乎全部在第一行 return） |
+| 登录页拖窗口时，批量页表格调 `tree.column()` 的次数 | **30 次**（那页被盖着，改了没人看见） |
+| 历史页表格同样 | 30 次 |
+
+后两行是纯粹的浪费：那两页不在眼前，重排它们对界面没有任何影响。
+
+### 改法：同一时刻只让一页留在网格里
+
+`App.show()` 里给当前页 `grid()`、其余页 `grid_remove()`。用
+`grid_remove()` 而不是 `grid_forget()`：前者**记住** grid 配置（行、列、
+sticky、padding 一个不丢），恢复时调一次无参 `grid()` 就原样回来；后者
+会把配置忘掉，切回来的那一页既不拉伸也不占满，而且**不报错**。
+
+### 数据
+
+`tools/bench_resize.py`（按页面、按场景分别统计帧耗时）：
+
+| 页面 · 场景 | 优化前均值 | 优化后均值 | 提速 |
+| --- | --- | --- | --- |
+| 登录 · 同档内 1180→950 | 7.39 ms | 1.57 ms | **4.7×** |
+| 投稿 · 同档内 | 7.99 ms | 5.98 ms | 1.3× |
+| 投稿 · 跨档 1280→880 | 7.88 ms | 4.85 ms | 1.6× |
+| 批量任务 · 同档内 | 7.91 ms | 3.06 ms | **2.6×** |
+| 批量任务 · 跨档 | 7.71 ms | 3.87 ms | 2.0× |
+| 历史 · 同档内 | 6.64 ms | 1.80 ms | **3.7×** |
+| 设置 · 同档内 | 6.80 ms | 2.30 ms | **3.0×** |
+
+单次实验（登录页，只摘页不改别的）更直接：**6.79 ms/帧 → 1.27 ms/帧**。
+
+> 投稿页仍是最高的一项（5.98 ms）。剩余成本里 64% 在 Tk 的 C 层重排
+> （`tkapp.call`），每帧 84 个 `<Configure>`，能砍的 Python 侧开销已经
+> 砍完。再往下要么延迟建页、要么拆分子控件，收益递减而风险高，这一轮
+> 不做。
+
+> 顺带说明为什么「优化前也没超 16.7 ms 预算」却仍然卡：Xvfb 上的重排
+> 成本比真实平台（尤其 Windows）低得多。6.79 ms 在 Xvfb 上只是「有点
+> 涩」，同一份代码在 Windows 上是几十毫秒一帧——那就是用户感知到的卡。
+> 所以判断标准是**相对成本**（同样的活少干五遍），不是绝对值。
+
+---
+
+## 五、怎么验证
 
 ```bash
-# 1. 数字：新旧写法同脚本对比，一次跑出两组
+# 1. 组件级热点：新旧写法同脚本对比，一次跑出两组
 xvfb-run -a python3 tools/bench_ui.py
 
-# 2. 防回退：8 条守卫，每条都做过变异自检（撤掉优化必红）
+# 2. 拖窗口：按页面、按场景统计帧耗时（明细写进 bench-resize.json）
+xvfb-run -a python3 tools/bench_resize.py
+
+# 3. 拖窗口单帧归因：Python 回调 vs Tk 自身重排各占多少
+xvfb-run -a python3 tools/profile_resize.py
+
+# 4. 防回退：12 条守卫，每条都做过变异自检（撤掉优化必红）
 xvfb-run -a python3 -m pytest -q tests/test_ui_perf.py
 
-# 3. 全量回归
-xvfb-run -a python3 -m pytest -q          # 647 passed
+# 5. 全量回归
+xvfb-run -a python3 -m pytest -q          # 686 passed
 python3 -m pylama --max-complexity 20 bilibili_submit tests tools
 ```
 
 `tests/test_ui_perf.py` 里每条断言的注释都写明「撤掉优化会怎样」，
-并且对四处改动逐一做过变异验证：
+并且对每一处改动逐一做过变异验证：
 
 | 撤掉的东西 | 会红的用例 |
 | --- | --- |
@@ -155,7 +222,15 @@ python3 -m pylama --max-complexity 20 bilibili_submit tests tools
 | 日志 `MAX_LINES` 上限 | `test_log_console_caps_the_line_count` |
 | 滚动 `after_idle` 合并 | `test_log_console_defers_the_scroll_...` |
 | 历史页指纹比对 | `test_history_refresh_skips_rebuild_when_file_unchanged` |
+| **非当前页退出网格**（改回只 `tkraise`） | `test_only_the_current_page_stays_in_the_grid`、`test_offscreen_pages_do_not_relayout_while_resizing` |
+| **`grid_remove` 换成 `grid_forget`** | `test_switching_pages_keeps_their_grid_config`、`test_column_widths_catch_up_after_switching_back` |
 
-另外两条反向守卫，挡的是「优化挡过头」：宽度真的变了必须重算
+最后两行是本轮新加的，其中第二条踩过一次**假绿**：第一版
+`test_offscreen_pages_...` 没给两页填演示数据，空状态下列表容器整个
+是收起的，Treeview 量到宽度 1，`resize_columns` 在一行之内早退——
+注入变异后测试依然全绿，差点以为守住了。填上数据后才真的能区分。
+
+另外三条反向守卫，挡的是「优化挡过头」：宽度真的变了必须重算
 （`test_resize_columns_still_recomputes_when_the_width_moves`），
-文件真的变了必须重建、`force=True` 必须重读。
+文件真的变了必须重建、`force=True` 必须重读，切回页面时列宽必须跟上
+新窗口宽度（`test_column_widths_catch_up_after_switching_back`）。
