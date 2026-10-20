@@ -122,8 +122,8 @@ def test_exe_name_defaults_to_app_name():
 
 def test_exe_name_is_overridable():
     """同一份 spec 要能产出不同名的 exe（轻量版 + 内置 ffmpeg 版）。"""
-    ns = _exec_head({"EXE_NAME": "bilibili-submit-standalone"})
-    assert ns["EXE_NAME"] == "bilibili-submit-standalone"
+    ns = _exec_head({"EXE_NAME": "bilibili-submit-cli-portable"})
+    assert ns["EXE_NAME"] == "bilibili-submit-cli-portable"
 
 
 def test_ffmpeg_not_bundled_by_default():

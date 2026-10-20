@@ -39,7 +39,7 @@ jobs:
       - name: 打包主程序（内置 ffmpeg 版）
         env:
           BUNDLE_FFMPEG: '1'
-          EXE_NAME: bilibili-submit-standalone
+          EXE_NAME: bilibili-submit-cli-portable
         run: python -m PyInstaller bili_submit.spec --noconfirm
 
       # GUI 单文件便携版：windowed（无控制台黑框）+ tkinter + 内嵌 ffmpeg。
@@ -65,7 +65,7 @@ jobs:
       # 产物结构：dist\bilibili-submit-gui\{exe, ffmpeg.exe, _internal\, config\}
       #
       # --clean 只清 build\ 缓存、不动 dist\ 里已有的 exe（已实测），
-      # 所以这里可以放心用，上面的轻量版/standalone/portable 都还在。
+      # 所以这里可以放心用，上面的轻量版/cli-portable/gui-portable 都还在。
       - name: 打包图形界面版（安装用onedir）
         env:
           GUI: '1'
@@ -117,9 +117,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "轻量版 --help 失败 ($LASTEXITCODE)" }
 
           # 内置版：check 里能看到 ffmpeg 来源，验证内嵌真的生效
-          & .\dist\bilibili-submit-standalone.exe --version
+          & .\dist\bilibili-submit-cli-portable.exe --version
           if ($LASTEXITCODE -ne 0) { throw "内置版 --version 失败 ($LASTEXITCODE)" }
-          & .\dist\bilibili-submit-standalone.exe check
+          & .\dist\bilibili-submit-cli-portable.exe check
 
           # tid 需要网络，偶发失败不阻断打包
           & .\dist\bilibili-submit.exe tid
@@ -351,7 +351,7 @@ jobs:
           Copy-Item README.md stage-mini\
           Copy-Item CHANGELOG.md stage-mini\
           Compress-Archive -Path stage-mini\* -DestinationPath `
-            dist\bilibili-submit-mini-windows.zip -Force
+            dist\bilibili-submit-cli-mini.zip -Force
 
           # 完整包：轻量 exe + 外置 ffmpeg + config + README。
           # 启动比内嵌版快（不用每次解压 85MB），代价是要带着 ffmpeg.exe 一起拷。
@@ -362,9 +362,16 @@ jobs:
           Copy-Item README.md stage-full\
           Copy-Item CHANGELOG.md stage-full\
           Compress-Archive -Path stage-full\* -DestinationPath `
-            dist\bilibili-submit-full-windows.zip -Force
+            dist\bilibili-submit-cli-full.zip -Force
 
-          # 两个裸 exe 本来就躺在 dist 下，直接作为资产上传。
+          # 发布名重命名：dist\bilibili-submit.exe 是 PyInstaller 的内部产物名
+          # （version_info、build_windows.bat、main_gui 都按它引用），不动；
+          # 但作为独立资产发布时它和「图形界面版」混在一起看不出是命令行版，
+          # 所以另存一份带 cli 前缀的发布名。zip 里的 exe 仍叫 bilibili-submit.exe，
+          # 命令行示例不用跟着改。
+          Copy-Item dist\bilibili-submit.exe dist\bilibili-submit-cli.exe -Force
+
+          # 三个裸 exe 本来就躺在 dist 下，直接作为资产上传。
 
           Get-ChildItem dist\*.zip, dist\*.exe | Format-Table Name, `
             @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
@@ -385,10 +392,10 @@ jobs:
           |---|---|---|
           | ``bilibili-submit-setup.exe`` | ~33 MB | **图形界面安装版**，推荐。双击安装，开始菜单有入口，能干净卸载 |
           | ``bilibili-submit-gui-portable.exe`` | ~72 MB | 图形界面单文件便携版，拷走即用，无需安装 |
-          | ``bilibili-submit-standalone.exe`` | ~70 MB | 命令行单文件版，ffmpeg 已内置 |
-          | ``bilibili-submit.exe`` | ~11 MB | 命令行轻量 exe，需自备 ffmpeg |
-          | ``bilibili-submit-full-windows.zip`` | ~41 MB | 命令行 exe + 外置 ffmpeg.exe，启动最快 |
-          | ``bilibili-submit-mini-windows.zip`` | ~10 MB | 命令行 exe + config，不含 ffmpeg |
+          | ``bilibili-submit-cli-portable.exe`` | ~70 MB | 命令行单文件便携版，ffmpeg 已内置 |
+          | ``bilibili-submit-cli.exe`` | ~11 MB | 命令行轻量 exe，需自备 ffmpeg |
+          | ``bilibili-submit-cli-full.zip`` | ~41 MB | 命令行 exe + 外置 ffmpeg.exe，启动最快 |
+          | ``bilibili-submit-cli-mini.zip`` | ~10 MB | 命令行 exe + config，不含 ffmpeg |
 
           ## 怎么选
 
@@ -399,7 +406,7 @@ jobs:
             不用装，双击就开。
 
           **用命令行**：
-          - 想单文件开箱即用 → ``standalone``
+          - 想单文件开箱即用 → ``cli-portable``
           - 在意启动速度 → ``full``，让 ``ffmpeg.exe`` 跟着 exe 走
 
           ## 图形界面版
@@ -435,6 +442,10 @@ jobs:
           3. ``bilibili-submit.exe upload 视频.mp4 --title "标题" --tid 21 --tag "标签"``
           4. ``bilibili-submit.exe check`` 自检
 
+          下的是 ``cli`` 或 ``cli-portable`` 裸 exe 的话，上面命令里的
+          ``bilibili-submit.exe`` 换成你下载的那个文件名即可。zip 包里的
+          exe 仍叫 ``bilibili-submit.exe``，照抄不用改。
+
           ## 注意事项
 
           - 首次运行可能被杀毒软件拦截：PyInstaller 的启动器常被误判，
@@ -456,10 +467,10 @@ jobs:
             $tag,
             "dist\bilibili-submit-setup.exe#图形界面安装版（推荐，约 33MB）",
             "dist\bilibili-submit-gui-portable.exe#图形界面便携版（免安装，约 72MB）",
-            "dist\bilibili-submit-standalone.exe#命令行单文件版（内置 ffmpeg，约 70MB）",
-            "dist\bilibili-submit.exe#命令行轻量 exe（不含 ffmpeg，约 11MB）",
-            "dist\bilibili-submit-full-windows.zip#命令行完整版（外置 ffmpeg，约 41MB）",
-            "dist\bilibili-submit-mini-windows.zip#命令行轻量版（不含 ffmpeg，约 10MB）",
+            "dist\bilibili-submit-cli-portable.exe#命令行单文件便携版（内置 ffmpeg，约 70MB）",
+            "dist\bilibili-submit-cli.exe#命令行轻量 exe（不含 ffmpeg，约 11MB）",
+            "dist\bilibili-submit-cli-full.zip#命令行完整版（外置 ffmpeg，约 41MB）",
+            "dist\bilibili-submit-cli-mini.zip#命令行轻量版（不含 ffmpeg，约 10MB）",
             "--repo", "${{ github.repository }}",
             "--title", "bilibili-submit $tag",
             "--notes", $notes
@@ -483,8 +494,7 @@ jobs:
           Write-Host "公开发布完成，下载链接：" -ForegroundColor Green
           Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-setup.exe"
           Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-gui-portable.exe"
-          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-standalone.exe"
-          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-standalone.exe"
-          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit.exe"
-          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-full-windows.zip"
-          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-mini-windows.zip"
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-cli-portable.exe"
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-cli.exe"
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-cli-full.zip"
+          Write-Host "  https://github.com/$repo/releases/download/$env:TAG/bilibili-submit-cli-mini.zip"

@@ -82,10 +82,10 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 
 | 资产 | 体积 | 说明 |
 |---|---|---|
-| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~70 MB | 单文件，ffmpeg 已内置 |
-| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~10 MB | 轻量 exe |
-| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~41 MB | 轻量 exe + 外置 ffmpeg，**启动最快** |
-| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~10 MB | 轻量 exe + 配置与文档 |
+| [`bilibili-submit-cli-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~70 MB | 单文件便携版，ffmpeg 已内置 |
+| [`bilibili-submit-cli.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~10 MB | 轻量 exe |
+| [`bilibili-submit-cli-full.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~41 MB | 轻量 exe + 外置 ffmpeg，**启动最快** |
+| [`bilibili-submit-cli-mini.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~10 MB | 轻量 exe + 配置与文档 |
 
 **怎么选：**
 
@@ -93,8 +93,8 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 |---|---|
 | 长期在自己电脑用，要开始菜单入口、能干净卸载 | 安装版 `setup` |
 | 临时用 / U 盘 / 别人的机器 | 便携版 `portable` |
-| 命令行图省事 | `standalone`（单文件，ffmpeg 内嵌） |
-| 命令行在意体积和启动速度 | `full`（轻量 exe + 外置 ffmpeg，**启动最快**） |
+| 命令行图省事 | `cli-portable`（单文件，ffmpeg 内嵌） |
+| 命令行在意体积和启动速度 | `cli-full`（轻量 exe + 外置 ffmpeg，**启动最快**） |
 
 两种界面**功能完全一致**，区别只在打包方式。安装版快是因为它把程序打成**目录**
 （ffmpeg 放在程序旁边），而单文件版每次启动都要把 60 MB ffmpeg 解压到临时目录。
@@ -109,9 +109,9 @@ ffmpeg 只影响 `cover: auto` 自动抽帧，**不影响投稿本身**。不需
 | 形态 | ffmpeg | 说明 |
 |---|---|---|
 | 安装版 / 便携版（图形界面） | 自带 | 安装版放在 exe 旁边，可自行换版本；便携版内嵌进 exe |
-| `standalone`（命令行单文件） | 内嵌 | 拷走即用 |
-| `full`（命令行 zip） | 外置 | `ffmpeg.exe` 跟着 exe 走，启动最快 |
-| 轻量 exe / `mini`（命令行） | 不带 | 靠它把体积压在 10 MB。要自动封面就下 `full`，或自己放一个 `ffmpeg.exe` 在 exe 旁边 |
+| `cli-portable`（命令行单文件） | 内嵌 | 拷走即用 |
+| `cli-full`（命令行 zip） | 外置 | `ffmpeg.exe` 跟着 exe 走，启动最快 |
+| 轻量 exe / `cli-mini`（命令行） | 不带 | 靠它把体积压在 10 MB。要自动封面就下 `cli-full`，或自己放一个 `ffmpeg.exe` 在 exe 旁边 |
 | 源码 / pip 运行 | 需自备 | `pip install -r requirements.txt` 会带上 imageio-ffmpeg |
 
 **缺 ffmpeg 时怎么补**：源码 / pip 运行 → 设置页「环境自检」里点
@@ -168,7 +168,9 @@ bilibili-submit.exe submit -c config\my.yaml --dry-run   # 先预览，确认无
 bilibili-submit.exe submit -c config\my.yaml
 ```
 
-源码运行把 `bilibili-submit.exe` 换成 `python run.py` 即可。
+源码运行把 `bilibili-submit.exe` 换成 `python run.py` 即可；下的是 `bilibili-submit-cli.exe`
+这类带 `cli` 前缀的裸 exe，就把命令里的 `bilibili-submit.exe` 换成你下载的那个文件名
+（zip 包里的 exe 仍叫 `bilibili-submit.exe`，照抄即可）。
 
 > **建议第一次拿一个几十 MB 的小视频试跑**，确认「登录 → 上传 → 拿到 BV 号」整条通了
 > 再批量用。

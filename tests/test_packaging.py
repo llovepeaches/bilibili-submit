@@ -1252,10 +1252,10 @@ def test_release_notes_survive_powershell_escaping():
     for name in (
         "bilibili-submit-setup.exe",
         "bilibili-submit-gui-portable.exe",
-        "bilibili-submit-standalone.exe",
-        "bilibili-submit.exe",
-        "bilibili-submit-full-windows.zip",
-        "bilibili-submit-mini-windows.zip",
+        "bilibili-submit-cli-portable.exe",
+        "bilibili-submit-cli.exe",
+        "bilibili-submit-cli-full.zip",
+        "bilibili-submit-cli-mini.zip",
     ):
         assert name in expanded, f"展开后的 notes 里文件名不完整: {name}"
 

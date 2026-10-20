@@ -8,6 +8,24 @@
 
 ## [未发布]
 
+### 变更 —— 命令行发布资产统一 `cli` 前缀命名
+
+旧名字里 `standalone` 和裸的 `bilibili-submit.exe` 单看文件名分不出谁是谁，
+`-full-windows.zip` 又是唯一带平台名的资产，跟四个 exe 都不一致。重命名后：
+
+| 旧名 | 新名 |
+| --- | --- |
+| `bilibili-submit-standalone.exe` | `bilibili-submit-cli-portable.exe` |
+| `bilibili-submit.exe` | `bilibili-submit-cli.exe` |
+| `bilibili-submit-full-windows.zip` | `bilibili-submit-cli-full.zip` |
+| `bilibili-submit-mini-windows.zip` | `bilibili-submit-cli-mini.zip` |
+
+命名规则：`cli` 表示命令行版（与图形界面的 `gui` 对仗），`portable` 表示单文件
+自包含（与 `gui-portable` 同义）。`dist\bilibili-submit.exe` 这个**内部产物名不变**
+（`version_info.txt`、`build_windows.bat`、zip 包内的 exe 都还是它），只是独立发布的
+裸 exe 另存了一份带前缀的发布名，所以 zip 用户照旧敲 `bilibili-submit.exe`，
+下裸 exe 的换成下载到的文件名即可。老的 Release 资产名不会跟着变，历史版本仍按原名提供。
+
 ### ffmpeg —— 不再可能静默发出不带 ffmpeg 的包
 
 打包链上有一条旧的行为：准备 ffmpeg 失败时**只打一行警告就继续**，

@@ -154,7 +154,7 @@ upload:
 | 优先级 | 来源 | 怎么来的 |
 |---|---|---|
 | 1 | 程序同目录的 `ffmpeg.exe` | 打包时随包分发；自己放一份可覆盖内置版 |
-| 2 | exe 内嵌（`sys._MEIPASS`） | 下载 `standalone` 版，或用 `BUNDLE_FFMPEG=1` 打包 |
+| 2 | exe 内嵌（`sys._MEIPASS`） | 下载 `cli-portable` 版，或用 `BUNDLE_FFMPEG=1` 打包 |
 | 3 | `imageio-ffmpeg` 包内 | `pip install imageio-ffmpeg`（自动） |
 | 4 | 系统 `PATH` | 自行安装 |
 
@@ -187,7 +187,7 @@ python tools/setup_ffmpeg.py --dest .
 
 ```bash
 python tools/setup_ffmpeg.py --dest vendor   # 先备好源文件
-BUNDLE_FFMPEG=1 EXE_NAME=bilibili-submit-standalone \
+BUNDLE_FFMPEG=1 EXE_NAME=bilibili-submit-cli-portable \
   python -m PyInstaller bili_submit.spec --noconfirm
 ```
 

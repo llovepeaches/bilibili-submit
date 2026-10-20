@@ -149,7 +149,7 @@ B 站不允许临近发布。`dtime_offset_hours` 调大到 4 以上，
 嫌 GUI 体积大（72 MB）就换命令行版，按下面选：
 
 ```
-1. 下载 standalone 版 exe          # 命令行 + ffmpeg 内置，约 69MB
+1. 下载 cli-portable 版 exe          # 命令行 + ffmpeg 内置，约 69MB
 2. 下载 full 包                     # ffmpeg 外置，约 40MB，启动最快
 3. pip install imageio-ffmpeg      # 源码运行时最省事
 4. 把 cover 改成图片路径或 null   # 不用自动抽帧
@@ -159,11 +159,11 @@ B 站不允许临近发布。`dtime_offset_hours` 调大到 4 以上，
 底部状态栏（会告诉你命中的是"exe 内嵌"、"程序同目录"、
 "imageio-ffmpeg"还是"系统 PATH"）。
 
-### 用了 standalone 版，check 还是说找不到 ffmpeg
+### 用了 cli-portable 版，check 还是说找不到 ffmpeg
 
 内嵌的 ffmpeg 在 `sys._MEIPASS` 下，只有打包出来的 exe 才有。
 如果你是把 zip 解开后跑里面的**轻量 exe**，那份本来就不带 ffmpeg——
-得下载 `bilibili-submit-standalone.exe`，或用 `full` 包（ffmpeg 外置）。
+得下载 `bilibili-submit-cli-portable.exe`，或用 `cli-full` 包（ffmpeg 外置）。
 
 ## 历史与记录
 

@@ -111,10 +111,10 @@ echo.
 echo   构建完成后，公开下载链接（无需登录，直接发给别人）:
 echo.
 echo     完整版（自带 ffmpeg，开箱即用）:
-echo     https://github.com/!ACCOUNT!/!REPO_NAME!/releases/download/!TAG!/bilibili-submit-full-windows.zip
+echo     https://github.com/!ACCOUNT!/!REPO_NAME!/releases/download/!TAG!/bilibili-submit-cli-full.zip
 echo.
 echo     轻量版（约 10MB，不含 ffmpeg）:
-echo     https://github.com/!ACCOUNT!/!REPO_NAME!/releases/download/!TAG!/bilibili-submit-mini-windows.zip
+echo     https://github.com/!ACCOUNT!/!REPO_NAME!/releases/download/!TAG!/bilibili-submit-cli-mini.zip
 echo ================================================================
 echo.
 echo   提示：可在仓库 Settings - Pages 开启一个下载页，
