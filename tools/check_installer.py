@@ -44,7 +44,7 @@ SECTIONS = {
     "[Icons]", "[INI]", "[Registry]", "[Run]", "[UninstallRun]",
     "[UninstallDelete]", "[InstallDelete]", "[Languages]", "[CustomMessages]",
     "[Messages]", "[Code]", "[License]", "[InfoBefore]", "[Wizard]",
-    "[WizardImages]", "[Components]", "[Output]",
+    "[WizardImages]", "[Components]", "[Output]", "[Colors]",
 }
 
 #: 仓库里的安装器资源目录（[Languages] 引用的消息文件放在这儿）。
@@ -62,6 +62,9 @@ DIRECTIVES = {
     "Parameters", "Check", "AfterInstall", "BeforeInstall", "Components",
     "MinVersion", "DisableDirPage", "AlwaysRestart", "AppMutex",
     "CloseApplications", "RestartApplications", "SetupLogging",
+    "WizardStyle", "WizardImageFile", "WizardSmallBitmapImage",
+    "WizardResizable", "WizardColor", "WizardColor2", "WizardColorDirection",
+    "BackColor", "BackColor2", "BackColorDirection",
 }
 
 #: Inno Setup 事件函数的原型：名字 → function / procedure。
@@ -324,6 +327,21 @@ def _check_icon(defines: dict[str, str]) -> None:
         fail(f"SetupIconFile 指向的文件不存在：{icon}")
 
 
+def _check_wizard_images(defines: dict[str, str]) -> None:
+    """向导侧栏图 / 头部 logo 指向的文件必须存在。
+
+    这两项是 beautify 时新加的。ISCC 对缺失的图片同样直接报
+    ``file not found`` 而中断编译，但失败信息离「图片丢了」很远，
+    排查要绕一圈。和 ``_check_icon`` 一样，在提交前就拦下来。
+    """
+    for key in ("WizardImageFile", "WizardSmallBitmapImage"):
+        path = defines.get(key, "")
+        if not path:
+            continue
+        if not (ROOT / path.replace("\\", "/")).is_file():
+            fail(f"{key} 指向的文件不存在：{path}")
+
+
 #: 装向导上用户一定会看到的那几个键。列在这里不是因为「翻译要全」，
 #: 而是这些键一旦回退成英文，用户立刻能看出向导没汉化。
 #: （实测这份官方中文翻译：281 个 [Messages] 键里只有 5 条不含中文，
@@ -502,6 +520,7 @@ def main() -> int:
     _check_files_section(text)
     _check_code_prototypes(text)
     _check_icon(defines)
+    _check_wizard_images(defines)
     _check_languages(text)
 
     for message in warnings:

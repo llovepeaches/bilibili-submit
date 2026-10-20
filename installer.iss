@@ -51,8 +51,14 @@ OutputDir=dist
 SetupIconFile=assets\bilibili-submit.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 
-; 安装向导图（可选，缺了也不报错）
+; 安装向导图（modern 风格，自定义品牌侧栏图与头部 logo）
 WizardStyle=modern
+; 品牌侧栏背景图：竖向 B 站粉→深品红渐变（无硬形状，拉伸不变形）。
+; 头部小 logo：粉圆角方块 + 白「B」，左上角色键透明。
+WizardImageFile=assets\wizard-sidebar.bmp
+WizardSmallBitmapImage=assets\wizard-logo.bmp
+; 允许用户拖大窗口（高 DPI / 大字体下不挤）
+WizardResizable=yes
 
 ; 要管理员，但允许用户选"仅为我安装"装到用户目录。
 ; 很多人就是自己用一台机器，让他们在 Program Files 里读到只读文件
@@ -67,7 +73,18 @@ SolidCompression=yes
 
 ; 装完不自动启动。批量投完的机器上多一个进程很烦，而且用户
 ; 可能只想装好放着。
-;WizardImageFile 留空表示不换背景图
+
+; 配色与程序 GUI / 使用说明页同源（B 站粉 + 中性粉相底），让安装向导
+; 内页背景和装好的程序看起来是一套。侧栏渐变由上面的 WizardImageFile 提供。
+; 颜色按 Inno 的 $BBGGRR 顺序写。
+[Colors]
+BackColor=$FBFAFD
+BackColor2=$F2F0F5
+BackColorDirection=1
+WizardColor=$9972FB
+WizardColor2=$4E1B9B
+WizardColorDirection=1
+
 [Languages]
 ; 简体中文消息文件放在仓库的 installer_languages\ 下，不用官方的
 ; compiler:Languages\ChineseSimplified.isl —— 后者依赖「构建机的 Inno Setup
