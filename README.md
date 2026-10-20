@@ -4,6 +4,7 @@
 
 **把本地视频投到你自己的 B 站账号上 —— 不用开网页，也不用手动填投稿表单。**
 
+[![版本](https://img.shields.io/github/v/release/llovepeaches/bilibili-submit?style=flat-square&label=%E7%89%88%E6%9C%AC)](https://github.com/llovepeaches/bilibili-submit/releases/latest)
 [![平台](https://img.shields.io/badge/platform-Windows-blue?style=flat-square)](https://github.com/llovepeaches/bilibili-submit/releases)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square)](https://www.python.org/downloads/)
 [![许可证](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
