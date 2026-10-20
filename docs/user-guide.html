@@ -125,12 +125,42 @@ th{background:var(--paper-alt);color:var(--ink-2);font-weight:600;text-align:lef
 td{padding:8px 12px;border-top:1px solid var(--line);vertical-align:top}
 tr:first-child td{border-top:none}
 
-/* 徽章：开始之前的三件小事 */
-.chips{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0 2px}
-.chip{
-  background:var(--paper);border:1px solid var(--line-strong);
-  border-radius:16px;padding:4px 14px;font-size:13px;color:var(--ink-2);
+/* 开始之前：要点卡（无需准备的三件事） */
+.feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:14px 0 6px}
+.feature{
+  background:var(--paper-alt);border:1px solid var(--line);
+  border-radius:var(--radius-ctl);padding:14px 14px 12px;
 }
+.feature-ico{
+  width:26px;height:26px;border-radius:50%;
+  background:var(--ok-bg);color:var(--ok);font-weight:700;font-size:14px;
+  display:flex;align-items:center;justify-content:center;margin-bottom:8px;
+}
+.feature-t{font-weight:600;color:var(--ink);font-size:14px;margin-bottom:3px}
+.feature-d{font-size:12.5px;color:var(--ink-3);line-height:1.55}
+
+/* 开始之前：投稿流程条（把「登录 → 投稿 → …」可视化） */
+.flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0 4px}
+.flow-step{
+  background:var(--paper);border:1px solid var(--line-strong);
+  border-radius:16px;padding:5px 14px;font-size:13px;color:var(--ink-2);font-weight:600;
+}
+.flow-arrow{color:var(--ink-3);font-size:13px}
+
+/* 醒目提示：左侧色条 + 图标，仍是浅底深字（warn 语义） */
+.callout{
+  display:flex;gap:12px;align-items:flex-start;
+  background:var(--warn-bg);color:var(--warn);
+  border-left:3px solid var(--warn);
+  border-radius:var(--radius-ctl);padding:12px 14px;margin:14px 0 4px;font-size:14px;
+}
+.callout-ico{
+  flex:0 0 22px;width:22px;height:22px;border-radius:50%;
+  background:var(--warn);color:var(--ink-surface-fg);
+  font-weight:700;font-size:13px;
+  display:flex;align-items:center;justify-content:center;margin-top:2px;
+}
+.callout b{display:block;margin-bottom:2px}
 
 /* 目录树 */
 pre.tree{
@@ -156,6 +186,7 @@ pre.tree{
   .nav .foot{display:none}
   main{padding:20px 18px 0}
   .inkbar{margin:24px -18px 0;padding:14px 18px}
+  .feature-grid{grid-template-columns:1fr}
 }
 @media print{
   .nav,.inkbar{display:none}
@@ -178,7 +209,7 @@ pre.tree{
     <a href="#upload"><i class="ico">投</i>投稿</a>
     <a href="#tasks"><i class="ico">批</i>批量任务</a>
     <a href="#history"><i class="ico">历</i>历史 · 设置</a>
-    <a href="#data"><i class="ico">🗂</i>数据在哪</a>
+    <a href="#data"><i class="ico">存</i>数据在哪</a>
     <a href="#faq"><i class="ico">？</i>常见问题</a>
     <a href="#feedback"><i class="ico">✉</i>反馈</a>
     <div class="foot">
@@ -197,19 +228,49 @@ pre.tree{
     <section id="start">
       <div class="card">
         <h2><i class="ico">◆</i>开始之前</h2>
-        <div class="chips">
-          <span class="chip">不需要装 Python</span>
-          <span class="chip">ffmpeg 已内置（自动封面用）</span>
-          <span class="chip">数据只存在本机</span>
+        <p class="lead" style="margin-bottom:6px">这几件事已经帮你备好，打开就能用；先把流程看一眼，第一次照着走一遍就熟了。</p>
+
+        <div class="feature-grid">
+          <div class="feature">
+            <div class="feature-ico">✓</div>
+            <div class="feature-t">不用装 Python</div>
+            <div class="feature-d">打包好的程序自带运行环境，双击即开，不依赖本机解释器。</div>
+          </div>
+          <div class="feature">
+            <div class="feature-ico">✓</div>
+            <div class="feature-t">ffmpeg 已内置</div>
+            <div class="feature-d">自动抽视频首帧当封面开箱即用，无需另外安装。</div>
+          </div>
+          <div class="feature">
+            <div class="feature-ico">✓</div>
+            <div class="feature-t">数据只在本地</div>
+            <div class="feature-d">登录状态与投稿历史都存在本机，不上传任何云端。</div>
+          </div>
         </div>
-        <p>程序左侧是五个页签，按投稿顺序排：<b>登录 → 投稿 → 批量任务 → 历史 → 设置</b>。
-        窗口最底下有一条常驻状态栏，随时能看到<b>是否已登录</b>和 <b>ffmpeg 是否就绪</b>，
+
+        <h3>投稿流程</h3>
+        <p class="muted" style="margin:-2px 0 2px">左侧五个页签按投稿顺序排，下面就是完整流程：</p>
+        <div class="flow">
+          <span class="flow-step">登录</span>
+          <span class="flow-arrow">→</span>
+          <span class="flow-step">投稿</span>
+          <span class="flow-arrow">→</span>
+          <span class="flow-step">批量任务</span>
+          <span class="flow-arrow">→</span>
+          <span class="flow-step">历史</span>
+          <span class="flow-arrow">→</span>
+          <span class="flow-step">设置</span>
+        </div>
+        <p>窗口最底下有一条常驻状态栏，随时能看到<b>是否已登录</b>和 <b>ffmpeg 是否就绪</b>，
         不用进设置页翻。</p>
         <p>所有耗时操作（取二维码、上传）都在后台跑，窗口不会卡住；
         登录和投稿都能随时点「取消」。</p>
-        <div class="note warn"><b>第一次用？</b>
-        先拿一个几十 MB 的小视频，把「登录 → 上传 → 拿到 BV 号」整条跑通，
-        再批量用。</div>
+
+        <div class="callout">
+          <div class="callout-ico">!</div>
+          <div><b>第一次用？</b>
+          先拿一个几十 MB 的小视频，把「登录 → 上传 → 拿到 BV 号」整条跑通，再批量用。</div>
+        </div>
       </div>
     </section>
 
@@ -297,7 +358,7 @@ pre.tree{
     <!-- ============ 数据在哪 ============ -->
     <section id="data">
       <div class="card">
-        <h2><i class="ico">🗂</i>数据在哪</h2>
+        <h2><i class="ico">存</i>数据在哪</h2>
         <p>登录状态、界面偏好、投稿历史都在<b>用户目录</b>下，不在安装目录：</p>
 <pre class="tree">%USERPROFILE%\.config\bilibili_submit\
 ├── cookie.json       登录状态
