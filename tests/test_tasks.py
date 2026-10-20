@@ -456,6 +456,38 @@ def test_empty_dir_keeps_previous_tasks(tmp_path, monkeypatch):
 
 
 @needs_display
+def test_load_error_shows_actionable_hint(tmp_path, monkeypatch):
+    """C2：加载失败要给用户下一步指引，而不只是报原因。
+
+    空目录走 ``ConfigError('目录里没有找到视频文件')``，指引应点出
+    「重新选择目录」。上一批任务仍保留（守门测试已覆盖）。
+    """
+    import tkinter as tk
+
+    _make_video(tmp_path, "a.mp4")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        _load_folder(root, view, tmp_path, monkeypatch)
+        assert len(view._tasks) == 1
+
+        view._log.clear()
+        _load_folder(root, view, empty, monkeypatch)
+
+        text = view._log._text.get("1.0", "end")
+        assert "加载失败" in text
+        assert "请重新选择包含视频文件的目录" in text, (
+            f"失败应给出可操作指引，实际日志：{text!r}"
+        )
+    finally:
+        root.destroy()
+
+
+
+@needs_display
 def test_yaml_mode_keeps_per_task_values(tmp_path, monkeypatch):
     """高级 yaml 入口不能被统一参数覆盖掉。
 

@@ -12,6 +12,7 @@ CLI 的 :func:`~bilibili_submit.auth.login_interactive` 是**阻塞**的，
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING
@@ -28,7 +29,14 @@ from ...client import BiliClient
 from ...exceptions import BiliError
 from .. import theme
 from ..qr import draw_placeholder, draw_qr
-from ..widgets import Card, LogConsole, FilledButton, OutlinedButton, PageHeader
+from ..widgets import (
+    Card,
+    LogConsole,
+    FilledButton,
+    OutlinedButton,
+    PageHeader,
+    ScrollArea,
+)
 from ..workers import Cancelled, Worker
 
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
@@ -40,25 +48,32 @@ POLL_INTERVAL = 2.0
 DEFAULT_TIMEOUT = 180
 
 
+class _QrExpired(BiliError):
+    """二维码已过期（轮询阶段，二维码本身已生成）。"""
+
+
+class _QrTimeout(BiliError):
+    """登录轮询超时（二维码已生成但一直没扫）。"""
+
+
+@dataclass
 class _PendingQrCode:
-    """内部哨兵，借进度通道把「二维码已就绪」送回主线程。
+    """经进度通道把「二维码已就绪 + URL」一起送回主线程。
 
     :attr:`~..workers.Worker.run` 的 ``report`` 接受 ``str | Event``，
-    但二维码 URL 得等拿到了才知道，没法预先拼进日志文案。这里用哨兵
-    对象当信号，主线程收到后再从 :attr:`LoginView._qr_url` 取真正的 URL。
+    但二维码 URL 得等拿到了才知道，没法预先拼进日志文案。这里把 URL
+    作为值随信号一起回传，工作线程**不再**跨线程写
+    :attr:`LoginView._qr_url`（那是 Tk 状态，只能在主线程碰）。
     """
 
-    __slots__ = ()
+    url: str
 
     def __repr__(self) -> str:  # pragma: no cover - 仅调试用
-        return "<pending-qr>"
+        return f"<pending-qr {self.url!r}>"
 
 
 class LoginView(ttk.Frame):
     """扫码登录页。"""
-
-    #: 见 :class:`_PendingQrCode`
-    _PENDING_QR = _PendingQrCode()
 
     def __init__(self, master: tk.Misc, app: "AppHost") -> None:
         super().__init__(master, style="TFrame")
@@ -82,8 +97,13 @@ class LoginView(ttk.Frame):
         ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_LG))
 
     def _build_body(self) -> None:
-        card = Card(self)
-        card.grid(row=1, column=0, sticky="nsew")
+        # 登录内容（二维码 + 状态 + 按钮 + 日志）在矮窗口下会超出可视区，
+        # 和其它页面一样包进 ScrollArea 兜住——否则二维码被裁掉还无从滚动。
+        # ScrollArea.body 本身就是 Card.TFrame + 同样的 padding，下面的
+        # 几十处引用一行都不用改。
+        area = ScrollArea(self)
+        area.grid(row=1, column=0, sticky="nsew")
+        card = area.body
         card.columnconfigure(0, weight=1)
 
         # 二维码区
@@ -176,12 +196,12 @@ class LoginView(ttk.Frame):
     def _on_progress(self, message: str) -> None:
         """处理工作线程上报的进度。
 
-        二维码本身不是文字进度，用一个内部的哨兵对象搭桥：
-        ``_qr_url`` 借 :attr:`_PENDING_QR` 这个标记传回来，
-        这样就不用在 worker 线程里直接操作 Tk 控件。
+        二维码本身不是文字进度，借 :class:`_PendingQrCode` 把 URL 一起
+        回传（它在主线程被 :meth:`_show_qr` 接收），工作线程不再跨线程
+        写 :attr:`_qr_url`。
         """
-        if message is self._PENDING_QR:
-            self._show_qr(self._qr_url)
+        if isinstance(message, _PendingQrCode):
+            self._show_qr(message.url)
             return
         self._log.append(message)
 
@@ -199,8 +219,8 @@ class LoginView(ttk.Frame):
         session = new_session(self.app.ctx.proxy)
 
         qr = request_qrcode(session)
-        self._qr_url = qr.url
-        report(self._PENDING_QR)
+        # URL 随哨兵一起回传，不在工作线程里写 _qr_url（那是 Tk 状态）。
+        report(_PendingQrCode(qr.url))
         report("二维码已生成，请用手机 B 站 App 扫码")
 
         deadline = time.time() + DEFAULT_TIMEOUT
@@ -224,13 +244,15 @@ class LoginView(ttk.Frame):
                 cookies.update(ensure_buvid(client))
                 return cookies
             if status.expired:
-                raise BiliError("二维码已失效，请点击「获取二维码」重新生成")
+                raise _QrExpired("二维码已失效，请点击「获取二维码」重新生成")
 
             time.sleep(POLL_INTERVAL)
 
-        raise BiliError(f"登录超时（{DEFAULT_TIMEOUT}s），请重试")
+        raise _QrTimeout(f"登录超时（{DEFAULT_TIMEOUT}s），请重试")
 
     def _show_qr(self, url: str) -> None:
+        # 在主线程写 _qr_url（供「复制链接」用），不再由工作线程碰 Tk 状态。
+        self._qr_url = url
         draw_qr(self._canvas, url)
         self._link.configure(text=f"扫码不便？点此复制链接：{url}")
         self._status.configure(text="等待扫码…", foreground=theme.INK_SECOND)
@@ -277,9 +299,20 @@ class LoginView(ttk.Frame):
         if isinstance(exc, Cancelled):
             self._status.configure(text="已取消", foreground=theme.INK_MUTED)
             return
-        # 二维码没出来是最常见的故障，而日志区在卡片最下方，
-        # 用户未必会往下看。状态标签紧挨着二维码，必须在这里给出可读原因。
-        self._status.configure(text="获取二维码失败", foreground=theme.DANGER)
+        # 错误文案要分态：二维码还没生成出来（申请/网络/风控）和「二维码
+        # 已失效 / 已超时 / 登录失败」是不同的事，混成一句「获取二维码失败」
+        # 会误导用户去排查网络而不是重新点一下获取。
+        if isinstance(exc, _QrExpired):
+            text = "二维码已失效，请重新获取"
+        elif isinstance(exc, _QrTimeout):
+            text = "登录超时，请重新获取"
+        elif not self._qr_url:
+            # 二维码从未生成出来：一定是申请或轮询那一步的网络/风控问题
+            text = "获取二维码失败"
+        else:
+            # 二维码生成过、却没登录成功（例如缺 cookie），不要说成「获取失败」
+            text = "登录失败，请重新获取"
+        self._status.configure(text=text, foreground=theme.DANGER)
         # BiliError 会把 message + hint 一起拼进 str(exc)，
         # 所以 hint 已经在错误行里了，别再单独打一遍「建议」。
         self._log.append(f"错误：{exc}")

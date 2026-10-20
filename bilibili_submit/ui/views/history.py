@@ -118,6 +118,9 @@ class HistoryView(ttk.Frame):
         holder.columnconfigure(0, weight=1)
         holder.rowconfigure(0, weight=1)
 
+        # 可见行数不再写死 12：由 apply_layout（窗口档位/尺寸变化时由 App
+        # 调用，属于外部事件、不会自触发）按容器高度换算行数，详见
+        # _resize_tree。初始 12 只是占位，apply_layout 会按实际高度覆盖。
         self._tree = ttk.Treeview(
             holder, columns=COLUMNS, show="headings", height=12
         )
@@ -170,6 +173,33 @@ class HistoryView(ttk.Frame):
         for column, width in widths.items():
             self._tree.column(column, width=width)
 
+    def _resize_tree(self, _event: tk.Event | None = None) -> None:
+        """按容器高度换算 Treeview 的可见行数。
+
+        每行约 :data:`~.theme.ROW_HEIGHT` 像素（主题里 Treeview 的行高）。
+        容器高度没量出来（还在布局、或空状态被 grid_remove 收起）时不动手，
+        保留上一次的行数，不闪。
+
+        注意：**不要**把这个方法绑到容器的 ``<Configure>``——改 Treeview 的
+        ``height`` 会被 grid 的 weight 行当作「内容最小高度」反噬回去，容器
+        一涨又触发 Configure，形成死循环。所以只由 :meth:`apply_layout`
+        （窗口尺寸变化，外部事件）驱动，单次结算、不会自触发。
+        """
+        available = self._list_holder.winfo_height()
+        if available < theme.ROW_HEIGHT:
+            return
+        rows = max(5, int(available / theme.ROW_HEIGHT))
+        if rows != int(self._tree.cget("height")):
+            self._tree.configure(height=rows)
+
+    def apply_layout(self, spec: "layout.Layout") -> None:
+        """窗口尺寸变化时让表格跟着长高/变矮（覆盖默认空实现）。
+
+        ``App`` 在切页和拖窗口时都会调一次，且只做几何、不刷数据——
+        这里只重算可见行数，符合那条纪律。
+        """
+        self._resize_tree()
+
     def refresh(self, force: bool = False) -> None:
         """重新读取历史文件并填充列表。
 
@@ -207,6 +237,10 @@ class HistoryView(ttk.Frame):
 
         self._placeholder.grid_remove()
         self._list_holder.grid()
+        # 列表容器刚显示，按需把可见行数撑满（窗口高就多显示几行）。
+        # 不绑 <Configure>：改 height 会被 weight 行反噬成死循环，改由
+        # apply_layout 在窗口尺寸变化时驱动。
+        self._resize_tree()
 
         # 倒序：最近的在最上面
         for entry in list(entries)[-VISIBLE_LIMIT:][::-1]:

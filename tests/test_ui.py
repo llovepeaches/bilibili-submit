@@ -1838,9 +1838,8 @@ def test_login_view_draws_qr_via_main_thread_channel(monkeypatch):
             login_mod, "draw_qr", lambda canvas, url: drawn.__setitem__("url", url)
         )
 
-        # 直接喂哨兵，验证 _on_progress 会转成 _show_qr
-        view._qr_url = "https://example.test/qr"
-        view._on_progress(view._PENDING_QR)
+        # 直接喂带 URL 的哨兵，验证 _on_progress 会转成 _show_qr
+        view._on_progress(login_mod._PendingQrCode("https://example.test/qr"))
         root.update_idletasks()
 
         assert drawn.get("url") == "https://example.test/qr", (
@@ -1857,12 +1856,13 @@ def test_login_progress_channel_does_not_leak_sentinel():
     """哨兵不该被当成文字打进日志，否则用户会看到 <pending-qr>。"""
     import tkinter as tk
 
+    from bilibili_submit.ui.views import login as login_mod
+
     root = tk.Tk()
     try:
         _app, view = _build_login_view(root)
-        view._qr_url = "https://example.test/qr"
         view._log.clear()
-        view._on_progress(view._PENDING_QR)
+        view._on_progress(login_mod._PendingQrCode("https://example.test/qr"))
         text = view._log._text.get("1.0", "end")
         assert "pending-qr" not in text, f"哨兵泄漏进了日志：{text!r}"
     finally:
@@ -1906,8 +1906,8 @@ def test_login_view_uses_shared_session_factory(monkeypatch):
 
         assert "proxy" in captured, "登录流程应通过 new_session() 构造会话"
         # 二维码就绪信号必须发出去，否则界面永远停在占位图
-        assert view._PENDING_QR in messages, (
-            "拿到二维码后应通过 report 发哨兵，触发主线程绘制"
+        assert any(isinstance(m, login_mod._PendingQrCode) for m in messages), (
+            "拿到二维码后应通过 report 发带 URL 的哨兵，触发主线程绘制"
         )
     finally:
         root.destroy()

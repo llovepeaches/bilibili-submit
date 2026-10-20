@@ -188,6 +188,13 @@ def safe_after(root: tk.Misc, delay_ms: int, fn: Callable[..., Any], *args: Any)
             fn(*args)
         except (tk.TclError, RuntimeError):
             pass  # 窗口已关闭或事件循环已停，回调没有意义了
+        except Exception:  # noqa: BLE001 - 其它异常不能静默
+            # 否则回调里抛 ValueError/KeyError 等会直接逃逸到 stderr 且无
+            # traceback：界面可能永远停在「执行中」、既不能重试也不能取消，
+            # 事后查日志还一无所获。打印堆栈至少让人知道死在哪。
+            import traceback
+
+            traceback.print_exc()
 
     try:
         return root.after(delay_ms, wrapped)

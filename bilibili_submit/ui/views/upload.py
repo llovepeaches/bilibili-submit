@@ -22,6 +22,15 @@ from ...metadata import COMMON_TIDS
 from ...scheduler import RunOptions, run_task
 from ...submit import get_backend
 from .. import theme
+from ..validation import (
+    MAX_DESC,
+    MAX_TAGS,
+    MAX_TITLE,
+    parse_offset,
+    validate_desc,
+    validate_tag_list,
+    validate_title,
+)
 from ..widgets import (
     ActionBar,
     ExpansionPanel,
@@ -50,12 +59,9 @@ __all__ = [
     "COPYRIGHT_OPTIONS",
 ]
 
-#: 标签上限，B 站硬性限制
-MAX_TAGS = 10
-#: 标题字数上限，B 站硬性限制
-MAX_TITLE = 80
-#: 简介字数上限
-MAX_DESC = 2000
+# MAX_TAGS / MAX_TITLE / MAX_DESC 的权威定义见 ui.validation，这里不再重复；
+# 下面的计数 / 预检展示直接引用导入进来的同名常量。
+
 #: 建议标签数下限。低于它预检行会提示——标签太少影响推荐，但不算错误
 SUGGESTED_TAGS = 3
 
@@ -696,13 +702,8 @@ class UploadView(ttk.Frame):
         tid = parse_tid(self._tid_var.get(), default=21)
         flags = self._option_switches.flags
 
-        offset_text = self._dtime_var.get().strip()
-        offset = None
-        if offset_text:
-            try:
-                offset = float(offset_text)
-            except ValueError as exc:
-                raise BiliError(f"延时发布小时数不是数字: {offset_text}") from exc
+        # 延迟发布：非数字或不足 4 小时都拦（与 metadata.resolve_dtime 一致）
+        offset = parse_offset(self._dtime_var.get().strip())
 
         # 转载缺来源，服务端只回一个干巴巴的 21004，不如当场拦住
         copyright = parse_copyright(self._copyright_var.get())
@@ -711,12 +712,11 @@ class UploadView(ttk.Frame):
             raise BiliError("选了「转载」就必须填转载来源（原视频链接或出处）")
 
         title = self._title_var.get().strip()
-        if len(title) > MAX_TITLE:
-            raise BiliError(f"标题超过 {MAX_TITLE} 字（当前 {len(title)} 字）")
+        validate_title(title)
         desc = self._desc_text.get("1.0", "end-1c").strip()
-        if len(desc) > MAX_DESC:
-            raise BiliError(f"简介超过 {MAX_DESC} 字（当前 {len(desc)} 字）")
+        validate_desc(desc)
         tags = self._tag_field.text
+        validate_tag_list(self._tag_field.tags)
 
         return TaskConfig(
             name=file.stem,

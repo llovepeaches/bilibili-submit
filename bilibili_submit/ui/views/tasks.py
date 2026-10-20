@@ -71,6 +71,7 @@ from ..widgets import (
     SummaryBar,
     TextButton,
 )
+from ..validation import parse_offset
 from ..workers import Cancelled, Worker
 from .upload import (
     COPYRIGHT_OPTIONS,
@@ -180,6 +181,9 @@ class TasksView(ttk.Frame):
         self._load_worker = Worker(self)
         #: 界面偏好读写。纯小文件，但失败不该弹窗打断用户。
         self._state_worker = Worker(self)
+        #: 最近一次待保存的界面状态。上一轮保存还没跑完时，新的保存
+        #: 不丢弃，而是暂存在这里，等上一轮跑完再补一次（见 _save_state）。
+        self._pending_state: "Any" = None
         #: 当前正在跑的 worker，取消按钮作用于它
         self._active_worker: Worker[Any] | None = None
 
@@ -713,18 +717,35 @@ class TasksView(ttk.Frame):
         self._shared_section.set_hint(" · ".join(parts))
 
     def _save_state(self) -> None:
-        """异步保存偏好。失败只在日志里说一次，不弹窗打断用户。"""
-        state = self._current_state()
+        """异步保存偏好。失败只在日志里说一次，不弹窗打断用户。
+
+        若上一轮保存还没跑完，不丢弃本次状态，而是暂存为「待保存」——
+        上一轮跑完见还有 pending 就再补一次，保证用户最后一次改动一定落盘。
+        """
+        self._pending_state = self._current_state()
+        if self._state_worker.running:
+            return
+        self._flush_state()
+
+    def _flush_state(self) -> None:
+        """真正发起一次保存（仅在状态 worker 空闲时调用）。"""
+        state = self._pending_state
+        self._pending_state = None
         try:
-            worker = self._state_worker
-            if worker.running:
-                return
-            worker.run(
+            self._state_worker.run(
                 lambda _report, _cancelled: save_ui_state(state, self._state_file),
+                on_done=lambda _value: self._after_state_saved(),
                 on_error=lambda exc: self._log.append(f"偏好保存失败：{exc}"),
             )
-        except RuntimeError:
-            pass
+        except RuntimeError as exc:
+            # 仅窗口已销毁这类启动失败才静默；其它异常要留下痕迹，
+            # 否则偏好偷偷没存上、用户还以为存了。
+            self._log.append(f"偏好保存失败：{exc}")
+
+    def _after_state_saved(self) -> None:
+        """一轮保存跑完：若期间又有新改动，补一次，避免静默丢最新状态。"""
+        if self._pending_state is not None and not self._state_worker.running:
+            self._flush_state()
 
     # ---------- 任务来源：文件夹 ----------
 
@@ -843,8 +864,12 @@ class TasksView(ttk.Frame):
         self._active_worker = None
         cfg, tasks = result
         if not tasks:
+            # 加载成功但一个任务都没有：切到「没有任务」占位图（含「选文件夹」
+            # 按钮），并给一句和占位图一致的说明。注意这和「加载失败」是两回事——
+            # 失败走 _on_load_error 会保留上一批任务，这里是从干净状态进入空结果。
             self._source_pill.set("没有可投稿的任务", "warn")
-            self._log.append("没有找到可投稿的任务")
+            self._log.append("这个文件夹里没有可投稿的任务")
+            self._on_table_filled(False)
             return
 
         self._cfg = cfg
@@ -884,6 +909,22 @@ class TasksView(ttk.Frame):
         # 「我明明选好了怎么又没了」
         self._source_pill.set("加载失败", "error")
         self._log.append(f"加载失败：{exc}")
+        # C2：失败只报原因不够，补一句可操作指引（上一批仍保留）。
+        # 按异常内容挑最贴的那条，别一股脑塞三种让用户自己猜。
+        self._log.append(self._load_error_hint(exc))
+
+    @staticmethod
+    def _load_error_hint(exc: BaseException) -> str:
+        """加载失败后的下一步指引，按异常内容挑最贴切的一条。"""
+        text = str(exc)
+        lowered = text.lower()
+        if "没有找到视频文件" in text:
+            return "请重新选择包含视频文件的目录，或换一个文件夹"
+        if "yaml" in lowered or "syntax" in lowered or "缩进" in text:
+            return "请检查 YAML 语法（缩进、冒号、引号）后重试"
+        if "权限" in text or isinstance(exc, OSError):
+            return "请检查路径是否存在、是否有读取权限后重试"
+        return "可以重新选择目录，或检查路径与文件后重试"
 
     def _apply_source_mode(self) -> None:
         """yaml 模式下把顶部参数置灰。
@@ -1257,15 +1298,24 @@ class TasksView(ttk.Frame):
     def _set_loading(self, loading: bool) -> None:
         """目录扫描/加载期间的界面状态。
 
-        刻意**不碰**主按钮的「取消」语义：加载时点主按钮没有意义
-        （任务列表还是上一批），但让它保持禁用 + 说明原因才对。
+        加载期把主按钮变成「取消」并指向 :meth:`_cancel`——取消按钮是
+        动态读 :attr:`_active_worker` 的，加载期它就是正在扫目录的那个
+        worker，点和「投稿中取消」是同一个入口，逻辑不用分两套。慢扫或
+        卡住的文件夹，用户终于能停下来，而不是只能干等或关窗。
         """
         self._busy = loading
         if loading:
-            self._action_bar.block("正在扫描文件夹…")
+            self._action_bar.set_busy(
+                True,
+                cancel=self._cancel,
+                cancel_text="取消",
+                busy_title="正在扫描文件夹",
+            )
         else:
-            # 走 _refresh_action_bar 而不是直接解禁用：加载失败时
-            # 列表里可能还是上一批任务，那批能投——判断依据在那边
+            # 先让主按钮退出「取消」形态回到空闲态，再用汇总逻辑决定能否点：
+            # 加载失败时列表里可能还是上一批任务，那批能投，判断依据在
+            # _refresh_action_bar 那边。
+            self._action_bar.set_busy(False)
             self._refresh_action_bar()
         self._retry_button.state(["disabled"])
         self._pick_button.state(["disabled"] if loading else ["!disabled"])
@@ -1480,14 +1530,12 @@ def _group_to_task(group: PartGroup) -> TaskConfig:
 
 
 def _parse_offset(text: str) -> float | None:
-    """把「6」这样的输入转成小时数。空串表示立即发布。"""
-    raw = (text or "").strip()
-    if not raw:
-        return None
-    try:
-        return float(raw)
-    except ValueError as exc:
-        raise BiliError(f"延时发布小时数不是数字: {raw}") from exc
+    """把「6」这样的输入转成小时数。空串表示立即发布。
+
+    下限（距今至少 4 小时）与 :func:`bilibili_submit.metadata.resolve_dtime`
+    一致，交给 :func:`..validation.parse_offset` 统一校验。
+    """
+    return parse_offset(text)
 
 
 def _format_offset(value: float) -> str:

@@ -24,6 +24,7 @@ from ...config import AppConfig, TaskConfig
 from ...exceptions import BiliError, NotLoggedInError
 from ...scheduler import RunOptions, TaskOutcome, run_task
 from ...submit import get_backend
+from ..validation import validate_desc, validate_tag_text, validate_title
 from ..workers import Cancelled, Event
 from .tasks_table import _truncate
 
@@ -192,6 +193,14 @@ class BatchRunController:
             selected = [
                 (index, replace(self._read_tasks()[index])) for index in indexes
             ]
+
+        # 长度 / 数量校验（与单文件页一致）：批量页之前完全没拦，超长简介
+        # 会被服务端逐条打回。这里在起线程前拦住，错误信息走 run() 的
+        # 「参数有误」分支，不会闪一圈「进行中」再报错。
+        for _index, task in selected:
+            validate_title(task.title or "")
+            validate_desc(task.desc or "")
+            validate_tag_text(task.tag or "")
         return cfg, selected
 
     # ---------- 工作线程 ----------
