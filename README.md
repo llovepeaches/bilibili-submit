@@ -66,21 +66,25 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 
 目标机器**不需要装 Python**。
 
+**[⬇ 前往 Releases 页面下载](https://github.com/llovepeaches/bilibili-submit/releases/latest)**
+—— 所有版本都发布在这个页面。下表点任意资产名都会**跳转到 Releases 页面**，
+在那里选择最新版下载（体积为参考值，以实际发布为准）。
+
 ### 图形界面
 
 | 资产 | 体积 | 说明 |
 |---|---|---|
-| [`bilibili-submit-setup.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.10/bilibili-submit-setup.exe) | ~33 MB | **安装版（推荐）**。开始菜单有入口，能干净卸载 |
-| [`bilibili-submit-gui-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.10/bilibili-submit-gui-portable.exe) | ~72 MB | 便携版，免安装，拷走即用 |
+| [`bilibili-submit-setup.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~33 MB | **安装版（推荐）**。开始菜单有入口，能干净卸载 |
+| [`bilibili-submit-gui-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~72 MB | 便携版，免安装，拷走即用 |
 
 ### 命令行
 
 | 资产 | 体积 | 说明 |
 |---|---|---|
-| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.10/bilibili-submit-standalone.exe) | ~70 MB | 单文件，ffmpeg 已内置 |
-| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.10/bilibili-submit.exe) | ~10 MB | 轻量 exe |
-| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.10/bilibili-submit-full-windows.zip) | ~41 MB | 轻量 exe + 外置 ffmpeg，**启动最快** |
-| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/download/v0.2.10/bilibili-submit-mini-windows.zip) | ~10 MB | 轻量 exe + 配置与文档 |
+| [`bilibili-submit-standalone.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~70 MB | 单文件，ffmpeg 已内置 |
+| [`bilibili-submit.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~10 MB | 轻量 exe |
+| [`bilibili-submit-full-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~41 MB | 轻量 exe + 外置 ffmpeg，**启动最快** |
+| [`bilibili-submit-mini-windows.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~10 MB | 轻量 exe + 配置与文档 |
 
 **怎么选：**
 
