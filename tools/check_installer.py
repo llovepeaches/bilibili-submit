@@ -1,9 +1,9 @@
 """installer.iss 的静态检查。
 
 ISCC 只能在 Windows 上跑，所以这里**不是**替代编译，而是把低级错误
-挡在提交之前：段名拼错、指令拼写不对、#define 没定义、每行分号、
-大括号不配对、文件路径对不上仓库实际布局、以及安装向导的消息文件
-是不是真的中文。
+挡在提交之前：段名拼错、指令拼写不对、用了 Inno 已移除/废弃的指令、
+#define 没定义、每行分号、大括号不配对、文件路径对不上仓库实际布局、
+以及安装向导的消息文件是不是真的中文。
 
 真正的验证仍然是 CI 里Windows runner 上跑 ISCC。
 """
@@ -39,12 +39,15 @@ ISS = ROOT / "installer.iss"
 
 #: Inno Setup 的合法段名。写错段名 ISCC 会报"section not found"，
 #: 但那是在 CI 上才看得到——这里提前拦。
+#: 名单以 Inno Setup 6 帮助文档的段目录为准。注意 **没有 [Colors]**：
+#: ISCC 对不认识的段名不报错、直接静默忽略（已实测 6.7.1），写错
+#: 段名的指令等于没配，比拼错指令更难发现。
 SECTIONS = {
     "[Setup]", "[Types]", "[Components]", "[Tasks]", "[Files]", "[Dirs]",
     "[Icons]", "[INI]", "[Registry]", "[Run]", "[UninstallRun]",
     "[UninstallDelete]", "[InstallDelete]", "[Languages]", "[CustomMessages]",
-    "[Messages]", "[Code]", "[License]", "[InfoBefore]", "[Wizard]",
-    "[WizardImages]", "[Components]", "[Output]", "[Colors]",
+    "[LangOptions]", "[Messages]", "[Code]", "[License]", "[InfoBefore]",
+    "[InfoAfter]", "[Permissions]", "[Script]",
 }
 
 #: 仓库里的安装器资源目录（[Languages] 引用的消息文件放在这儿）。
@@ -62,9 +65,33 @@ DIRECTIVES = {
     "Parameters", "Check", "AfterInstall", "BeforeInstall", "Components",
     "MinVersion", "DisableDirPage", "AlwaysRestart", "AppMutex",
     "CloseApplications", "RestartApplications", "SetupLogging",
-    "WizardStyle", "WizardImageFile", "WizardSmallBitmapImage",
-    "WizardResizable", "WizardColor", "WizardColor2", "WizardColorDirection",
-    "BackColor", "BackColor2", "BackColorDirection",
+    "WizardImageFile", "WizardSmallImageFile",
+    "WizardBackColor", "WizardImageBackColor", "WizardSmallImageBackColor",
+}
+
+#: Inno 已经移除或已废弃的指令：命中即失败，并告知替代品。
+#:
+#: 与「拼错」不同，「过期」有两种死法，都很难查：
+#:   * ``WizardSmallBitmapImage`` —— Inno Setup 6 早期就更名为
+#:     WizardSmallImageFile，现行版本直接不认，ISCC 报
+#:     Unrecognized directive 中断编译；
+#:   * ``BackColor`` / ``BackColor2`` / ``BackSolid`` / ``WizardColor``
+#:     等 —— 要么从来不存在，要么被现行 Inno 标记为
+#:     obsolete and ignored，ISCC 顶多给一条 warning，
+#:     装出来的向导颜色根本没变。
+#: v0.3.0 的 CI 就炸在第一条：choco 的 Inno 静默升级到 6.7.1，
+#: 而当时 installer.iss 从没被任何一版 ISCC 编译过。所以这里
+#: 在提交前硬拦，别等下一轮 CI。
+REMOVED_DIRECTIVES = {
+    "WizardSmallBitmapImage": "改用 WizardSmallImageFile（收 PNG，支持真透明）",
+    "BackColor": "现行 Inno 标记 obsolete and ignored，改用 WizardBackColor",
+    "BackColor2": "现行 Inno 标记 obsolete and ignored，改用 WizardBackColor / WizardImageBackColor",
+    "BackSolid": "现行 Inno 标记 obsolete and ignored，改用 WizardBackColor",
+    "WizardColor": "不存在；内页底色用 WizardBackColor",
+    "WizardColor2": "不存在；侧栏图底色用 WizardImageBackColor",
+    "WizardColorDirection": "不存在；渐变方向由 Inno 自己决定，删掉这行",
+    "BackColorDirection": "现行 Inno 标记 obsolete and ignored，删掉这行",
+    "WizardResizable": "Inno 6.6.0 起被移除（向导窗口不再可拖放），删掉这行",
 }
 
 #: Inno Setup 事件函数的原型：名字 → function / procedure。
@@ -157,7 +184,12 @@ def _check_braces(text: str) -> None:
 
 
 def _check_directives(lines: list[str]) -> None:
-    """指令拼写。``[Code]`` 段里是 Pascal，不是 Key=Value，跳过。"""
+    """指令拼写与过期指令。``[Code]`` 段里是 Pascal，不是 Key=Value，跳过。
+
+    过期指令（:data:`REMOVED_DIRECTIVES`）走**失败**而不是警告：
+    它们不是拼错，是 Inno 已经改了行为——轻则被静默忽略（配了等于
+    没配），重则直接中断编译。让它在提交前就红，比等 CI 那 2 分钟强。
+    """
     in_code = False
     for number, line in enumerate(lines, 1):
         stripped = line.strip()
@@ -170,6 +202,12 @@ def _check_directives(lines: list[str]) -> None:
         if not match:
             continue
         key = match.group(1)
+        if key in REMOVED_DIRECTIVES:
+            fail(
+                f"第 {number} 行：{key} 是 Inno Setup 已移除/废弃的指令"
+                f"——{REMOVED_DIRECTIVES[key]}"
+            )
+            continue
         if key not in DIRECTIVES:
             warn(
                 f"第 {number} 行：{key} 不在已知指令表里"
@@ -318,24 +356,32 @@ def _check_files_section(text: str) -> None:
         fail("缺 AppId：没有它 Inno Setup 认不出是同一个程序，升级会变成装两份")
 
 
-def _check_icon(defines: dict[str, str]) -> None:
-    """图标文件必须存在，否则 ISCC 报 "icon file not found"。"""
-    icon = defines.get("SetupIconFile", "")
+def _check_icon(setup_keys: dict[str, str]) -> None:
+    """图标文件必须存在，否则 ISCC 报 "icon file not found"。
+
+    ``setup_keys`` 是 ``[Setup]`` 段的键值对。曾经这里传的是
+    ``#define`` 字典——SetupIconFile 是 [Setup] 指令不是 define，
+    查出来的永远是空串，这个检查等于不存在（实测过：把图标指向
+    不存在的文件，检查器照样退出 0）。
+    """
+    icon = setup_keys.get("SetupIconFile", "")
     if not icon:
         return
     if not (ROOT / icon.replace("\\", "/")).is_file():
         fail(f"SetupIconFile 指向的文件不存在：{icon}")
 
 
-def _check_wizard_images(defines: dict[str, str]) -> None:
+def _check_wizard_images(setup_keys: dict[str, str]) -> None:
     """向导侧栏图 / 头部 logo 指向的文件必须存在。
 
     这两项是 beautify 时新加的。ISCC 对缺失的图片同样直接报
     ``file not found`` 而中断编译，但失败信息离「图片丢了」很远，
     排查要绕一圈。和 ``_check_icon`` 一样，在提交前就拦下来。
+
+    注意参数同 :func:`_check_icon`：查的是 [Setup] 段的值。
     """
-    for key in ("WizardImageFile", "WizardSmallBitmapImage"):
-        path = defines.get(key, "")
+    for key in ("WizardImageFile", "WizardSmallImageFile"):
+        path = setup_keys.get(key, "")
         if not path:
             continue
         if not (ROOT / path.replace("\\", "/")).is_file():
@@ -519,8 +565,11 @@ def main() -> int:
     _check_build_layout(text, defines)
     _check_files_section(text)
     _check_code_prototypes(text)
-    _check_icon(defines)
-    _check_wizard_images(defines)
+    # 图标与向导图片的存在性查的是 [Setup] 段的值，不是 #define——
+    # 两者曾经混用一个 dict，那两个检查从未生效过。
+    setup_keys = _parse_section_keys(text, "Setup")
+    _check_icon(setup_keys)
+    _check_wizard_images(setup_keys)
     _check_languages(text)
 
     for message in warnings:

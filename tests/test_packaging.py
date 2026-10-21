@@ -450,6 +450,11 @@ def tmp_installer_copy(eol: str = "\r\n") -> Path:
     而 dist\\ 不存在时它会打印「跳过产物校验」并正常退出，所以
     不需要 PyInstaller 的真实输出。
 
+    ``assets\\`` 整个目录都要带：检查器要验证 SetupIconFile /
+    WizardImageFile / WizardSmallImageFile 指向的文件存在
+    （这三个存在性检查曾经读错字典、从未生效，修好后副本里
+    没有 assets\\ 就会误报缺文件）。
+
     ``eol`` 决定 ``installer.iss`` 的行尾——``.gitattributes`` 把它
     定成 ``eol=crlf``，所以 Windows 上检出就是 CRLF（而不是 CI 上
     这个 Linux runner 看到的 LF）。BOM 必须带上，检查器会查这一条。
@@ -457,6 +462,7 @@ def tmp_installer_copy(eol: str = "\r\n") -> Path:
     workdir = Path(tempfile.mkdtemp(prefix="iss-crlf-"))
     (workdir / "tools").mkdir()
     (workdir / "installer_languages").mkdir()
+    shutil.copytree(ROOT / "assets", workdir / "assets")
     shutil.copy(
         ROOT / "tools" / "check_installer.py", workdir / "tools" / "check_installer.py"
     )
@@ -470,6 +476,92 @@ def tmp_installer_copy(eol: str = "\r\n") -> Path:
     for isl in (ROOT / "installer_languages").glob("*.isl"):
         shutil.copy(isl, workdir / "installer_languages" / isl.name)
     return workdir
+
+
+def _run_checker(workdir: Path) -> subprocess.CompletedProcess:
+    """在副本上跑静态检查，返回结果。"""
+    return subprocess.run(
+        [sys.executable, str(workdir / "tools" / "check_installer.py")],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        cwd=str(workdir),
+    )
+
+
+def test_checker_rejects_removed_wizard_directive():
+    """``WizardSmallBitmapImage`` 必须在提交前就被拦下。
+
+    v0.3.0 的发布 CI 就炸在这条指令上：choco 的 Inno 静默升级后
+    ISCC 报 Unrecognized directive 中断编译，而 installer.iss 从
+    v0.2.10 之后就没被任何一版 ISCC 编译过，错误一路溜到正式发布。
+    静态检查现在把它列为硬失败，并提示替代指令名。
+    """
+    workdir = tmp_installer_copy()
+    try:
+        iss = workdir / "installer.iss"
+        text = iss.read_text(encoding="utf-8-sig")
+        old = "WizardSmallImageFile=assets\\wizard-logo.png"
+        assert old in text, "installer.iss 用的不是新指令名了？同步改这条测试"
+        broken = text.replace(old, "WizardSmallBitmapImage=assets\\wizard-logo.png")
+        assert broken != text
+        iss.write_bytes(b"\xef\xbb\xbf" + broken.encode("utf-8"))
+        done = _run_checker(workdir)
+        assert done.returncode != 0, f"用了已移除的指令却没失败：\n{done.stdout}"
+        assert "WizardSmallBitmapImage" in done.stdout
+        assert "WizardSmallImageFile" in done.stdout, (
+            "失败信息里要给出替代指令名，否则报错等于没报"
+        )
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def test_checker_rejects_the_colors_section():
+    """``[Colors]`` 不是 Inno 的段——ISCC 静默忽略，颜色等于没配。
+
+    v0.3.0 的 installer.iss 曾把配色写进一个臆想出来的 [Colors] 段。
+    实测 ISCC 6.7.1 对不认识的段名**不报错**，编译「成功」，
+    但那些颜色一行都没生效。段名白名单现在只收真实存在的段。
+    """
+    workdir = tmp_installer_copy()
+    try:
+        iss = workdir / "installer.iss"
+        text = iss.read_text(encoding="utf-8-sig")
+        # 按行精确匹配：iss 的注释里合法地提到「[Colors]」这个词
+        # （提醒后人别写错段名）， substring 检查会误判。
+        section_lines = {line.strip() for line in text.splitlines()}
+        assert "[Colors]" not in section_lines, "iss 里怎么又有 [Colors] 段了？"
+        broken = text.replace("[Languages]", "[Colors]\nBackColor=$FBFAFD\n\n[Languages]", 1)
+        assert broken != text
+        iss.write_bytes(b"\xef\xbb\xbf" + broken.encode("utf-8"))
+        done = _run_checker(workdir)
+        assert done.returncode != 0, f"伪段名却没失败：\n{done.stdout}"
+        assert "[Colors]" in done.stdout
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def test_checker_catches_missing_wizard_image():
+    """图标/向导图片的存在性检查必须真的会开火。
+
+    曾经这两个检查读的是 ``#define`` 字典，而 SetupIconFile /
+    WizardImageFile 是 [Setup] 指令——查出来的永远是空串，
+    指向不存在的文件也照样退出 0（实测过，这是死代码）。
+    修好之后用「故意指错」来证明它活着。
+    """
+    workdir = tmp_installer_copy()
+    try:
+        iss = workdir / "installer.iss"
+        text = iss.read_text(encoding="utf-8-sig")
+        broken = text.replace(
+            "WizardImageFile=assets\\wizard-sidebar.png",
+            "WizardImageFile=assets\\no-such-image.png",
+        )
+        assert broken != text
+        iss.write_bytes(b"\xef\xbb\xbf" + broken.encode("utf-8"))
+        done = _run_checker(workdir)
+        assert done.returncode != 0, f"图片指错了却没失败：\n{done.stdout}"
+        assert "no-such-image.png" in done.stdout
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def test_installer_copies_the_whole_directory_recursively():

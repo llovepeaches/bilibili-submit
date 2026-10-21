@@ -244,6 +244,35 @@ imageio-ffmpeg），准备步骤失败本就会让 job 变红。
   「Inno Setup」（证明搜索方法本身没问题），但「选择目标位置」一条都
   搜不到——那三个字根本不在文件里。
 
+### 修复（安装向导：v0.3.0 首次发布被 CI 拦下）
+
+发布流水线在「编译安装器」步失败：`ISCC` 报
+`Unrecognized [Setup] section directive "WizardSmallBitmapImage"`。
+排障发现安装向导的美化配置（v0.2.10 之后加的）**从未被任何一版
+ISCC 编译过**——那条提交只推了 main、没打 tag，编译验证一路等到
+正式发布才第一次发生，于是炸在用户眼前。连带挖出四个问题：
+
+| 问题 | 实际后果 |
+| --- | --- |
+| `WizardSmallBitmapImage` 早已更名移除（现行 Inno 直接不认） | ISCC 中断编译，**发布失败** |
+| 臆想的 `[Colors]` 段——Inno 没有这个段，ISCC 对陌生段名静默忽略 | 编译「成功」但颜色一行都没生效 |
+| 24-bit BMP 的品红「色键透明」早已不支持（只剩 32-bit BMP alpha 一条路） | 就算编译过了，logo 的品红角落会原样印在向导上 |
+| 侧栏图 240×820，而 `WizardImageFile` 维持 164:314 的比例 | 渐变被拉扁变形 |
+
+修法：向导图全部改 PNG 真透明——新增 `tools/make_wizard_images.py`
+从源稿 BMP 生成（侧栏重采样到 480×918 保持比例、logo 把品红换成
+alpha 通道，转换是像素级精确的）；颜色迁到 `[Setup]` 段的
+`WizardBackColor` / `WizardImageBackColor` /
+`WizardSmallImageBackColor`（内页底色 = 程序 GUI 的 `PAPER`
+#FDFAFB，安装过程与装好的程序看起来是一套）；删掉已被 Inno 6.6.0
+移除的 `WizardResizable`。
+
+顺带加固：`check_installer.py` 的段名/指令表换成真实清单，新增
+**过期指令硬失败**（写出替代品，别等下一轮 CI）；修好两个从未生效
+的存在性检查（它们一直在读 `#define` 字典，而图标/图片路径是
+`[Setup]` 指令，查出来永远是空串）；CI 的 Inno Setup 版本钉死在
+本地验证过的 6.7.1——choco 不钉版本时的静默升级正是这次的事故源。
+
 ### 新增（安装器与打包）
 
 - **安装器里进了中文检查，而且是端到端的**。`build-installer.yml` 与

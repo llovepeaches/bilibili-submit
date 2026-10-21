@@ -85,9 +85,14 @@ jobs:
           Get-ChildItem $dir | Format-Table Name, `
             @{n='MB';e={[math]::Round($_.Length/1MB,2)}} -AutoSize
 
+      # 版本钉死：choco 不钉版本时静默升级 Inno，编译器行为会变——
+      # v0.3.0 就炸在这上面：WizardSmallBitmapImage 在现行 Inno 里
+      # 已更名移除，choco 静默升级到 6.7.1 后 ISCC 直接报
+      # Unrecognized directive。发布流水线要的是确定性，不是新版。
+      # 升版本时先在本地 ISCC 上验证过再改这里。
       - name: 安装 Inno Setup
         shell: pwsh
-        run: choco install innosetup --yes --no-progress --limit-output
+        run: choco install innosetup --version 6.7.1 --yes --no-progress --limit-output
 
       # 编译前先跑静态检查：产物缺主程序/_internal 时 ISCC 照样编得出来，
       # 但装完双击就是闪退。本地 build_windows.bat 也是同样的顺序。

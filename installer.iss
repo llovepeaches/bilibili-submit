@@ -54,11 +54,28 @@ UninstallDisplayIcon={app}\{#AppExeName}
 ; 安装向导图（modern 风格，自定义品牌侧栏图与头部 logo）
 WizardStyle=modern
 ; 品牌侧栏背景图：竖向 B 站粉→深品红渐变（无硬形状，拉伸不变形）。
-; 头部小 logo：粉圆角方块 + 白「B」，左上角色键透明。
-WizardImageFile=assets\wizard-sidebar.bmp
-WizardSmallBitmapImage=assets\wizard-logo.bmp
-; 允许用户拖大窗口（高 DPI / 大字体下不挤）
-WizardResizable=yes
+; PNG 由 tools/make_wizard_images.py 从同名 .bmp 源稿生成；480×918
+; 既保持 Inno 维持的 164:314 比例，也够高 DPI 下不发虚。
+WizardImageFile=assets\wizard-sidebar.png
+; 头部小 logo：粉圆角方块 + 白「B」，四角真透明（PNG alpha）。
+; 指令名是 WizardSmallImageFile 而不是 WizardSmallBitmapImage——
+; 后者在 Inno Setup 6 早期就更名，现行版本直接不认：ISCC 报
+; Unrecognized directive 中断编译；就算编译过了，BMP 色键透明也
+; 早已不再支持，品红角落会原样印在向导上。v0.3.0 的 CI 就炸在这一行。
+WizardSmallImageFile=assets\wizard-logo.png
+; 向导窗口大小：不写 WizardResizable——该指令在 Inno 6.6.0 被整个
+; 移除（窗口不再允许用户拖放，ISCC 会给一条 obsolete 警告）。
+; 高 DPI / 大字体下的拥挤由 WizardSizePercent 的默认 120,120 与
+; Inno 的 DPI 自适应缩放解决，不需要我们操心。
+; 向导内页底色 = 程序 GUI 的 PAPER（#FDFAFB，卡片/面板同款浅中性粉），
+; 安装过程和装好的程序看起来是一套。颜色按 Inno 的 $BBGGRR 顺序写。
+; ⚠️ 这三个是 [Setup] 段指令——Inno 没有 [Colors] 段，写错段名
+; ISCC 不报错、静默忽略，颜色等于没配（本项目真实踩过）。
+WizardBackColor=$FBFAFD
+; 侧栏图没铺到的四边填渐变终点色，不露白。
+WizardImageBackColor=$4E1B9B
+; 小 logo 四角透明，透出内页底色，所以与 WizardBackColor 保持一致。
+WizardSmallImageBackColor=$FBFAFD
 
 ; 要管理员，但允许用户选"仅为我安装"装到用户目录。
 ; 很多人就是自己用一台机器，让他们在 Program Files 里读到只读文件
@@ -73,17 +90,6 @@ SolidCompression=yes
 
 ; 装完不自动启动。批量投完的机器上多一个进程很烦，而且用户
 ; 可能只想装好放着。
-
-; 配色与程序 GUI / 使用说明页同源（B 站粉 + 中性粉相底），让安装向导
-; 内页背景和装好的程序看起来是一套。侧栏渐变由上面的 WizardImageFile 提供。
-; 颜色按 Inno 的 $BBGGRR 顺序写。
-[Colors]
-BackColor=$FBFAFD
-BackColor2=$F2F0F5
-BackColorDirection=1
-WizardColor=$9972FB
-WizardColor2=$4E1B9B
-WizardColorDirection=1
 
 [Languages]
 ; 简体中文消息文件放在仓库的 installer_languages\ 下，不用官方的
