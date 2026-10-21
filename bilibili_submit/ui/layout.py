@@ -50,8 +50,11 @@ WIDE = "wide"
 #: :data:`~.theme.DEFAULT_WIDTH` 是 1180，默认落在 medium；wide 给到
 #: 1280 是因为设置页双列后每列约 520px——再窄 ``FormRow`` 的
 #: ``wraplength=420`` 就要开始换行了。
-BREAKPOINT_MEDIUM = 900
-BREAKPOINT_WIDE = 1280
+#:
+# 门槛随 :data:`~.theme.UI_SCALE` 一起缩放：窗口几何本身按缩放走，
+# 门槛不跟着缩放的话，高分屏上永远落在最低档（断点变死代码）。
+BREAKPOINT_MEDIUM = theme.scale_px(900)
+BREAKPOINT_WIDE = theme.scale_px(1280)
 
 
 def tier_for(width: int) -> str:
@@ -101,7 +104,7 @@ _LAYOUTS: dict[str, Layout] = {
         nav_collapsed=True,
         columns=1,
         gutter=0,
-        list_min_height=200,
+        list_min_height=theme.scale_px(200),
         pad_page=theme.PAD_SM,
     ),
     MEDIUM: Layout(
@@ -110,7 +113,7 @@ _LAYOUTS: dict[str, Layout] = {
         nav_collapsed=False,
         columns=1,
         gutter=0,
-        list_min_height=280,
+        list_min_height=theme.scale_px(280),
         pad_page=theme.PAD_MD,
     ),
     WIDE: Layout(
@@ -119,7 +122,7 @@ _LAYOUTS: dict[str, Layout] = {
         nav_collapsed=False,
         columns=2,
         gutter=theme.PAD_LG,
-        list_min_height=360,
+        list_min_height=theme.scale_px(360),
         pad_page=theme.PAD_LG,
     ),
 }
@@ -154,14 +157,34 @@ def column_widths(
     fixed = sum(minimums[column] for column in columns if not weights[column])
     weight_sum = sum(weights.values())
     usable = max(total - fixed, 0)
-    return {
-        column: (
-            minimums[column]
-            if not weights[column]
-            else max(
-                minimums[column],
-                int(usable * weights[column] / weight_sum),
-            )
-        )
-        for column in columns
+    weighted = [column for column in columns if weights[column]]
+    widths: dict[str, int] = {
+        column: minimums[column] for column in columns if not weights[column]
     }
+    shares = {column: usable * weights[column] / weight_sum for column in weighted}
+    for column in weighted:
+        widths[column] = max(minimums[column], int(shares[column]))
+
+    # 逐列截断会让合计比 total 少几个像素（每列最多差 1px）。用最大余数法
+    # 把差额补回权重列：「列宽合计 == 表格实宽」是测试钉住的不变量，也直接
+    # 决定 Treeview 右侧会不会多出一条没着落的空白。这个差在 96 DPI 下
+    # 常被凑巧吃掉，界面一缩放（小数份额变多）就会暴露。
+    deficit = total - sum(widths.values())
+    if deficit > 0 and weighted:
+        order = sorted(
+            weighted,
+            key=lambda column: (-(shares[column] - int(shares[column])), columns.index(column)),
+        )
+        index = 0
+        while deficit > 0:
+            widths[order[index % len(order)]] += 1
+            deficit -= 1
+            index += 1
+    elif deficit < 0:
+        # 下限把某列顶高了（总宽装不下所有最小宽度）：从最宽的权重列
+        # 往回抠，抠到下限为止——读不出内容比少 1px 空白更糟。
+        for column in sorted(weighted, key=lambda item: -widths[item]):
+            while deficit < 0 and widths[column] > minimums[column]:
+                widths[column] -= 1
+                deficit += 1
+    return widths

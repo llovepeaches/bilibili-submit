@@ -17,21 +17,23 @@ from bilibili_submit.ui import layout, theme  # noqa: E402
 # ---------- 档位边界 ----------
 
 
+# 宽度一律相对断点取：门槛本身随 theme.UI_SCALE 缩放，写死 900/1280
+# 在非默认缩放下会全部落错档位。这里测的是「左闭右开」的边界语义。
 @pytest.mark.parametrize(
     "width",
     [
         (theme.MIN_WIDTH, layout.COMPACT),
-        (899, layout.COMPACT),
-        (900, layout.MEDIUM),
+        (layout.BREAKPOINT_MEDIUM - 1, layout.COMPACT),
+        (layout.BREAKPOINT_MEDIUM, layout.MEDIUM),
         (theme.DEFAULT_WIDTH, layout.MEDIUM),
-        (1279, layout.MEDIUM),
-        (1280, layout.WIDE),
-        (1920, layout.WIDE),
+        (layout.BREAKPOINT_WIDE - 1, layout.MEDIUM),
+        (layout.BREAKPOINT_WIDE, layout.WIDE),
+        (layout.BREAKPOINT_WIDE + 640, layout.WIDE),
         (9999, layout.WIDE),
     ],
 )
 def test_tier_boundaries(width):
-    """门槛是「左闭右开」：900 属于 medium，1280 属于 wide。"""
+    """门槛是「左闭右开」：medium 档属于 medium，wide 档属于 wide。"""
     value, expect = width
     assert layout.tier_for(value) == expect, f"{value}px 应当是 {expect}"
 
@@ -51,7 +53,13 @@ def test_breakpoint_is_above_min_width():
 
 def test_every_tier_is_reachable():
     """三档都得有真实宽度能落到它头上——挡位是给人用的，不是给表看的。"""
-    reached = {layout.tier_for(width) for width in range(theme.MIN_WIDTH, 2001)}
+    # 上限从断点派生：断点随 UI_SCALE 缩放，写死 2000 的话 150% 以上
+    # 的界面里 wide 门槛已经高过探测范围，三档就只剩两档
+    upper = layout.BREAKPOINT_WIDE + 200
+    reached = {
+        layout.tier_for(width)
+        for width in range(theme.MIN_WIDTH, upper + 1)
+    }
     assert reached == {layout.COMPACT, layout.MEDIUM, layout.WIDE}
 
 
@@ -60,9 +68,9 @@ def test_every_tier_is_reachable():
 
 def test_compact_collapses_the_sidebar():
     """只有最窄那档收侧栏，其余两档保持展开。"""
-    assert layout.layout_for(880).nav_collapsed is True
-    assert layout.layout_for(1180).nav_collapsed is False
-    assert layout.layout_for(1920).nav_collapsed is False
+    assert layout.layout_for(theme.MIN_WIDTH).nav_collapsed is True
+    assert layout.layout_for(theme.DEFAULT_WIDTH).nav_collapsed is False
+    assert layout.layout_for(layout.BREAKPOINT_WIDE).nav_collapsed is False
 
 
 def test_collapsed_sidebar_is_narrow_but_clickable():
@@ -71,27 +79,35 @@ def test_collapsed_sidebar_is_narrow_but_clickable():
     导航图标是一个汉字（约 28px 宽），56px 里左右各留 12px 正好居中。
     低于 48 就会开始切边。
     """
-    spec = layout.layout_for(880)
+    spec = layout.layout_for(theme.MIN_WIDTH)
     assert spec.nav_width == theme.NAV_WIDTH_COLLAPSED
-    assert 48 <= spec.nav_width <= 72, f"图标栏 {spec.nav_width}px 不合理"
-    assert spec.nav_width < layout.layout_for(1180).nav_width
+    assert 48 * theme.UI_SCALE <= spec.nav_width <= 72 * theme.UI_SCALE, (
+        f"图标栏 {spec.nav_width}px 不合理"
+    )
+    assert spec.nav_width < layout.layout_for(theme.DEFAULT_WIDTH).nav_width
 
 
 def test_only_wide_uses_two_columns():
     """双列只给最宽档：中等宽度下每列不到 500px，表单说明文字会换行。"""
-    assert layout.layout_for(880).columns == 1
-    assert layout.layout_for(1180).columns == 1
-    assert layout.layout_for(1920).columns == 2
-    assert layout.layout_for(1920).gutter > 0
+    assert layout.layout_for(theme.MIN_WIDTH).columns == 1
+    assert layout.layout_for(theme.DEFAULT_WIDTH).columns == 1
+    # 从断点派生而不是写死 1920：断点随 UI_SCALE 缩放，200% 下 wide
+    # 门槛已经是 2560，写死的 1920 反而只算 medium
+    wide = layout.BREAKPOINT_WIDE + 400
+    assert layout.layout_for(wide).columns == 2
+    assert layout.layout_for(wide).gutter > 0
 
 
 def test_list_min_height_grows_with_the_tier():
     """窗口越高，任务列表至少能显示的行数越多。"""
-    heights = [
-        layout.layout_for(880).list_min_height,
-        layout.layout_for(1180).list_min_height,
-        layout.layout_for(1920).list_min_height,
-    ]
+    # 每档取一个代表宽度，从断点/Min_WIDTH 派生而不是写死 880/1180/1920：
+    # 断点随 UI_SCALE 缩放，写死的值在 200% 下会挤进同一档
+    widths = (
+        theme.MIN_WIDTH,
+        layout.BREAKPOINT_MEDIUM + 100,
+        layout.BREAKPOINT_WIDE + 100,
+    )
+    heights = [layout.layout_for(width).list_min_height for width in widths]
     assert heights == sorted(heights), f"列表最小高度没有随档位递增：{heights}"
     assert all(height >= theme.ROW_HEIGHT * 3 for height in heights), (
         "最小高度要装得下三行，否则列表看着像空的"
@@ -101,7 +117,12 @@ def test_list_min_height_grows_with_the_tier():
 def test_layout_values_are_grid_aligned():
     """档位里的尺寸都落在栅格上——不然间距会「差不多但不齐」。"""
     half = theme.GRID // 2
-    for width in (880, 1180, 1920):
+    widths = (
+        theme.MIN_WIDTH,
+        layout.BREAKPOINT_MEDIUM + 100,
+        layout.BREAKPOINT_WIDE + 100,
+    )
+    for width in widths:
         spec = layout.layout_for(width)
         for name in ("nav_width", "gutter", "list_min_height", "pad_page"):
             assert getattr(spec, name) % half == 0, f"{name} 没对齐栅格"

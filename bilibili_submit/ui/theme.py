@@ -83,6 +83,7 @@ Tk 只有 ``normal`` / ``bold`` 两档字重，所以层级靠
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import TYPE_CHECKING
 
@@ -91,50 +92,112 @@ if TYPE_CHECKING:  # 只为类型标注，运行期不需要 tkinter
 
 # ---------- 栅格与尺寸 ----------
 
-#: 基础栅格。所有间距都应是它的整数倍（4 为半格，用于紧凑处）。
-GRID = 8
+#: 界面缩放因子。高分屏（125% / 150% / 200% 缩放）下，按 96 DPI 设计的
+#: 像素尺寸和字阶会被系统等比缩小——窗口占屏幕一小块、字挤成一行，
+#: 用户第一反应就是「这软件看不清」。
+#:
+#: 因子口径统一为 **DPI / 96**：
+#:
+#: - 检测：Windows 读系统 DPI（与 ``SetProcessDpiAwareness(1)`` 同一口径，
+#:   即主显示器 DPI）；其它平台默认 1.0；
+#: - 覆盖：环境变量 ``BILI_UI_SCALE``（0.5~3.0），测试与排查用；
+#: - 用法：所有**像素**常量乘它（见 :func:`scale_px`），字体在
+#:   :func:`register_fonts` 里乘它。Tk 的「点→像素」换算则由
+#:   :mod:`.app` 固定回 4/3，否则 Windows 会按 DPI 自动放大字体、
+#:   像素间距却不放大，高 DPI 下文字直接溢出固定内边距。
+#:
+#: 测试环境（Xvfb，96~100 DPI）恒为 1.0，所以既有断言全部不受影响。
+UI_SCALE: float = 1.0
 
-PAD_XS = 4          # 半格：控件与文字之间
-PAD_SM = 8          # 1 格：表单行间距
-PAD_MD = 12         # 1.5 格：控件内边距
-PAD_LG = 16         # 2 格：卡片内边距
-PAD_XL = 24         # 3 格：分区之间
-PAD_2XL = 32        # 4 格：页面级留白
+
+def _detect_ui_scale() -> float:
+    """按运行环境定界面缩放，逻辑见 :data:`UI_SCALE` 的注释。"""
+    env = os.environ.get("BILI_UI_SCALE", "").strip()
+    if env:
+        try:
+            return max(0.5, min(3.0, float(env)))
+        except ValueError:
+            pass  # 值不合法就当没设，走自动检测
+    if sys.platform == "win32":
+        try:
+            from ctypes import windll  # type: ignore[attr-defined]
+
+            # Win10 1803+ 有它；拿不到再退回桌面 DC 的 LOGPIXELSX
+            dpi = int(windll.user32.GetDpiForSystem())
+            if dpi > 0:
+                return dpi / 96.0
+        except Exception:  # noqa: BLE001 - 老系统/异常环境，落下级
+            pass
+        try:
+            from ctypes import windll, wintypes  # type: ignore[attr-defined]
+
+            hdc = windll.user32.GetDC(None)
+            try:
+                dpi = windll.gdi32.GetDeviceCaps(hdc, wintypes.LOGPIXELSX)
+            finally:
+                windll.user32.ReleaseDC(None, hdc)
+            if dpi > 0:
+                return dpi / 96.0
+        except Exception:  # noqa: BLE001 - 同上
+            pass
+    return 1.0
+
+
+UI_SCALE = _detect_ui_scale()
+
+
+def scale_px(value: int) -> int:
+    """按 :data:`UI_SCALE` 缩放一个像素值（四舍五入，保底 1）。"""
+    return max(1, int(round(value * UI_SCALE)))
+
+
+#: 基础栅格。所有间距都应是它的整数倍（4 为半格，用于紧凑处）。
+GRID = scale_px(8)
+
+PAD_XS = scale_px(4)       # 半格：控件与文字之间
+PAD_SM = scale_px(8)       # 1 格：表单行间距
+PAD_MD = scale_px(12)      # 1.5 格：控件内边距
+PAD_LG = scale_px(16)      # 2 格：卡片内边距
+PAD_XL = scale_px(24)      # 3 格：分区之间
+PAD_2XL = scale_px(32)     # 4 格：页面级留白
 
 #: 控件圆角。设计稿里按钮、输入框、下拉框、标签都是 **7px 小圆角**
 #: （不是上一版的药丸）。Canvas 自绘的按钮与导航高亮走这个值；
 #: ttk 引擎绘制的控件画不出圆角，这个值对它们只剩「降级说明」里的参考意义。
-RADIUS_CONTROL = 7
+RADIUS_CONTROL = scale_px(7)
 #: 药丸圆角：给 999 表示「能有多圆就多圆」——绘制时会被 clamp 到边长
 #: 的一半。**只有真正要画成胶囊的地方才用它**（状态点、徽标圆点），
 #: 按钮和导航高亮在本次改版后一律走 :data:`RADIUS_CONTROL`。
+#: 不缩放：它是 clamp 哨兵，不是真实像素。
 RADIUS_PILL = 999
 #: 卡片圆角 11px，比控件大一点，层级才分得开
-RADIUS_CARD = 11
+RADIUS_CARD = scale_px(11)
 #: 小徽标圆角 5px：卡片序号、版本胶囊、导航角标
-RADIUS_BADGE = 5
+RADIUS_BADGE = scale_px(5)
 
 #: 标准控件高度（按钮、输入框、下拉框）。设计稿 36~38px，取 36。
-CONTROL_HEIGHT = 36
+CONTROL_HEIGHT = scale_px(36)
 #: 主要操作按钮，比标准控件高半档用来引导视线。
 #:
 #: .. note::
 #:    设计稿里主按钮和标准控件**同高**（都是 36），靠实心填充和投影
 #:    区分主次。这里保留 40：tkinter 画不出投影，「只靠填色」区分主次
 #:    在一个全是描边按钮的界面里不够，高度差是唯一还剩下的手段。
-PRIMARY_BUTTON_HEIGHT = 40
+PRIMARY_BUTTON_HEIGHT = scale_px(40)
 #: 控件水平内边距。卡片内边距给到 18~20，控件跟着放宽到 14 才不显得局促。
-CONTROL_PAD_X = 14
+CONTROL_PAD_X = scale_px(14)
 
 #: 顶部状态条高度（登录态 / ffmpeg / 上次同步）
-STATUS_BAR_H = 30
-#: 视频缩略图尺寸，16:9
-THUMB_W = 200
-THUMB_H = 113
+STATUS_BAR_H = scale_px(30)
+#: 视频缩略图宽度，16:9。高度由宽度反算而不独立缩放——两边各自
+#: 四舍五入会把比例悄悄带走（150% 下 200→300、113→170，比值差出
+#: 1.3%，卡片里看得见黑边）。
+THUMB_W = scale_px(200)
+THUMB_H = int(THUMB_W * 9 / 16 + 0.5)
 
 #: 聚焦环粗细与环到控件的间隙。两者都 ≥2px，否则在浅底上根本看不见。
-FOCUS_RING = 2
-FOCUS_RING_GAP = 2
+FOCUS_RING = scale_px(2)
+FOCUS_RING_GAP = scale_px(2)
 
 #: 侧栏展开 212px：设计稿给的数，比上一版宽 12px，版本号胶囊和导航
 #: 角标才塞得进去而不挤到文字。
@@ -142,27 +205,42 @@ FOCUS_RING_GAP = 2
 #: 56 = :data:`GRID` * 7。折叠后导航项只剩一个汉字图标（约 28px），
 #: 左右各留 12px 让它居中——再窄就挤了，再宽则图标栏看着像没排满。
 #: 由 :mod:`.layout` 按窗口档位在两者之间切换。
-NAV_WIDTH_EXPANDED = 212
-NAV_WIDTH_COLLAPSED = 56
+NAV_WIDTH_EXPANDED = scale_px(212)
+NAV_WIDTH_COLLAPSED = scale_px(56)
 #: 默认（也是历史引用里）的侧栏宽度。测试和老代码都读这个名字，
 #: 所以折叠值另起一个、不改这一个——``MIN_WIDTH > NAV_WIDTH + QR_SIZE``
 #: 这条断言盯的就是展开态装得下二维码。
 NAV_WIDTH = NAV_WIDTH_EXPANDED
 #: 导航项高 38px（设计稿），比上一版矮 2px——条目紧凑一点，
 #: 一屏内五个导航项加品牌区才不会顶到侧栏底部。
-NAV_ITEM_HEIGHT = 38
+NAV_ITEM_HEIGHT = scale_px(38)
 #: 导航项之间的间隙（半格）。项高本身是 40，间隙再按整格给就太散了。
-NAV_ITEM_GAP = 4
+NAV_ITEM_GAP = scale_px(4)
 #: Material 的导航高亮是**整行药丸**（不是旧版的左侧竖条）：
 #: 药丸不满铺，两侧各留这条缝，形状才读得出来。
-NAV_ITEM_MARGIN = 6
+NAV_ITEM_MARGIN = scale_px(6)
 INPUT_HEIGHT = CONTROL_HEIGHT
 BUTTON_HEIGHT = CONTROL_HEIGHT
-QR_SIZE = 220                 # 登录二维码边长
+QR_SIZE = scale_px(220)            # 登录二维码边长
 #: 列表行高。中文 + 行内状态文字，低于 32 会挤；高于 36 则一屏看不到几行。
-ROW_HEIGHT = 36
+ROW_HEIGHT = scale_px(36)
 #: 日志区高度（文本行数）。给足上下文又不至于把上方表单挤没。
+#: 不缩放：它数的是「行」，不是像素。
 LOG_HEIGHT = 7
+#: Treeview 列宽总和相对控件宽留的余量。
+#:
+#: ttk 的列默认 ``stretch=1``：总和与「控件宽 − 内缩量」不相等时，
+#: Tk 会在空闲时自己动手——少了按列**均摊**拉宽，多了从中间的列各扣
+#: 1px，两种都会把权重比例搅乱。内缩量因树而异（批量任务页实测 2px、
+#: 历史页 0px），猜不出来，所以反其道而行：故意少给 2px，让 Tk 的
+#: 拉伸把最后 2px 补回来。Tk 的终态总和恒等于可用内容宽，右缘严格
+#: 对齐，且这个过程中不需要在 ``<Configure>`` 处理器里等 idle——
+#: 在处理器里调 ``update_idletasks()`` 会同步 flush 掉排队中的
+#: Configure 事件，重入列宽计算形成 +2px 的正反馈循环。
+#:
+#: 不随 :data:`UI_SCALE` 缩放：内缩量是 Tk 主题的固定 padding，
+#: 我们的界面缩放因子改变不了它。
+TABLE_COLUMN_MARGIN = 2
 
 #: 最小窗口宽度。880 是让 :data:`~.layout.BREAKPOINT_MEDIUM`（900）
 #: 真的能触发的下界——再小就没有「宽屏」可言，再大则最低那档断点
@@ -170,14 +248,14 @@ LOG_HEIGHT = 7
 #:
 #: 侧栏在 880 下会折叠成 56px，内容区反而有 800px，比 1000 宽时的
 #: 776px 还宽——这正是折叠的意义。
-MIN_WIDTH = 880
+MIN_WIDTH = scale_px(880)
 #: 最小高度 700：顶部多了一条 30px 状态条，卡片内边距也从 16 加到了
 #: 18~20，660 会让投稿页的两张卡片挤到只剩上沿。
-MIN_HEIGHT = 700
-DEFAULT_WIDTH = 1180
+MIN_HEIGHT = scale_px(700)
+DEFAULT_WIDTH = scale_px(1180)
 #: 默认高度 800：设计稿画布是 900（含 38px 标题栏 + 30px 状态条），
 #: 去掉系统标题栏后按 800 开，投稿页两张卡片正好一屏看完。
-DEFAULT_HEIGHT = 800
+DEFAULT_HEIGHT = scale_px(800)
 
 # ---------- 字体 ----------
 
@@ -274,7 +352,9 @@ def register_fonts(force: bool = False) -> dict[str, str]:
         obj = tkfont.Font(
             name=name,
             family=MONO_FAMILY if mono else FAMILY,
-            size=size,
+            # 字号按 UI_SCALE 放大。Tk 的「点→像素」由 app 固定成 4/3，
+            # 所以这里乘的因子和像素常量是同一个，字与间距同步变大。
+            size=max(1, int(round(size * UI_SCALE))),
             weight="bold" if bold else "normal",
         )
         if obj.name != name:
@@ -298,9 +378,13 @@ def measure_font(role: str = "body") -> object:
 
 # 旧名 tuple：留着是因为 Canvas 自绘文字要传元组，且外部可能仍在引用。
 # 数值一律从 FONT_ROLES 派生，不单独写死，免得两处漂移。
-def _role_tuple(role: str) -> tuple[str, int]:
+def _role_tuple(role: str) -> tuple[str, int, str]:
     size, bold, mono = FONT_ROLES[role]
-    return (MONO_FAMILY if mono else FAMILY, size, "bold" if bold else "normal")
+    return (
+        MONO_FAMILY if mono else FAMILY,
+        max(1, int(round(size * UI_SCALE))),
+        "bold" if bold else "normal",
+    )
 
 
 FONT_SMALL = _role_tuple("caption")

@@ -59,7 +59,7 @@ def test_status_bar_is_top_of_window_geometry():
     ``test_ui.py`` 的布局用例盯着；这里只钉数值本身：设计稿画布
     900px 里状态条固定 30px，压缩空间时先压内容区不动它。
     """
-    assert theme.STATUS_BAR_H == 30
+    assert theme.STATUS_BAR_H == theme.scale_px(30)
 
 
 def test_segmented_control_and_chip_use_control_metrics():
@@ -71,7 +71,19 @@ def test_segmented_control_and_chip_use_control_metrics():
     """
     from bilibili_submit.ui import widgets  # noqa: F401  触导入即校验常量
 
-    assert theme.CONTROL_HEIGHT == 36
-    assert theme.RADIUS_CONTROL == 7
-    assert widgets.TagChipField.CHIP_H == 24
-    assert widgets.SegmentedControl._PAD == 3
+    assert theme.CONTROL_HEIGHT == theme.scale_px(36)
+    assert theme.RADIUS_CONTROL == theme.scale_px(7)
+    assert widgets.TagChipField.CHIP_H == theme.scale_px(24)
+    assert widgets.SegmentedControl._PAD == theme.scale_px(3)
+
+
+def test_table_column_margin_does_not_scale():
+    """列宽余量是 Tk 主题的内缩量，不随界面缩放变。
+
+    缩放因子只放大我们自己的像素常量；Tk 在 Xvfb/96 DPI 下给 treeview
+    的内缩量（列宽总和与控件宽之间的差）始终是 2px。把这个值也乘上
+    UI_SCALE 的话，高分屏下余量会大于真实内缩，Tk 的 stretch 就要
+    多补几个 px——列宽总和虽然仍能对齐，但补的方式是按列均摊，
+    权重比例会被打乱。
+    """
+    assert theme.TABLE_COLUMN_MARGIN == 2

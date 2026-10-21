@@ -206,7 +206,7 @@ class TaskTable:
         self._on_filled(bool(tasks))
         self._on_changed()
 
-    def resize_columns(self, _event: tk.Event | None = None) -> None:
+    def resize_columns(self, event: tk.Event | None = None) -> None:
         """按权重把可用宽度分给各列。
 
         只在宽度真的变了时动手：``<Configure>`` 在布局的每一步都会触发，
@@ -217,13 +217,32 @@ class TaskTable:
            宽度没变时一次 ``self.tree.column()`` 都不用调。之前这里只
            挡了「还没布局出来」，实测拖一次窗口能派发上百个 Configure，
            每个都写七列，是拖窗口发涩的直接来源。
+
+        .. note::
+           宽度优先取**事件自带的** ``event.width``：Tk 是先派发
+           ``<Configure>`` 再更新窗口内部几何的，处理器里读
+           ``winfo_width()`` 可能还是旧值——按旧宽度设完列宽，树最终
+           却比它宽 2px，右侧就多出一条没着落的空白（``test_ui_perf``
+           里那条「列宽跟上新窗口宽度」盯的就是这个）。
+
+        .. note::
+           按 ``total - theme.TABLE_COLUMN_MARGIN`` 设，最后 2px 交给
+           Tk 的 stretch 补：总和与「控件宽 − 内缩量」不相等时 Tk 会在
+           空闲时自行均摊/扣列，终态总和恒等于可用内容宽——少给 2px
+           换回来的是「不在 ``<Configure>`` 处理器里等 idle」。在这里
+           调 ``update_idletasks()`` 等钳制结果会同步 flush 掉排队中的
+           Configure，重入本方法形成 +2px 的正反馈循环（实测列宽会
+           一路涨到 1296 才停）。
         """
-        total = self.tree.winfo_width()
+        width = getattr(event, "width", None)
+        total = width if isinstance(width, int) and width > 1 else self.tree.winfo_width()
         if total < 100 or total == self._last_width:
             return
         self._last_width = total
-        for column, width in _column_widths(total).items():
-            self.tree.column(column, width=width)
+        for column, column_width in _column_widths(
+            total - theme.TABLE_COLUMN_MARGIN
+        ).items():
+            self.tree.column(column, width=column_width)
 
     def mark(self, index: int, status: str, tone: str = "idle") -> None:
         """更新某一行的状态文案与配色，并通知外部刷新汇总。

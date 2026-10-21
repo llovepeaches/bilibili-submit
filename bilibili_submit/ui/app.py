@@ -588,6 +588,12 @@ def launch() -> int:
     _set_dpi_aware()
 
     root = tk.Tk()
+    # 把 Tk 的「点→像素」换算固定回 4/3（96 DPI 基准）。
+    # 不设的话 Windows 会按系统 DPI 自动设成 dpi/72（150% 缩放下是 2.0），
+    # 字体被放大而像素间距不放大——文字直接溢出固定内边距。字体放大
+    # 统一交给 theme.UI_SCALE（字与间距同一个因子），这里只负责
+    # 把系统自动设的那份抵掉。
+    root.tk.call("tk", "scaling", 4.0 / 3.0)
     root.title(f"哔哩哔哩自动投稿程序 {__version__}")
     root.geometry(f"{theme.DEFAULT_WIDTH}x{theme.DEFAULT_HEIGHT}")
     root.minsize(theme.MIN_WIDTH, theme.MIN_HEIGHT)

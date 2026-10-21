@@ -149,7 +149,7 @@ class HistoryView(ttk.Frame):
         self._log = LogConsole(card, height=4)
         self._log.grid(row=2, column=0, sticky="ew", pady=(theme.PAD_SM, 0))
 
-    def _resize_columns(self, _event: tk.Event | None = None) -> None:
+    def _resize_columns(self, event: tk.Event | None = None) -> None:
         """按权重把可用宽度分给各列。
 
         和批量任务页走同一个 :func:`layout.column_widths`。之前这里写死
@@ -162,16 +162,31 @@ class HistoryView(ttk.Frame):
         宽度没变时也不动手——列宽只由总宽决定，缓存总宽就够了。
         这里原本只挡了「没量出来」，于是每一次 Configure 都要写三列，
         拖窗口时和任务页的表格一起抖。
+
+        宽度优先取**事件自带的** ``event.width``：Tk 先派发 ``<Configure>``
+        再更新窗口内部几何，处理器里读 ``winfo_width()`` 可能还是旧值，
+        按旧宽度设完列宽，树最终却比它宽几 px，右侧多出一条没着落的空白。
+
+        按 ``total - theme.TABLE_COLUMN_MARGIN`` 设，最后 2px 交给 Tk 的
+        stretch 补（总和与「控件宽 − 内缩量」不相等时 Tk 会在空闲时自行
+        均摊/扣列，终态总和恒等于可用内容宽）。历史页的表头日期和 BV 号
+        是定长内容，这 2px 的均摊先落在它们头上就会读出「列被莫名拉宽」。
         """
-        total = self._tree.winfo_width()
+        width = getattr(event, "width", None)
+        total = (
+            width if isinstance(width, int) and width > 1 else self._tree.winfo_width()
+        )
         if total < 100 or total == self._last_width:
             return
         self._last_width = total
         widths = layout.column_widths(
-            COLUMNS, _COLUMN_WEIGHTS, _COLUMN_MIN_WIDTHS, total
+            COLUMNS,
+            _COLUMN_WEIGHTS,
+            _COLUMN_MIN_WIDTHS,
+            total - theme.TABLE_COLUMN_MARGIN,
         )
-        for column, width in widths.items():
-            self._tree.column(column, width=width)
+        for column, column_width in widths.items():
+            self._tree.column(column, width=column_width)
 
     def _resize_tree(self, _event: tk.Event | None = None) -> None:
         """按容器高度换算 Treeview 的可见行数。

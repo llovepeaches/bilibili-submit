@@ -8,6 +8,36 @@
 
 ## [未发布]
 
+### 新增 —— 高分屏（高 DPI）下界面自动放大
+
+Windows 开了 150% / 200% 缩放的机器上，原界面的字和间距都按 96 DPI
+的像素值画，物理尺寸只有系统期望的一半——标题栏正常，应用内一片
+蚂蚁字。现在所有像素常量与字号统一按一个因子放大：
+
+- **因子从系统来**：`theme.UI_SCALE = 系统 DPI / 96`（`SetProcessDpiAwareness`
+  已声明 system DPI awareness），想手动覆盖设 `BILI_UI_SCALE=1.5` 即可
+  （0.5~3.0）。
+- **一套因子管全部**：`theme` 里所有 `scale_px()` 常量、`register_fonts()`
+  的字号、`layout` 的断点门槛与 `list_min_height`、两处 `wraplength`
+  同乘这个因子——字与间距永远同比例，不会出现「字变大了但内边距没变，
+  文字溢出按钮」。
+- **`tk scaling` 固定回 4/3**：Windows 会按 DPI 自动设成 `dpi/72`，
+  那会让 Tk 字体再放大一遍（双重放大）。`app.launch()` 把它抵掉，
+  放大统一走 `UI_SCALE` 一条路。
+
+顺带修掉三个被缩放暴露出来的老问题：
+
+| 问题 | 原因 | 修法 |
+| --- | --- | --- |
+| 列宽合计永远比表格实宽少几 px | `column_widths` 逐列 `int()` 截断，`fractional` 份额一多就差出好几列 | 最大余数法补差额，`sum(widths) == total` |
+| 切页后列宽停在旧窗口比例上 | `<Configure>` 处理器里读 `winfo_width()` 是旧值（Tk 先派发事件再更新几何） | 优先取事件自带的 `event.width` |
+| 缩略图比例随缩放失真 | 宽高各自四舍五入 | 高度由 16:9 反算 |
+| 列宽总和与「控件宽 − 内缩量」差 2px | ttk 的 `stretch` 会在空闲时钳制列宽总和，且从中间列各扣 1px，权重比例一起失真 | 少给 `theme.TABLE_COLUMN_MARGIN`（2px，Tk 主题的内缩量，不随缩放变），让 Tk 的 stretch 把最后 2px 按需补回 |
+
+测试在 1.0 / 1.5 / 2.0 三档缩放下全绿：设计令牌类断言全部改成
+`scale_px()` 派生，窗口宽度类断言从断点门槛取值（写死的 1400/1920
+在 150% 以上反而只算中等宽度）。
+
 ### 变更 —— 命令行发布资产统一 `cli` 前缀命名
 
 旧名字里 `standalone` 和裸的 `bilibili-submit.exe` 单看文件名分不出谁是谁，

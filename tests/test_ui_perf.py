@@ -14,6 +14,7 @@ from tkinter import ttk
 
 from conftest import needs_display
 
+from bilibili_submit.ui import layout  # noqa: F401
 from bilibili_submit.ui import theme
 from bilibili_submit.ui.views.history import HistoryView
 from bilibili_submit.ui.widgets import LogConsole
@@ -76,8 +77,18 @@ def test_resize_columns_still_recomputes_when_the_width_moves(root):
 
     上一条只挡了重复，这条守另一半：挡过头的话窗口拉宽后列宽不跟着变，
     右侧会空一大片，那比抖还难看。
+
+    .. note::
+       这里盯的是**写入门的值**而不是回读值：写入按
+       ``total - theme.TABLE_COLUMN_MARGIN`` 算，最后 2px 由 Tk 的
+       stretch 在空闲时补，而 monkeypatch 只改了 ``winfo_width`` 的
+       返回值、树的真实宽度没变——Tk 补不补、补多少都不是这里能控
+       的。「该动的没被缓存挡掉」由第一遍写入值随 total 变化来证明；
+       端到端的那条用真 geometry 验证回读值
+       （``test_column_widths_catch_up_after_switching_back``）。
     """
-    from bilibili_submit.ui.views.tasks_table import TaskTable
+    from bilibili_submit.ui import theme
+    from bilibili_submit.ui.views.tasks_table import TaskTable, _column_widths
 
     _style_root(root)
     table = TaskTable(
@@ -101,19 +112,32 @@ def test_resize_columns_still_recomputes_when_the_width_moves(root):
         return 900 + 100 * step[0]
 
     table.tree.winfo_width = varying  # type: ignore[method-assign]
-    widths: list[int] = []
+    written: list[int] = []
+    real_column = table.tree.column
+
+    def spy(column, *args, **kwargs):
+        if column == "title" and "width" in kwargs:
+            written.append(kwargs["width"])
+        return real_column(column, *args, **kwargs)
+
+    table.tree.column = spy  # type: ignore[method-assign]
     try:
         for _ in range(3):
             table.resize_columns()
-        widths.append(table.tree.column("title", "width"))
-        table.resize_columns()
-        widths.append(table.tree.column("title", "width"))
     finally:
+        table.tree.column = real_column  # type: ignore[method-assign]
         del table.tree.winfo_width
 
-    assert widths[0] != widths[1], (
-        f"宽度变了却没重算列宽，两帧都是 {widths[0]}"
-    )
+    # 三次重算，每轮写一遍七列——一遍都不写就是缓存把该动的也挡了
+    assert len(written) == 3, f"宽度变了却写了 {len(written)} 次 title 列：{written}"
+    # 写入值必须严格按 varying 出来的 total 走（减去交给 Tk 补的余量）
+    expected = [
+        _column_widths(
+            900 + 100 * (turn + 1) - theme.TABLE_COLUMN_MARGIN
+        )["title"]
+        for turn in range(3)
+    ]
+    assert written == expected, f"写入门值没按新宽度算：{written} ≠ {expected}"
 
 
 # ---------- 日志：批量写入 + 行数上限 ----------
@@ -472,7 +496,7 @@ def test_column_widths_catch_up_after_switching_back(root, tmp_path):
     """
     from conftest import run_until
 
-    from bilibili_submit.ui.views.tasks_table import _column_widths
+    from bilibili_submit.ui.views.tasks_table import COLUMNS, _column_widths
 
     app = _app(root)
     view = app._views["批量任务"]
@@ -489,7 +513,7 @@ def test_column_widths_catch_up_after_switching_back(root, tmp_path):
     view._load()
     run_until(root, lambda: len(table.tree.get_children()) > 0)
 
-    root.geometry("1400x800+0+0")
+    root.geometry(f"{layout.BREAKPOINT_WIDE + 200}x800+0+0")
     root.update_idletasks()
     root.update()
 
@@ -501,7 +525,15 @@ def test_column_widths_catch_up_after_switching_back(root, tmp_path):
 
     total = table.tree.winfo_width()
     assert total >= 100, f"表格没布局出来（宽 {total}）"
-    for column, width in _column_widths(total).items():
+    # ttk Treeview 会把列宽总和钳到「控件宽 − 内缩量」（本页实测 2px，
+    # 历史页 0px，随树而变），所以期望值按回读到的真实总和算；「跟上
+    # 新窗口宽度」由总和本身盯着——它必须贴近 winfo_width，而不是停在
+    # 旧窗口的比例上。
+    actual_total = sum(table.tree.column(column, "width") for column in COLUMNS)
+    assert total - 4 <= actual_total <= total, (
+        f"列宽合计 {actual_total} 没贴近新窗口宽度 {total}"
+    )
+    for column, width in _column_widths(actual_total).items():
         assert table.tree.column(column, "width") == width, (
             f"{column} 列没跟上新窗口宽度：期望 {width}，"
             f"实际 {table.tree.column(column, 'width')}"

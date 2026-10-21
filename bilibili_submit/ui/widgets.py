@@ -205,7 +205,7 @@ class SectionTitle(ttk.Frame):
                 self,
                 text=subtitle,
                 style="Card.Secondary.TLabel",
-                wraplength=560,
+                wraplength=theme.scale_px(560),
                 justify="left",
             ).pack(anchor="w", pady=(theme.PAD_XS, 0))
 
@@ -511,7 +511,7 @@ class FormRow(ttk.Frame):
                 self,
                 text=hint,
                 style="Card.Secondary.TLabel",
-                wraplength=420,
+                wraplength=theme.scale_px(420),
                 justify="left",
             ).grid(row=1, column=1, sticky="w", pady=(theme.PAD_XS, 0))
 
@@ -1846,7 +1846,7 @@ class Placeholder(ttk.Frame):
         if hint:
             self._hint = ttk.Label(
                 self, text=hint, style="Card.Secondary.TLabel", justify="center",
-                wraplength=360,
+                wraplength=theme.scale_px(360),
             )
             self._hint.grid(row=1, column=0, pady=(0, theme.PAD_SM))
         else:
@@ -2111,8 +2111,8 @@ class TagChipField(ttk.Frame):
     容器已经是那个「框」了，再给输入框加一个框就成了框套框。
     """
 
-    #: 单个 chip 的高度
-    CHIP_H = 24
+    #: 单个 chip 的高度（随界面缩放）
+    CHIP_H = theme.scale_px(24)
 
     def __init__(
         self,
@@ -2297,10 +2297,10 @@ class SegmentedControl(tk.Canvas):
     键盘可用：左右方向键在选项间移动，和 radiobutton 的预期一致。
     """
 
-    #: 槽的内边距（设计稿 ``padding: 3px``）
-    _PAD = 3
-    #: 两段之间的缝
-    _GAP = 2
+    #: 槽的内边距（设计稿 ``padding: 3px``，随界面缩放）
+    _PAD = theme.scale_px(3)
+    #: 两段之间的缝（随界面缩放）
+    _GAP = theme.scale_px(2)
 
     def __init__(
         self,

@@ -147,7 +147,7 @@ class LoginView(ttk.Frame):
             background=theme.PAPER,
             foreground=theme.PINK_DEEP,
             cursor="hand2",
-            wraplength=520,
+            wraplength=theme.scale_px(520),
         )
         self._link.grid(row=3, column=0, pady=(0, theme.PAD_SM))
         self._link.bind("<Button-1>", self._copy_link)

@@ -49,25 +49,29 @@ def test_theme_design_metrics():
     这些数字是设计规范的承诺，不是随便填的——改了要连同所有视图
     一起重排，所以在这里钉死。
     """
-    assert theme.GRID == 8
+    # 期望值一律经 theme.scale_px 派生：高分屏（BILI_UI_SCALE / DPI）
+    # 下整套度量按比例放大，钉死绝对值只会在非默认缩放下误报。
+    # 这里盯的是「设计稿数值 + 缩放口径一致」，不是某一台机器的像素。
+    assert theme.GRID == theme.scale_px(8)
     for name in ("PAD_XS", "PAD_SM", "PAD_MD", "PAD_LG", "PAD_XL", "PAD_2XL"):
         assert getattr(theme, name) % (theme.GRID // 2) == 0, name
     assert theme.RADIUS_PILL == 999, (
         "真正要画成胶囊的地方（状态点、徽标圆点）用 999，绘制时被 "
         "clamp 到高度一半。按钮和导航高亮在改版后走 RADIUS_CONTROL 小圆角"
     )
-    assert 4 <= theme.RADIUS_CONTROL <= 8, "控件圆角 7px，落在 4~8px 内"
-    assert theme.RADIUS_CARD == 11, "卡片圆角 11px"
-    assert theme.RADIUS_BADGE == 5, "序号徽标 / 版本胶囊圆角 5px"
-    assert theme.CONTROL_HEIGHT == 36, "按钮/输入框标准高度 36px（设计稿 36~38）"
-    assert theme.PRIMARY_BUTTON_HEIGHT == 40, "主要操作按钮 40px"
+    assert 4 * theme.UI_SCALE <= theme.RADIUS_CONTROL <= 8 * theme.UI_SCALE, "控件圆角 7px，落在 4~8px 内"
+    assert theme.RADIUS_CARD == theme.scale_px(11), "卡片圆角 11px"
+    assert theme.RADIUS_BADGE == theme.scale_px(5), "序号徽标 / 版本胶囊圆角 5px"
+    assert theme.CONTROL_HEIGHT == theme.scale_px(36), "按钮/输入框标准高度 36px（设计稿 36~38）"
+    assert theme.PRIMARY_BUTTON_HEIGHT == theme.scale_px(40), "主要操作按钮 40px"
     assert theme.PRIMARY_BUTTON_HEIGHT > theme.CONTROL_HEIGHT
-    assert theme.STATUS_BAR_H == 30, "顶部状态条 30px"
-    assert (theme.THUMB_W, theme.THUMB_H) == (200, 113), "缩略图 200×113（16:9）"
-    assert theme.NAV_WIDTH_EXPANDED == 212, "侧栏展开 212px"
+    assert theme.STATUS_BAR_H == theme.scale_px(30), "顶部状态条 30px"
+    assert theme.THUMB_W == theme.scale_px(200), "缩略图宽 200px"
 
-    # 缩略图必须是 16:9，否则卡片里会留黑边
+    # 缩略图必须是 16:9，否则卡片里会留黑边。高度由宽度反算（见 theme），
+    # 这里只钉比例，不钉反算过程中的中间值。
     assert abs(theme.THUMB_W / theme.THUMB_H - 16 / 9) < 0.01
+    assert theme.NAV_WIDTH_EXPANDED == theme.scale_px(212), "侧栏展开 212px"
 
 
 def test_theme_has_both_light_and_dark_palettes():
@@ -640,8 +644,14 @@ def test_apply_layout_reaches_every_view_without_raising():
         app = App(root)
         app.pack(fill="both", expand=True)
 
-        # 三档都分发一遍：档位切换走的是同一条路径，任一档炸了都算 bug
-        for width in (theme.MIN_WIDTH, theme.DEFAULT_WIDTH, 1920):
+        # 三档都分发一遍：档位切换走的是同一条路径，任一档炸了都算 bug。
+        # 最宽档从断点派生：断点随 UI_SCALE 缩放，写死 1920 在 200% 下
+        # 只落在 medium，wide 档就白测了
+        for width in (
+            theme.MIN_WIDTH,
+            theme.DEFAULT_WIDTH,
+            layout.BREAKPOINT_WIDE + 400,
+        ):
             root.geometry(f"{width}x{theme.MIN_HEIGHT}")
             root.update()
             app._apply_layout(force=True)
@@ -800,8 +810,9 @@ def test_settings_two_columns_at_wide():
             groups[1].winfo_x() == groups[0].winfo_x()
         ), "中等档下第二组不该跑到右边去"
 
-        # —— 最宽档：两列
-        settle(1920, 1080)
+        # —— 最宽档：两列。宽度从断点派生：写死 1920 在 200% 缩放下
+        # 只落在 medium（断点已缩到 2560）
+        settle(layout.BREAKPOINT_WIDE + 400, 1080)
         assert app._tier == layout.WIDE
         assert groups[0].grid_info()["column"] == 0
         assert groups[1].grid_info()["column"] == 1
@@ -1726,12 +1737,17 @@ def test_history_columns_keep_fixed_content_fixed(tmp_path, monkeypatch):
         def widths() -> dict[str, int]:
             return {c: view._tree.column(c, "width") for c in history_view.COLUMNS}
 
+        # 宽/窄窗口都从断点派生：界面缩放（DPI / BILI_UI_SCALE）下
+        # MIN_WIDTH 与断点门槛会一起放大，写死 1400 在 150% 缩放下
+        # 反而只比最小窗口宽 80px，档位一切换内容区反而变窄。
+        from bilibili_submit.ui import layout as ui_layout
+
         root.geometry(f"{ui_theme.MIN_WIDTH}x700")
         root.update_idletasks()
         root.update()
         narrow = widths()
 
-        root.geometry("1400x700")
+        root.geometry(f"{ui_layout.BREAKPOINT_WIDE + 400}x700")
         root.update_idletasks()
         root.update()
         wide = widths()
@@ -1746,10 +1762,12 @@ def test_history_columns_keep_fixed_content_fixed(tmp_path, monkeypatch):
         assert narrow["name"] >= history_view._COLUMN_MIN_WIDTHS["name"], (
             f"最小窗口下任务名列被压到 {narrow['name']}，读不出是哪个任务"
         )
-        # 列宽总和要贴合表格，别溢出也别空一大片
+        # 列宽总和要贴合表格，别溢出也别空一大片。不写 == ：ttk 会把
+        # 总和钳到「控件宽 − 内缩量」，本页实测 0px，别的主题不一定是
+        # 0，所以只要求贴近（test_ui_perf 里那条盯着批量任务页的 2px）。
         tree_width = view._tree.winfo_width()
-        assert sum(wide.values()) == tree_width, (
-            f"列宽合计 {sum(wide.values())} 与表格实宽 {tree_width} 对不上"
+        assert tree_width - 4 <= sum(wide.values()) <= tree_width, (
+            f"列宽合计 {sum(wide.values())} 没贴近表格实宽 {tree_width}"
         )
     finally:
         root.destroy()
