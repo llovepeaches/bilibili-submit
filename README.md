@@ -15,6 +15,8 @@
 文件夹，勾几条就能跑。**不用写配置文件。** 跑完给你一串 BV 号，失败了会告诉你
 **是哪一条、因为什么**。
 
+命令行上就一句话的事：
+
 ```bash
 bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常"
 ```
@@ -56,7 +58,7 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 | **实时看得见** | 每行随执行变色（成功绿 / 失败红 / 进行中粉 / 缺失橙），失败的可以**一键只重试失败项**。 |
 | **失败有具体原因** | 不笼统报「投稿失败」，而是哪一条、什么错。撞上频控会阶梯退避重试（5 / 10 / 20 / 30 / 60 分钟），不是立刻放弃。 |
 | **断点续传** | 大文件传一半断了，下次从断点接着传。 |
-| **图形界面与命令行共用同一套逻辑** | 可以混着用：界面里填的表单和 `upload` 的参数一一对应，cookie 也是同一份。 |
+| **图形界面与命令行共用同一套逻辑** | 界面里填的表单和 `upload` 参数一一对应，cookie 也是同一份，可以混着用。 |
 | **定时发布 · 自动抽帧 · 自制 / 转载** | 定时发布、ffmpeg 抽首帧自动封面，转载 / 自制都能设。 |
 
 ---
@@ -68,8 +70,8 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 目标机器**不需要装 Python**。
 
 **[⬇ 前往 Releases 页面下载](https://github.com/llovepeaches/bilibili-submit/releases/latest)**
-—— 所有版本都发布在这个页面。下表点任意资产名都会**跳转到 Releases 页面**，
-在那里选择最新版下载（体积为参考值，以实际发布为准）。
+—— 所有版本都发布在这一个页面。下表点任意资产名都会**跳转到 Releases 页面**，
+在那里选最新版下载（体积为参考值，以实际发布为准）。
 
 ### 图形界面
 
@@ -87,14 +89,15 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 | [`bilibili-submit-cli-full.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~41 MB | 轻量 exe + 外置 ffmpeg，**启动最快** |
 | [`bilibili-submit-cli-mini.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~10 MB | 轻量 exe + 配置与文档 |
 
-**怎么选：**
+拿不定主意就按这张选：
 
 | 你想要 | 选什么 |
 |---|---|
 | 长期在自己电脑用，要开始菜单入口、能干净卸载 | 安装版 `setup` |
-| 临时用 / U 盘 / 别人的机器 | 便携版 `portable` |
-| 命令行图省事 | `cli-portable`（单文件，ffmpeg 内嵌） |
-| 命令行在意体积和启动速度 | `cli-full`（轻量 exe + 外置 ffmpeg，**启动最快**） |
+| 临时用 / U 盘 / 别人的机器 | 便携版 `gui-portable` |
+| 命令行图省事，一个文件拷走就用 | `cli-portable`（ffmpeg 内嵌） |
+| 命令行在意启动速度 | `cli-full`（ffmpeg 外置，**最快**） |
+| 命令行只想要最小体积 | `cli-mini` 或 `cli.exe`（都不带 ffmpeg） |
 
 两种界面**功能完全一致**，区别只在打包方式。安装版快是因为它把程序打成**目录**
 （ffmpeg 放在程序旁边），而单文件版每次启动都要把 60 MB ffmpeg 解压到临时目录。
@@ -104,14 +107,12 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 ffmpeg 只影响 `cover: auto` 自动抽帧，**不影响投稿本身**。不需要自动封面的话，
 命令行轻量版（10 MB）完全够用。
 
-各版本自带不带 ffmpeg，是打包时就定好的：
-
 | 形态 | ffmpeg | 说明 |
 |---|---|---|
-| 安装版 / 便携版（图形界面） | 自带 | 安装版放在 exe 旁边，可自行换版本；便携版内嵌进 exe |
+| `setup` / `gui-portable`（图形界面） | 自带 | 安装版放在 exe 旁边，可自行换版本；便携版内嵌进 exe |
 | `cli-portable`（命令行单文件） | 内嵌 | 拷走即用 |
 | `cli-full`（命令行 zip） | 外置 | `ffmpeg.exe` 跟着 exe 走，启动最快 |
-| 轻量 exe / `cli-mini`（命令行） | 不带 | 靠它把体积压在 10 MB。要自动封面就下 `cli-full`，或自己放一个 `ffmpeg.exe` 在 exe 旁边 |
+| `cli.exe` / `cli-mini`（命令行） | 不带 | 靠它把体积压在 10 MB。要自动封面就下 `cli-full`，或自己放一个 `ffmpeg.exe` 在 exe 旁边 |
 | 源码 / pip 运行 | 需自备 | `pip install -r requirements.txt` 会带上 imageio-ffmpeg |
 
 **缺 ffmpeg 时怎么补**：源码 / pip 运行 → 设置页「环境自检」里点
@@ -168,9 +169,10 @@ bilibili-submit.exe submit -c config\my.yaml --dry-run   # 先预览，确认无
 bilibili-submit.exe submit -c config\my.yaml
 ```
 
-源码运行把 `bilibili-submit.exe` 换成 `python run.py` 即可；下的是 `bilibili-submit-cli.exe`
-这类带 `cli` 前缀的裸 exe，就把命令里的 `bilibili-submit.exe` 换成你下载的那个文件名
-（zip 包里的 exe 仍叫 `bilibili-submit.exe`，照抄即可）。
+源码运行把 `bilibili-submit.exe` 换成 `python run.py` 即可；下的是带 `cli` 前缀的裸 exe
+（`bilibili-submit-cli.exe` / `bilibili-submit-cli-portable.exe`），把命令里的
+`bilibili-submit.exe` 换成你下载的那个文件名 —— zip 包里的 exe 仍叫
+`bilibili-submit.exe`，照抄即可。
 
 > **建议第一次拿一个几十 MB 的小视频试跑**，确认「登录 → 上传 → 拿到 BV 号」整条通了
 > 再批量用。
@@ -379,7 +381,7 @@ ffmpeg 是否就绪。
 - **转载**：`copyright: 2` 时 `source` 必填。
 - **封面**：`cover: auto` 用 ffmpeg 抽首帧；给图片路径则直接上传；`null` 不设封面。
 - **批量任务**：`include` / `exclude` 通配符过滤，`title_template` 支持
-  `{stem}` / `{name}` / `{n}`。`per_task_interval_minutes` 控制间隔，**批量投稿必调**，
+  `{stem}` / `{name}` / `{n}`。`per_task_interval_minutes` 控制任务间隔，**批量投稿必调**，
   否则大概率撞 601 频控。
 - **多分P**：`type: multip` + `files:`；`type: batch` + `group_by: folder` 则每个子文件夹
   出一个稿件。
@@ -432,10 +434,10 @@ upload:
 
 ```bash
 pip install -r requirements.txt
-xvfb-run -a python -m pytest      # 700 项
+xvfb-run -a python -m pytest      # 704 项
 ```
 
-> **必须挂虚拟屏幕**。没有 X server 时 tkinter 建不出窗口，183 条界面测试会被
+> **必须挂虚拟屏幕**。没有 X server 时 tkinter 建不出窗口，184 条界面测试会被
 > **静默跳过** —— 测试照样报绿，但你改的界面代码一行都没被验到。CI 里设
 > `BILLI_REQUIRE_DISPLAY=1` 可让缺屏直接判失败。
 
