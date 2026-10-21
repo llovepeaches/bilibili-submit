@@ -18,20 +18,31 @@
 from __future__ import annotations
 
 import os
+import sys
+import time
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
 
 from ... import __version__
+from ...exceptions import BiliError
 from ...ffmpeg import FfmpegInfo, install_imageio_ffmpeg
 from ...update import (
     ReleaseInfo,
+    UpdateCancelled,
     check_for_update,
+    cleanup_stale_updates,
+    download_update,
     fetch_latest_release,
     hint_text,
     is_newer,
+    launch_installer,
     mark_version_seen,
     open_release_page,
+    relaunch_app,
+    release_form,
+    replace_executable,
     should_notify,
 )
 from ..environment import EnvironmentSnapshot, probe_environment
@@ -92,6 +103,17 @@ def _cookie_stamp(path: str) -> tuple[int, int] | None:
 _UpdateResult = tuple[ReleaseInfo | None, bool]
 
 
+def _progress_text(done: int, total: int) -> str:
+    """下载进度的一行文字。
+
+    总字节未知时（服务器没给 Content-Length，GitHub 资产一般会给）
+    只报已下载量——编一个总数比不报更糟。
+    """
+    if total > 0:
+        return f"{done / 1e6:.1f} / {total / 1e6:.1f} MB（{done / total * 100:.0f}%）"
+    return f"{done / 1e6:.1f} MB"
+
+
 class SettingsView(ttk.Frame):
     """设置页。"""
 
@@ -114,6 +136,13 @@ class SettingsView(ttk.Frame):
         #: Worker 是因为它们可以随时各来一次，共用一个会互相把对方丢掉。
         self._update_worker: Worker[_UpdateResult] | None = None
         self._update_generation = 0
+        #: 下载更新：安装包有几十 MB，是比检查更长的任务，同样单独一个
+        #: Worker——下载途中用户又点了「检查更新」的话，两个任务不该
+        #: 互相把对方丢掉。
+        self._download_worker: Worker[Path] | None = None
+        #: 正在下载的版本号。用于「自动检查又弹了一次同一个版本」时
+        #: 认出来：那次不理会，让它走完正在进行的下载。
+        self._downloading_version = ""
         #: 装 ffmpeg 也是一次性短任务，但和探测分开两个 Worker：
         #: 点「一键获取」时上一次探测可能还在跑，共用一个的话
         #: 第二次会因为「已有任务在运行」直接被丢掉。
@@ -246,7 +275,9 @@ class SettingsView(ttk.Frame):
             "没有就什么都不做。",
         )
         row.grid(row=1, column=0, sticky="ew", pady=(0, theme.PAD_SM))
-        row.add(OutlinedButton, text="检查更新", command=self._on_check_update)
+        self._update_button = row.add(
+            OutlinedButton, text="检查更新", command=self._on_check_update
+        )
         self._update = KeyValueList(update_box, label_width=12)
         self._update.grid(row=2, column=0, sticky="w")
         self._update.set_rows([("当前版本", __version__, "idle")])
@@ -518,7 +549,12 @@ class SettingsView(ttk.Frame):
 
         失败**完全不显示**：这是后台动作，用户没要求知道，断网时不该
         让界面上多一行「检查失败」。
+
+        顺手收掉上次升级的残留：便携版更新时旧 exe 被改名成 ``.old``，
+        删除它得等自己退出之后，所以留到这里——每次启动清一次，
+        用户永远看不到目录里躺着一个用不了的旧文件。
         """
+        cleanup_stale_updates()
         self._start_update_check(manual=False)
 
     def _start_update_check(self, *, manual: bool) -> None:
@@ -603,24 +639,235 @@ class SettingsView(ttk.Frame):
         if manual:
             self._show_update_failed(str(exc))
 
-    def _show_update_failed(self, reason: str) -> None:
+    def _show_update_failed(self, reason: str, *, prefix: str = "检查失败") -> None:
         self._update.set_rows(
             [
                 ("当前版本", __version__, "idle"),
-                ("最新版本", f"检查失败：{reason}", "idle"),
+                ("最新版本", f"{prefix}：{reason}", "idle"),
             ]
         )
 
     def _prompt_update(self, info: ReleaseInfo) -> None:
-        """弹一次提示，问要不要去下载页。
+        """弹一次提示，问要不要就地更新。
 
         用 ``messagebox`` 而不是就地显示：启动自动检查时用户多半在别的页，
         就地显示一定会被错过。同一个版本只弹一次——记在
         ``mark_version_seen`` 里，不看用户选了什么：他看见了就够了。
+
+        **不再跳浏览器**：安装版和便携版都直接下载并在客户端内完成
+        （见 :meth:`_on_download_update`）。源码形态没有「装」这回事，
+        才保留「去下载页」这条路——那是兜底，不是默认。
         """
         if not should_notify(info.version):
             return
+        if (
+            self._download_worker is not None
+            and self._download_worker.running
+            and self._downloading_version == info.version
+        ):
+            return  # 正在下的就是它：别为同一个版本再弹一次
         title, body = hint_text(info)
-        if messagebox.askyesno(title, f"{body}\n\n现在去下载页吗？", parent=self):
-            open_release_page(info.url)
+        if release_form() == "source":
+            question = "现在去下载页看看吗？"
+        else:
+            question = "现在下载并更新吗？"
+        if messagebox.askyesno(title, f"{body}\n\n{question}", parent=self):
+            if release_form() == "source":
+                open_release_page(info.url)
+            else:
+                self._on_download_update(info)
         mark_version_seen(info.version)
+
+    # ---------- 下载并应用更新（异步） ----------
+
+    def _reset_update_button(self) -> None:
+        """把更新按钮恢复成「检查更新」的默认样子。
+
+        下载期间它被改成「取消下载」，成功、失败、取消三条路收尾时
+        都要走这里——不复原的话，下一次更新用户会看到一个点不动的
+        「取消下载」。
+        """
+        button = self._update_button
+        if str(button.cget("text")) != "检查更新":
+            button.configure(text="检查更新")
+        button.configure(command=self._on_check_update)
+        button.state(["!disabled"])
+
+    def _on_download_update(self, info: ReleaseInfo) -> None:
+        """下载新版。必须走工作线程——安装包几十 MB，会跑好几分钟。"""
+        if self._download_worker is not None and self._download_worker.running:
+            return  # 正在下载；按钮此时就是「取消下载」，不会走到这
+        if not info.asset_url:
+            # 这个 release 没带可用资产（打包配置改了名之类）。让用户
+            # 自己去下载页看，比在这儿干等着强。
+            messagebox.showinfo(
+                "无法自动更新",
+                f"这个版本没有可供自动下载的文件。\n\n请手动打开：{info.url}",
+                parent=self,
+            )
+            open_release_page(info.url)
+            return
+
+        proxy = self.app.ctx.proxy
+        self._downloading_version = info.version
+        self._update_button.configure(text="取消下载", command=self._on_cancel_download)
+
+        self._update.set_rows(
+            [
+                ("当前版本", __version__, "idle"),
+                ("最新版本", info.version, "warn"),
+                ("更新进度", "下载中… 0%", "busy"),
+            ]
+        )
+
+        # 节流：每 250ms 最多上报一次。KeyValueList 是整表重建的，
+        # 64KB 一个 chunk 全上报等于每秒十几次重建；进度是人看的，
+        # 4 次/秒和 40 次/秒没有区别。
+        last_report = [0.0]
+
+        def task(report: object, is_cancelled: object) -> Path:
+            def on_progress(done: int, total: int) -> None:
+                now = time.monotonic()
+                if done < total and now - last_report[0] < 0.25:
+                    return
+                last_report[0] = now
+                report(_progress_text(done, total))
+
+            return download_update(
+                info,
+                proxy=proxy,
+                on_progress=on_progress,
+                is_cancelled=is_cancelled,
+            )
+
+        worker: Worker[Path] = Worker(self)
+        self._download_worker = worker
+        try:
+            worker.run(
+                task,
+                on_progress=self._on_download_progress,
+                on_done=lambda local: self._on_update_downloaded(info, local),
+                on_error=lambda exc: self._on_download_error(exc),
+            )
+        except RuntimeError as exc:
+            # 线程没起来不会有 on_error，复用同一条收尾路径
+            self._on_download_error(exc)
+
+    def _on_cancel_download(self) -> None:
+        """取消下载。任务自己在下一个 chunk 边界检查标志位后退出。"""
+        if self._download_worker is None:
+            return
+        self._download_worker.cancel()
+        self._update_button.state(["disabled"])
+
+    def _on_download_progress(self, message: str) -> None:
+        """把进度行刷成最新文字。
+
+        KeyValueList 是整表重建的，所以另外两行也要一起摆回去——
+        当前版本照旧，最新版本沿用检查时定下的那行。
+        """
+        rows = [("当前版本", __version__, "idle")]
+        for key, value in self._update.rows():
+            if key == "最新版本：":
+                rows.append(("最新版本", value, "warn"))
+        rows.append(("更新进度", message, "busy"))
+        self._update.set_rows(rows)
+
+    def _on_update_downloaded(self, info: ReleaseInfo, local: Path) -> None:
+        """下载完成：按形态确认下一步，然后完成更新。
+
+        安装版走安装器（它提权替换 Program Files 下的文件），便携版
+        自己换自己。两条路最后都要退出客户端——文件被自己占着，
+        替换和安装都进行不下去。
+        """
+        self._download_worker = None
+        self._downloading_version = ""
+        self._reset_update_button()
+        self._update.set_rows(
+            [
+                ("当前版本", __version__, "idle"),
+                ("最新版本", info.version, "warn"),
+                ("更新进度", "下载完成，等待确认", "ok"),
+            ]
+        )
+
+        size_mb = local.stat().st_size / 1e6
+        if release_form() == "portable":
+            detail = (
+                f"新版已下载完成（{size_mb:.0f} MB）。\n\n"
+                "点「确定」后客户端会替换自己并自动重启；"
+                "旧版本会备份成 .old，确认无误后可以删掉它。"
+            )
+        else:
+            detail = (
+                f"安装包已下载完成（{size_mb:.0f} MB）。\n\n"
+                "点「确定」后客户端会退出并运行安装向导，"
+                "按提示点几下即可完成升级；cookie 和投稿历史不受影响。"
+            )
+        if not messagebox.askyesno("更新就绪", detail, parent=self):
+            # 用户改主意了：文件已下载好，告诉他去哪儿取，别让这
+            # 几十 MB 白下
+            messagebox.showinfo(
+                "更新已取消", f"新版已下载到：\n{local}\n\n随时可以手动运行它。",
+                parent=self,
+            )
+            return
+
+        if release_form() == "portable":
+            self._apply_portable(local)
+        else:
+            self._apply_installed(local)
+
+    def _apply_portable(self, local: Path) -> None:
+        """便携版：替换自己 → 启动新版 → 退出。"""
+        try:
+            replace_executable(local)
+        except BiliError as exc:
+            self._show_update_failed(_error_detail(exc), prefix="更新失败")
+            return
+        # 替换之后 sys.executable 指的就是新版了。启动失败**不退出**：
+        # 当前进程跑的是改名后的 .old，还好好地活着，让用户先用着，
+        # 手动双击一样能开新版。
+        try:
+            relaunch_app(Path(sys.executable))
+        except OSError as exc:
+            self._show_update_failed(
+                f"新版已就位，但自动启动失败（{exc}），请手动重新打开程序",
+                prefix="更新失败",
+            )
+            return
+        self._quit()
+
+    def _apply_installed(self, local: Path) -> None:
+        """安装版：跑安装器（它提权）→ 退出，把文件让出来。"""
+        try:
+            launch_installer(local)
+        except (OSError, BiliError) as exc:
+            self._show_update_failed(_error_detail(exc), prefix="更新失败")
+            return
+        self._quit()
+
+    def _quit(self) -> None:
+        """退出客户端——更新流程的最后一步。"""
+        self.winfo_toplevel().quit()
+
+    def _on_download_error(self, exc: BaseException) -> None:
+        """下载失败。取消不算失败：安静复位，不弹错误框。"""
+        self._download_worker = None
+        self._downloading_version = ""
+        self._reset_update_button()
+        if isinstance(exc, UpdateCancelled):
+            self._update.set_rows(
+                [
+                    ("当前版本", __version__, "idle"),
+                    ("最新版本", "下载已取消", "idle"),
+                ]
+            )
+            return
+        messagebox.showerror("下载更新失败", _error_detail(exc), parent=self)
+        self._update.set_rows(
+            [
+                ("当前版本", __version__, "idle"),
+                ("最新版本", "下载失败，可重试", "idle"),
+            ]
+        )
