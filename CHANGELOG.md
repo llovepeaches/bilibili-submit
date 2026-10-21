@@ -6,7 +6,7 @@
 所有值得记录的变更都会写进这里。格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [未发布]
+## [0.3.0] - 2026-10-21
 
 ### 新增 —— 高分屏（高 DPI）下界面自动放大
 
@@ -1291,7 +1291,13 @@ Windows 默认布局——「Windows 默认样」本身就是 AI 味的来源。
 - 配置里 `proxy` 段位写错（`upload.proxy` 而非 `account.proxy`）会静默失效，
   现改为直接报错。
 
-[未发布]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.5...HEAD
+[未发布]: https://github.com/llovepeaches/bilibili-submit/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.10...v0.3.0
+[0.2.10]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.9...v0.2.10
+[0.2.9]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.8...v0.2.9
+[0.2.8]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.7...v0.2.8
+[0.2.7]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/llovepeaches/bilibili-submit/compare/v0.2.2...v0.2.3
