@@ -17,15 +17,8 @@
 
 </div>
 
-扫码登录一次，之后就两件事：单个视频填个标题点「开始投稿」；一批视频选中装着视频的
-文件夹，勾几条就能跑。**不用写配置文件。** 跑完给你一串 BV 号，失败了会告诉你
-**是哪一条、因为什么**。
-
-命令行上就一句话的事：
-
-```bash
-bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常"
-```
+扫码登录一次，之后单个视频填个标题点「开始投稿」，一批视频选中文件夹勾几条就能跑
+—— **不用写配置文件**，跑完给你一串 BV 号。
 
 <table align="center">
   <tr>
@@ -79,22 +72,22 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 
 ### 图形界面
 
-| 资产 | 体积 | 说明 |
-|---|---|---|
-| [`bilibili-submit-setup.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~33 MB | **安装版（推荐）**。开始菜单有入口，能干净卸载 |
-| [`bilibili-submit-gui-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~72 MB | 便携版，免安装，拷走即用 |
+| 资产 | 体积 | ffmpeg | 说明 |
+|---|---|---|---|
+| [`bilibili-submit-setup.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~33 MB | 自带（放 exe 旁，可自行换版本） | **安装版（推荐）**。开始菜单有入口，能干净卸载 |
+| [`bilibili-submit-gui-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~72 MB | 内嵌进 exe | 便携版，免安装，拷走即用 |
 
 两个图形界面版**功能完全一致**，区别只在打包方式。安装版快是因为它把程序打成**目录**
 （ffmpeg 放在程序旁边），而单文件版每次启动都要把 60 MB ffmpeg 解压到临时目录。
 
 ### 命令行
 
-| 资产 | 体积 | 说明 |
-|---|---|---|
-| [`bilibili-submit-cli-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~70 MB | 单文件便携版，ffmpeg 已内置 |
-| [`bilibili-submit-cli.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~10 MB | 轻量 exe |
-| [`bilibili-submit-cli-full.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~41 MB | 轻量 exe + 外置 ffmpeg，**启动最快** |
-| [`bilibili-submit-cli-mini.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~10 MB | 轻量 exe + 配置与文档 |
+| 资产 | 体积 | ffmpeg | 说明 |
+|---|---|---|---|
+| [`bilibili-submit-cli-portable.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~70 MB | 内嵌进 exe | 单文件便携版 |
+| [`bilibili-submit-cli.exe`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~10 MB | 不带 | 轻量 exe。要自动封面就下 `cli-full`，或自己放一个 `ffmpeg.exe` 在旁边 |
+| [`bilibili-submit-cli-full.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~41 MB | 外置（跟着 exe 走） | 轻量 exe + ffmpeg + 配置文档，**启动最快** |
+| [`bilibili-submit-cli-mini.zip`](https://github.com/llovepeaches/bilibili-submit/releases/latest) | ~10 MB | 不带 | 轻量 exe + 配置与文档 |
 
 拿不定主意就按这张选：
 
@@ -102,26 +95,17 @@ bilibili-submit upload 视频.mp4 --title "标题" --tid 21 --tag "标签,日常
 |---|---|
 | 长期在自己电脑用，要开始菜单入口、能干净卸载 | 安装版 `setup` |
 | 临时用 / U 盘 / 别人的机器 | 便携版 `gui-portable` |
-| 命令行图省事，一个文件拷走就用 | `cli-portable`（ffmpeg 内嵌） |
-| 命令行在意启动速度 | `cli-full`（ffmpeg 外置，**最快**） |
-| 命令行只想要最小体积 | `cli-mini` 或 `cli.exe`（都不带 ffmpeg） |
+| 命令行图省事，一个文件拷走就用 | `cli-portable` |
+| 命令行在意启动速度 | `cli-full` |
+| 命令行只想要最小体积 | `cli-mini` 或 `cli.exe` |
 
 ### ffmpeg 与自动封面
 
-ffmpeg 只影响 `cover: auto` 自动抽帧，**不影响投稿本身**。不需要自动封面的话，
-命令行轻量版（10 MB）完全够用。
-
-| 形态 | ffmpeg | 说明 |
-|---|---|---|
-| `setup` / `gui-portable`（图形界面） | 自带 | 安装版放在 exe 旁边，可自行换版本；便携版内嵌进 exe |
-| `cli-portable`（命令行单文件） | 内嵌 | 拷走即用 |
-| `cli-full`（命令行 zip） | 外置 | `ffmpeg.exe` 跟着 exe 走，启动最快 |
-| `cli.exe` / `cli-mini`（命令行） | 不带 | 靠它把体积压在 10 MB。要自动封面就下 `cli-full`，或自己放一个 `ffmpeg.exe` 在 exe 旁边 |
-| 源码 / pip 运行 | 需自备 | `pip install -r requirements.txt` 会带上 imageio-ffmpeg |
-
-**缺 ffmpeg 时怎么补**：源码 / pip 运行 → 设置页「环境自检」里点
-**「一键获取 ffmpeg」**（装 `imageio-ffmpeg`，会跟着设置页配的代理走）。打包版不适用
-这条路（里面没有 pip），请改下自带 ffmpeg 的安装版或便携版。
+ffmpeg 只影响 `cover: auto` 自动抽帧，**不影响投稿本身** —— 不需要自动封面的话，
+命令行轻量版（10 MB）完全够用。源码 / pip 运行装依赖时就会带上 imageio-ffmpeg
+（`pip install -r requirements.txt`）；缺的时候在设置页「环境自检」点
+**「一键获取 ffmpeg」** 也能补，会跟着设置页配的代理走。打包版不适用这条路
+（里面没有 pip），请改下自带 ffmpeg 的安装版或便携版。
 
 ### 用户数据存在哪
 
@@ -370,8 +354,9 @@ bilibili-submit upload a.mp4 --copyright 2 --source "https://www.bilibili.com/vi
 ```
 --title --tid --tag --desc --cover --copyright --source
 --dtime --dtime-offset --part-title --no-resume -c
---dolby --hires --close-danmu --close-reply --selection-reply
 ```
+
+弹幕 / 评论 / 音质一类开关见 [投稿选项](#options)。
 
 </details>
 
@@ -388,13 +373,12 @@ ffmpeg 是否就绪。
 
 - **定时发布**：`dtime`（绝对时间戳）或 `dtime_offset_hours`（相对小时数）二选一，
   **必须距今 4 小时以上**，否则直接报错。
-- **转载**：`copyright: 2` 时 `source` 必填。
+- **转载**：`copyright: 2` 时 `source` 必填，详见 [投稿类型：自制 / 转载](#copyright)。
 - **封面**：`cover: auto` 用 ffmpeg 抽首帧；给图片路径则直接上传；`null` 不设封面。
 - **批量任务**：`include` / `exclude` 通配符过滤，`title_template` 支持
   `{stem}` / `{name}` / `{n}`。`per_task_interval_minutes` 控制任务间隔，**批量投稿必调**，
   否则大概率撞 601 频控。
-- **多分P**：`type: multip` + `files:`；`type: batch` + `group_by: folder` 则每个子文件夹
-  出一个稿件。
+- **多分P**：`type: multip` + `files:`，写法详见 [多分 P 投稿](#multipart)。
 
 ### 海外投稿 / 代理
 
@@ -444,10 +428,10 @@ upload:
 
 ```bash
 pip install -r requirements.txt
-xvfb-run -a python -m pytest      # 704 项
+xvfb-run -a python -m pytest      # 743 项
 ```
 
-> **必须挂虚拟屏幕**。没有 X server 时 tkinter 建不出窗口，184 条界面测试会被
+> **必须挂虚拟屏幕**。没有 X server 时 tkinter 建不出窗口，190 条界面测试会被
 > **静默跳过** —— 测试照样报绿，但你改的界面代码一行都没被验到。CI 里设
 > `BILLI_REQUIRE_DISPLAY=1` 可让缺屏直接判失败。
 
