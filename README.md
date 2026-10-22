@@ -33,19 +33,6 @@
 
 ---
 
-## 目录
-
-| 快速上手 | 进阶用法 |
-|---|---|
-| [特性](#features) | [多分 P 投稿](#multipart) |
-| [下载](#download) | [投稿类型：自制 / 转载](#copyright) |
-| [快速开始](#quickstart) | [投稿选项](#options) |
-| [命令](#commands) | [配置](#config) |
-| [注意事项](#caveats) | [已知边界](#limits) |
-| [开发](#dev) | [许可证](#license) |
-
----
-
 <a id="features"></a>
 
 ## 特性
