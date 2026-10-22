@@ -486,6 +486,97 @@ def test_load_error_shows_actionable_hint(tmp_path, monkeypatch):
         root.destroy()
 
 
+@needs_display
+def test_empty_result_shows_placeholder_with_consistent_copy(tmp_path, monkeypatch):
+    """A2/B4：加载成功但一个任务都没有，要切到占位图并给一致文案。
+
+    「加载失败」保留上一批（守门测试已钉死），「加载成功但为空」是另一条
+    分支：以前空分支直接 return，从不调 ``_on_table_filled(False)``，占位图
+    永远不出现——用户既看不到列表也看不到引导，只剩一句自相矛盾的提示。
+    两条分支严格区分，谁也不许盖过谁。
+    """
+    import tkinter as tk
+    from pathlib import Path
+
+    from bilibili_submit.config import load_config
+
+    _make_video(tmp_path, "a.mp4")
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+        # 先加载一批真实任务：确保「空结果」不是从干净状态碰巧走对
+        _load_folder(root, view, tmp_path, monkeypatch)
+        assert len(view._tasks) == 1
+
+        # 空目录走的是失败分支（ConfigError），拿不到「成功但零任务」的
+        # 结果——只能从 _start_load 入口直接喂，和 _load_yaml 同一通道
+        yaml_path = _write_yaml(tmp_path, [("任务一", str(tmp_path / "a.mp4"))])
+        cfg = load_config(Path(yaml_path))
+        view._log.clear()
+        view._start_load(
+            "读配置…", lambda _report, _cancelled: (cfg, []), mode="yaml", label="空配置"
+        )
+        run_until(root, lambda: not view._busy)
+        root.update_idletasks()
+
+        assert view._placeholder.winfo_ismapped(), "空结果应切到「没有任务」占位图"
+        assert not view._list_holder.winfo_ismapped(), "空结果不该留着空列表区"
+        assert "没有可投稿的任务" in view._source_pill.cget("text"), (
+            f"pill 文案应与占位图一致，实际：{view._source_pill.cget('text')!r}"
+        )
+        log_text = view._log._text.get("1.0", "end")
+        assert "这个文件夹里没有可投稿的任务" in log_text, f"日志文案：{log_text!r}"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_save_state_merges_rapid_changes(tmp_path, monkeypatch):
+    """B2：上一轮保存还没跑完时又来新改动，必须合并保存而不是丢弃。
+
+    以前的实现在 worker 忙时直接 return——用户快速改动（勾选、换源）后
+    看到的「已保存」可能是旧值。合并保存的契约：最终落盘的一定是最后
+    一次改动，待保存队列跑完要清空。
+    """
+    import threading
+    import tkinter as tk
+
+    from bilibili_submit.ui.views import tasks as tasks_mod
+
+    gate = threading.Event()
+    saved: list = []
+
+    def slow_save(state, path):
+        gate.wait(5.0)  # 第一次保存被堵住，模拟「上一轮还没跑完」
+        saved.append(state)
+
+    monkeypatch.setattr(tasks_mod, "save_ui_state", slow_save)
+
+    root = tk.Tk()
+    try:
+        _app, view = _build(root, tmp_path, monkeypatch)
+
+        view._dir_var.set("/first/dir")
+        view._save_state()
+        assert view._state_worker.running, "第一次保存应已启动"
+
+        # 保存进行中改表单：必须暂存为待保存，不能被丢
+        view._dir_var.set("/second/dir")
+        view._save_state()
+        assert view._pending_state is not None, "忙时的保存不该被丢弃"
+        assert view._pending_state.directory == "/second/dir"
+
+        gate.set()  # 放行第一次保存
+        run_until(root, lambda: len(saved) >= 2)
+
+        assert [s.directory for s in saved] == ["/first/dir", "/second/dir"], (
+            f"最终落盘必须是最后一次改动，实际：{[s.directory for s in saved]!r}"
+        )
+        assert view._pending_state is None, "补存之后待保存队列应清空"
+    finally:
+        root.destroy()
+
 
 @needs_display
 def test_yaml_mode_keeps_per_task_values(tmp_path, monkeypatch):

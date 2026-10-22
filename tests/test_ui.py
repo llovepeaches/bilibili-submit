@@ -291,6 +291,33 @@ def test_safe_after_still_runs_callback():
     assert seen == [(1, "x")]
 
 
+def test_safe_after_prints_traceback_for_unexpected_exception(capsys):
+    """C1：回调里抛非 Tcl/Runtime 异常，必须抓住并留下堆栈。
+
+    只吞 TclError / RuntimeError 的话，回调里一个 ValueError 会直接逃逸到
+    stderr 且无 traceback——界面永远停在「执行中」，既不能重试也不能取消，
+    事后查日志还一无所获。窗口已关那两类照旧静默，其它异常必须可见。
+    """
+    from bilibili_submit.ui.workers import safe_after
+
+    fired = []
+
+    class _Root:
+        def after(self, _delay, fn):
+            fired.append(fn)
+            return "id"
+
+    def boom():
+        raise ValueError("回调里的意外")
+
+    assert safe_after(_Root(), 0, boom) == "id"
+    fired[0]()  # 不得逃逸到调用方
+
+    captured = capsys.readouterr()
+    assert "ValueError" in captured.err, f"意外异常应打印堆栈：{captured.err!r}"
+    assert "回调里的意外" in captured.err
+
+
 def test_worker_survives_dead_window():
     """窗口销毁后 Worker 的上报不得产生未捕获异常。
 
@@ -1816,6 +1843,61 @@ def test_history_log_does_not_accumulate_on_refresh(tmp_path, monkeypatch):
         root.destroy()
 
 
+@needs_display
+def test_history_tree_rows_follow_container_height(tmp_path, monkeypatch):
+    """A5：Treeview 可见行数随容器高度伸缩，不再写死 12 行。
+
+    写死的行数高窗浪费空间、矮窗溢出。行数由 ``_resize_tree`` 按容器
+    高度换算，且**不绑** ``<Configure>``——改 height 会被 grid 的 weight
+    行反噬成死循环，只由 ``apply_layout``（外部事件）驱动。这里直接驱
+    动换算逻辑：容器高→行数变多；矮到不出一行→保底 5 行；量不到高度
+    （布局中/空态收起）→不动，保持上一次的行数不闪。
+    """
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit import scheduler
+    from bilibili_submit.ui.app import App
+
+    history_file = tmp_path / "history.json"
+    monkeypatch.setattr(scheduler, "DEFAULT_HISTORY_FILE", str(history_file))
+    monkeypatch.setattr(
+        "bilibili_submit.ui.views.history.DEFAULT_HISTORY_FILE", str(history_file)
+    )
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        view = app._views["历史"]
+
+        # 容器 600px 高：行数应按 ROW_HEIGHT 换算，而不是停在默认 12 行
+        monkeypatch.setattr(view._list_holder, "winfo_height", lambda: 600)
+        view._resize_tree()
+        rows = int(view._tree.cget("height"))
+        assert rows == max(5, 600 // theme.ROW_HEIGHT), (
+            f"600px 容器应显示 {max(5, 600 // theme.ROW_HEIGHT)} 行，实际 {rows}"
+        )
+
+        # 容器只比一行高一点：保底 5 行，不许变成 1 行甚至 0 行
+        monkeypatch.setattr(view._list_holder, "winfo_height", lambda: theme.ROW_HEIGHT + 1)
+        view._resize_tree()
+        assert int(view._tree.cget("height")) == 5, "再矮也要保底 5 行"
+
+        # 量不到高度（还在布局、或空态被收起）：保持不动，不闪
+        monkeypatch.setattr(view._list_holder, "winfo_height", lambda: 3)
+        view._resize_tree()
+        assert int(view._tree.cget("height")) == 5, "量不到高度时应保持上一次的行数"
+    finally:
+        root.destroy()
+
+
 def _build_login_view(root):
     """建一个带主题的 App，返回登录页视图。"""
     import tkinter as tk
@@ -1952,6 +2034,50 @@ def test_login_error_shows_hint_in_log():
         assert "失败" in view._status.cget("text"), "状态标签也要提示失败"
         # BiliError._compose 已把 hint 拼进 str(exc)，别再重复打一遍
         assert text.count("换代理") == 1, f"hint 重复显示了：{text!r}"
+    finally:
+        root.destroy()
+
+
+@needs_display
+def test_login_error_distinguishes_expired_timeout_and_failure():
+    """A3：失效 / 超时 / 获取失败 / 登录失败是四种不同的事，文案必须分态。
+
+    混成一句「获取二维码失败」会让用户去排查网络，而二维码早就生成好了，
+    正确动作只是「重新点一下获取」。状态标签分态；日志仍带完整原因。
+    """
+    import tkinter as tk
+
+    from bilibili_submit.exceptions import NetworkError
+    from bilibili_submit.ui.views import login as login_mod
+
+    root = tk.Tk()
+    try:
+        _app, view = _build_login_view(root)
+
+        view._log.clear()
+        view._on_error(login_mod._QrExpired("二维码已失效，请点击「获取二维码」重新生成"))
+        assert view._status.cget("text") == "二维码已失效，请重新获取", (
+            f"失效要说「重新获取」，实际：{view._status.cget('text')!r}"
+        )
+
+        view._on_error(login_mod._QrTimeout("登录超时（300s），请重试"))
+        assert view._status.cget("text") == "登录超时，请重新获取", (
+            f"超时也要说「重新获取」，实际：{view._status.cget('text')!r}"
+        )
+
+        # 二维码从未生成出来：一定是申请/网络/风控那一步的问题
+        assert view._qr_url == "", "新视图不该带着二维码 URL"
+        view._on_error(NetworkError("获取二维码失败: HTTP 412", hint="被风控拦截"))
+        assert view._status.cget("text") == "获取二维码失败", (
+            f"没拿到二维码才叫「获取失败」，实际：{view._status.cget('text')!r}"
+        )
+
+        # 二维码生成过却没登进去（例如缺 cookie）：不是「获取」的错
+        view._qr_url = "https://example.test/qr"
+        view._on_error(login_mod.BiliError("cookie 没存上"))
+        assert view._status.cget("text") == "登录失败，请重新获取", (
+            f"拿到二维码后的失败不该说成「获取失败」，实际：{view._status.cget('text')!r}"
+        )
     finally:
         root.destroy()
 
