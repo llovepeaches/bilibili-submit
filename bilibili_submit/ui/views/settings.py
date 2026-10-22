@@ -1,12 +1,13 @@
-"""设置视图：代理、cookie 路径、主题、ffmpeg 自检。
+"""设置视图：代理、cookie 路径、主题、界面缩放、ffmpeg 自检。
 
 改动即时写入 :class:`AppContext`，各视图下次操作时自动生效，
 不需要「保存并重启」。
 
 .. important::
-   **主题是唯一的例外**：tk/ttk 把颜色写进控件，改色板不影响已建好的
-   控件，所以主题改完要重启客户端。这一点在界面提示里也写明了——
-   与其做个切一半的开关，不如把话说清楚。
+   **主题与界面缩放是例外**：tk/ttk 把颜色和控件尺寸在创建时就写进
+   控件，改色板或改缩放都不影响已经建好的控件，所以这两项改完要重启
+   客户端。这一点在界面提示里也写明了——与其做个切一半的开关，
+   不如把话说清楚。
 
 **环境自检不在主线程跑。** 它要读 cookie 文件、探 ffmpeg 路径、必要时
 启动子进程跑 ``ffmpeg -version``，放在主线程会把界面冻住——切到本页
@@ -50,8 +51,10 @@ from .. import layout, theme
 from ..state import (
     AppUIState,
     THEME_MODE_LABELS,
+    UI_SCALE_LABELS,
     load_app_state,
     parse_theme_mode,
+    parse_ui_scale,
     save_app_state,
 )
 from ..workers import Worker
@@ -82,6 +85,9 @@ def _error_detail(exc: BaseException) -> str:
 
 #: 下拉框选项顺序。跟随系统放第一个：它是默认值，也最不需要用户操心。
 THEME_OPTIONS = [THEME_MODE_LABELS[key] for key in ("system", "light", "dark")]
+
+#: 界面缩放下拉框选项，顺序同 :data:`~.state.APP_UI_SCALES`。
+SCALE_OPTIONS = [UI_SCALE_LABELS[key] for key in ("auto", "1.0", "1.25", "1.5")]
 
 
 def _cookie_stamp(path: str) -> tuple[int, int] | None:
@@ -155,7 +161,7 @@ class SettingsView(ttk.Frame):
 
     def _build(self) -> None:
         PageHeader(
-            self, "设置", "改动立即生效；主题一项需重启客户端。"
+            self, "设置", "改动立即生效；主题与界面缩放两项需重启客户端。"
         ).grid(row=0, column=0, sticky="ew", pady=(0, theme.PAD_LG))
 
         # 最小窗口下这一页装不下（实测 reqh=730 vs 可用 595），底部
@@ -230,6 +236,26 @@ class SettingsView(ttk.Frame):
             width=12,
         )
         self._theme_var.trace_add("write", self._on_theme_change)
+
+        # 界面缩放：字小了看不清的唯一自救入口。跟随系统通常已经对
+        # （Windows 按 DPI 自动放大），但它只认主显示器——小屏笔记本、
+        # 虚拟机、远程桌面，以及就是觉得中文小的用户，需要手动档。
+        self._scale_var = tk.StringVar(value=SCALE_OPTIONS[0])
+        row = FormRow(
+            look,
+            "界面缩放",
+            hint="整个界面（字号、间距、窗口默认尺寸）一起放大或缩小。"
+            "控件尺寸在建界面时就定死了，改这里和主题一样要重启客户端才生效。",
+        )
+        row.grid(row=2, column=0, sticky="ew")
+        row.add(
+            ttk.Combobox,
+            textvariable=self._scale_var,
+            values=SCALE_OPTIONS,
+            state="readonly",
+            width=12,
+        )
+        self._scale_var.trace_add("write", self._on_scale_change)
 
         # ③ 环境自检
         ttk.Label(env_box, text="环境自检", style="Heading.TLabel").grid(
@@ -343,9 +369,13 @@ class SettingsView(ttk.Frame):
             self._cookie_var.set(ctx.cookie_file)
         # 值没变就别 set：StringVar 上挂着 trace，set 一次就写一次
         # 用户偏好文件——每次切页都白写一遍磁盘
-        theme_label = THEME_MODE_LABELS[load_app_state().theme_mode]
+        state = load_app_state()
+        theme_label = THEME_MODE_LABELS[state.theme_mode]
         if self._theme_var.get() != theme_label:
             self._theme_var.set(theme_label)
+        scale_label = UI_SCALE_LABELS[state.ui_scale]
+        if self._scale_var.get() != scale_label:
+            self._scale_var.set(scale_label)
 
     def _probe_key(self) -> tuple:
         """环境自检的输入指纹：cookie 文件的内容标识 + 代理。
@@ -367,6 +397,22 @@ class SettingsView(ttk.Frame):
         代价太大也不稳——提示里写清楚「重启生效」比做个切一半的开关诚实。
         """
         save_app_state(AppUIState(theme_mode=parse_theme_mode(self._theme_var.get())))
+
+    def _on_scale_change(self, *_: object) -> None:
+        """存下界面缩放选择。和主题一样只写文件、重启生效。
+
+        不尝试热切换是有原因的：缩放改的是**几十个模块级像素常量**
+        加字阶，控件尺寸在创建时就从这些常量读走了。真要热切换得把
+        整棵控件树按新度量重建——那相当于把「重启客户端」做进了一个
+        按钮里，而它该有的可靠性（表单内容不丢、滚动位置还原）一项
+        都没有。写文件 + 明说重启，比做个会丢数据的开关诚实。
+        """
+        save_app_state(
+            AppUIState(
+                theme_mode=parse_theme_mode(self._theme_var.get()),
+                ui_scale=parse_ui_scale(self._scale_var.get()),
+            )
+        )
 
     def _pick_cookie(self) -> None:
         path = filedialog.asksaveasfilename(

@@ -16,6 +16,7 @@ from bilibili_submit.ui.state import (  # noqa: E402
     SCHEMA_VERSION,
     load_app_state,
     load_ui_state,
+    parse_ui_scale,
     resolve_theme_mode,
     save_app_state,
     save_ui_state,
@@ -384,3 +385,61 @@ def test_resolve_theme_mode_follows_system():
     assert resolve_theme_mode("system", False) == "dark"
     # 认不出的模式按浅色：浅色在深色底上顶多刺眼，深色在浅色底上会看不清
     assert resolve_theme_mode("nonsense", False) == "light"
+
+
+# ---------- 应用级偏好（界面缩放） ----------
+
+
+def test_app_state_defaults_to_auto_scale(tmp_path):
+    """缩放默认 auto：Windows 高分屏靠系统 DPI 已经放大过了，
+    默认 1.0 会让升级上来的用户界面突然变小一圈。"""
+    path = tmp_path / "ui-state.json"
+    assert load_app_state(path).ui_scale == "auto"
+
+
+def test_ui_scale_round_trips(tmp_path):
+    path = tmp_path / "ui-state.json"
+    for scale in ("auto", "1.0", "1.25", "1.5"):
+        save_app_state(AppUIState(ui_scale=scale), path)
+        assert load_app_state(path).ui_scale == scale
+    # 存缩放不能把主题冲掉（两个字段同一个 app 段）
+    assert load_app_state(path).theme_mode == "system"
+
+
+def test_parse_ui_scale_accepts_labels_and_percent():
+    """界面文案、键、百分号三种写法都认——手改文件时照抄文案最自然。"""
+    assert parse_ui_scale("稍大（125%）") == "1.25"
+    assert parse_ui_scale("1.5") == "1.5"
+    assert parse_ui_scale("125%") == "1.25"
+    assert parse_ui_scale(" 150% ") == "1.5"
+    # JSON 里手写成数字（"ui_scale": 1.25）也认
+    assert parse_ui_scale(1.25) == "1.25"
+    # 脏值回落 auto，和主题模式同一套纪律
+    assert parse_ui_scale("特大") == "auto"
+    assert parse_ui_scale("") == "auto"
+    assert parse_ui_scale(None) == "auto"
+    assert parse_ui_scale(True) == "auto", "bool 是 int 的子类，先挡掉"
+
+
+def test_ui_scale_survives_old_state_file(tmp_path):
+    """旧偏好文件没有 ui_scale 字段——读出来是 auto，不能报错。"""
+    path = tmp_path / "ui-state.json"
+    path.write_text(
+        json.dumps({"schema_version": SCHEMA_VERSION, "app": {"theme_mode": "dark"}}),
+        encoding="utf-8",
+    )
+    state = load_app_state(path)
+    assert state.theme_mode == "dark"
+    assert state.ui_scale == "auto"
+
+
+def test_ui_scale_save_keeps_batch_section(tmp_path):
+    """和主题同一套：app 段只覆盖自己那节，不整文件重写。"""
+    path = tmp_path / "ui-state.json"
+    save_ui_state(BatchUIState(directory="D:/视频/待投稿"), path)
+    save_app_state(AppUIState(ui_scale="1.5"), path)
+
+    batch, problem = load_ui_state(path)
+    assert problem == ""
+    assert batch.directory == "D:/视频/待投稿"
+    assert load_app_state(path).ui_scale == "1.5"

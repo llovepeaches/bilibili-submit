@@ -377,7 +377,9 @@ class UploadView(ttk.Frame):
         tk.Label(
             dtime_cell.body, text="小时后发布，需大于 4；留空为立即发布",
             font=theme.font("caption"), background=theme.PAPER,
-            foreground=theme.INK_MUTED, anchor="w", wraplength=theme.scale_px(200),
+            # 这是**规则说明**（「需大于 4」是硬约束），不是装饰：
+            # 小字号 + 次级墨，不叠弱化灰
+            foreground=theme.INK_SECOND, anchor="w", wraplength=theme.scale_px(200),
             justify="left",
         ).grid(row=1, column=0, sticky="ew", pady=(theme.PAD_XS, 0))
 

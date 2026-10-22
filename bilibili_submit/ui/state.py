@@ -25,8 +25,11 @@ __all__ = [
     "AppUIState",
     "APP_THEME_MODES",
     "THEME_MODE_LABELS",
+    "APP_UI_SCALES",
+    "UI_SCALE_LABELS",
     "parse_theme_mode",
     "resolve_theme_mode",
+    "parse_ui_scale",
     "ui_state_path",
     "load_ui_state",
     "save_ui_state",
@@ -53,6 +56,58 @@ THEME_MODE_LABELS = {
     "light": "浅色",
     "dark": "深色",
 }
+
+#: 界面缩放的取值。键与 :data:`~.theme.UI_SCALE_CHOICES` 一致——
+#: ``theme`` 负责把它解释成因子，这里只负责存与显示。
+#:
+#: ``auto`` 是默认：Windows 按系统 DPI 自动定（高分屏通常已经是对的），
+#: 手动档留给「自动定出来还是小」的机器——小屏笔记本、虚拟机、
+#: 远程桌面，以及觉得中文小的用户。
+APP_UI_SCALES = ("auto", "1.0", "1.25", "1.5")
+
+#: 界面缩放的下拉选项文案。百分比写进括号里：用户要的是「大一点」，
+#: 不是「1.25 倍」这个数字。
+UI_SCALE_LABELS = {
+    "auto": "跟随系统",
+    "1.0": "标准（100%）",
+    "1.25": "稍大（125%）",
+    "1.5": "大（150%）",
+}
+
+
+def parse_ui_scale(label: object) -> str:
+    """界面缩放文案 → 键。认不出的（含旧文件/手改过的）一律 auto。
+
+    兼容四种写法：键（``"1.25"``）、界面文案（``"稍大（125%）"``）、
+    用户照抄文案的 ``"125%"``，以及 JSON 里手写成数字的 ``1.25``。
+    后几种不该把偏好打飞——它们表达的选择是明确的。
+    """
+    if isinstance(label, bool):
+        return "auto"
+    value: float | None = None
+    if isinstance(label, (int, float)):
+        value = float(label)
+    elif isinstance(label, str):
+        text = label.strip()
+        if text in APP_UI_SCALES:
+            return text
+        for key, name in UI_SCALE_LABELS.items():
+            if name == text:
+                return key
+        # "125%" 是百分号写法：除以 100 才是因子，不除会变成 125 倍
+        percent = text.endswith("%")
+        try:
+            value = float(text.rstrip("%").strip())
+        except ValueError:
+            return "auto"
+        if percent:
+            value /= 100.0
+    if value is None:
+        return "auto"
+    for key in APP_UI_SCALES:
+        if key != "auto" and abs(value - float(key)) < 1e-9:
+            return key
+    return "auto"
 
 
 def parse_theme_mode(label: object) -> str:
@@ -133,6 +188,15 @@ class AppUIState:
     #: 主题模式，取值见 :data:`APP_THEME_MODES`。
     theme_mode: str = "system"
 
+    #: 界面缩放，取值见 :data:`APP_UI_SCALES`。
+    #:
+    #: 和主题一样**重启生效**：像素常量和字阶在 import 时就按当刻缩放
+    #: 定死了，运行期改不了已经建好的控件（见
+    #: :func:`~.theme.apply_ui_scale`）。默认 ``auto`` 而不是 ``1.0``
+    #: 是刻意的——Windows 高分屏上系统 DPI 检测通常已经给出了正确的
+    #: 放大因子，写死 1.0 会让升级到这个版本的用户界面突然变小。
+    ui_scale: str = "auto"
+
 
 def ui_state_path() -> Path:
     """状态文件位置。跟着 cookie 走，卸载时一起清掉。"""
@@ -209,7 +273,10 @@ def load_app_state(path: Path | None = None) -> AppUIState:
     app = raw.get("app")
     if not isinstance(app, dict):
         return AppUIState()
-    return AppUIState(theme_mode=parse_theme_mode(app.get("theme_mode")))
+    return AppUIState(
+        theme_mode=parse_theme_mode(app.get("theme_mode")),
+        ui_scale=parse_ui_scale(app.get("ui_scale")),
+    )
 
 
 def save_app_state(state: AppUIState, path: Path | None = None) -> None:

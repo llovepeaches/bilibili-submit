@@ -37,6 +37,7 @@ __all__ = [
     "Layout",
     "tier_for",
     "layout_for",
+    "rebuild",
     "column_widths",
 ]
 
@@ -55,6 +56,56 @@ WIDE = "wide"
 # 门槛不跟着缩放的话，高分屏上永远落在最低档（断点变死代码）。
 BREAKPOINT_MEDIUM = theme.scale_px(900)
 BREAKPOINT_WIDE = theme.scale_px(1280)
+
+
+def _build_layouts() -> "dict[str, Layout]":
+    """按当前 :data:`~.theme.UI_SCALE` 造三档布局参数。"""
+    return {
+        COMPACT: Layout(
+            tier=COMPACT,
+            nav_width=theme.NAV_WIDTH_COLLAPSED,
+            nav_collapsed=True,
+            columns=1,
+            gutter=0,
+            list_min_height=theme.scale_px(200),
+            pad_page=theme.PAD_SM,
+        ),
+        MEDIUM: Layout(
+            tier=MEDIUM,
+            nav_width=theme.NAV_WIDTH_EXPANDED,
+            nav_collapsed=False,
+            columns=1,
+            gutter=0,
+            list_min_height=theme.scale_px(280),
+            pad_page=theme.PAD_MD,
+        ),
+        WIDE: Layout(
+            tier=WIDE,
+            nav_width=theme.NAV_WIDTH_EXPANDED,
+            nav_collapsed=False,
+            columns=2,
+            gutter=theme.PAD_LG,
+            list_min_height=theme.scale_px(360),
+            pad_page=theme.PAD_LG,
+        ),
+    }
+
+
+def rebuild() -> None:
+    """界面缩放变了之后重算断点与档位表。
+
+    配套 :func:`~.theme.apply_ui_scale`：断点和档位参数是 **import 时**
+    按当刻缩放算的，而用户在设置页改完缩放要重启才生效——重启时
+    ``launch()`` 先改缩放再建界面，import 那一遍已经过去了。不重算的
+    后果是门槛停留在旧值：150% 下窗口按放大的 ``MIN_WIDTH`` 开，档位
+    判断却按 96 DPI 的门槛走，一开机就落错档（侧栏该折叠没折叠）。
+    """
+    global BREAKPOINT_MEDIUM, BREAKPOINT_WIDE
+
+    BREAKPOINT_MEDIUM = theme.scale_px(900)
+    BREAKPOINT_WIDE = theme.scale_px(1280)
+    _LAYOUTS.clear()
+    _LAYOUTS.update(_build_layouts())
 
 
 def tier_for(width: int) -> str:
@@ -97,35 +148,10 @@ class Layout:
     pad_page: int
 
 
-_LAYOUTS: dict[str, Layout] = {
-    COMPACT: Layout(
-        tier=COMPACT,
-        nav_width=theme.NAV_WIDTH_COLLAPSED,
-        nav_collapsed=True,
-        columns=1,
-        gutter=0,
-        list_min_height=theme.scale_px(200),
-        pad_page=theme.PAD_SM,
-    ),
-    MEDIUM: Layout(
-        tier=MEDIUM,
-        nav_width=theme.NAV_WIDTH_EXPANDED,
-        nav_collapsed=False,
-        columns=1,
-        gutter=0,
-        list_min_height=theme.scale_px(280),
-        pad_page=theme.PAD_MD,
-    ),
-    WIDE: Layout(
-        tier=WIDE,
-        nav_width=theme.NAV_WIDTH_EXPANDED,
-        nav_collapsed=False,
-        columns=2,
-        gutter=theme.PAD_LG,
-        list_min_height=theme.scale_px(360),
-        pad_page=theme.PAD_LG,
-    ),
-}
+#: 档位表。建表函数在 :func:`_build_layouts`（要在 ``Layout`` 定义之后
+#: 才能调用），缩放变了由 :func:`rebuild` 重填——import 之后改缩放
+#: （设置页偏好 + 重启）就靠它，见那边的说明。
+_LAYOUTS: dict[str, Layout] = _build_layouts()
 
 
 def layout_for(width: int) -> Layout:

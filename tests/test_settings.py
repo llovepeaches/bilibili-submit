@@ -992,3 +992,55 @@ def test_install_ffmpeg_shows_the_hint_not_just_the_title(monkeypatch):
         assert "配好代理" in shown[0], f"只显示了标题，没有 hint：{shown[0]!r}"
     finally:
         root.destroy()
+
+
+# ---------- 界面缩放（外观区第二行） ----------
+
+
+@needs_display
+def test_scale_row_round_trips_through_state_file(monkeypatch, tmp_path):
+    """缩放选项从偏好文件回填、改完写回文件——和主题同一套机制。"""
+    import tkinter as tk
+    from tkinter import ttk
+
+    from bilibili_submit.ui import app as app_mod
+    from bilibili_submit.ui import state as state_mod
+    from bilibili_submit.ui import theme
+    from bilibili_submit.ui.app import App
+    from bilibili_submit.ui.views import settings as settings_mod
+
+    probe = lambda _f, **_k: env_mod.EnvironmentSnapshot(  # noqa: E731
+        logged_in=False, ffmpeg=_FakeFfmpeg(), ffmpeg_version=""
+    )
+    monkeypatch.setattr(app_mod, "probe_environment", probe)
+    monkeypatch.setattr(settings_mod, "probe_environment", probe)
+
+    state_file = tmp_path / "ui-state.json"
+    # load_app_state / save_app_state 在 state 模块内部调 ui_state_path，
+    # 所以补丁要打在 state 上（settings 只是转发调用）
+    monkeypatch.setattr(state_mod, "ui_state_path", lambda: state_file)
+
+    root = tk.Tk()
+    try:
+        style = ttk.Style(root)
+        try:
+            style.theme_use("clam")
+        except root.tk.TclError:
+            pass
+        theme.apply(style)
+        app = App(root)
+        app.pack(fill="both", expand=True)
+        view = app._views["设置"]
+
+        # 偏好里存 1.5：回填到下拉框的应是文案，不是键
+        state_mod.save_app_state(state_mod.AppUIState(ui_scale="1.5"), state_file)
+        view.refresh()
+        assert view._scale_var.get() == "大（150%）", view._scale_var.get()
+
+        # 改选项 → 写回文件（theme_mode 不被冲掉）
+        view._scale_var.set("稍大（125%）")
+        saved = state_mod.load_app_state(state_file)
+        assert saved.ui_scale == "1.25"
+        assert saved.theme_mode == "system", "两个字段在同一个 app 段，不许互相覆盖"
+    finally:
+        root.destroy()

@@ -587,6 +587,15 @@ def launch() -> int:
 
     _set_dpi_aware()
 
+    # 界面缩放必须在建任何控件之前定下来：所有像素常量与字阶都按它
+    # 派生（见 theme.apply_ui_scale）。放到后面去的话，先建出来的控件
+    # 用旧缩放、后用新缩放，界面会一半大一半小——正是主题模块里说的
+    # 「切一半的开关不如不做」。偏好文件读一次，主题与缩放共用。
+    app_state = load_app_state()
+    theme.apply_ui_scale(app_state.ui_scale)
+    # layout 的断点与档位表也是 import 时按当刻缩放算的，同步重算
+    layout.rebuild()
+
     root = tk.Tk()
     # 把 Tk 的「点→像素」换算固定回 4/3（96 DPI 基准）。
     # 不设的话 Windows 会按系统 DPI 自动设成 dpi/72（150% 缩放下是 2.0），
@@ -608,7 +617,9 @@ def launch() -> int:
 
     # 主题必须在建界面之前定下来：tk/ttk 把颜色写进控件，之后改色板
     # 不会影响已建好的控件，所以切换主题要重启（设置页里也这么写的）
-    mode = resolve_theme_mode(load_app_state().theme_mode, win_effects.system_prefers_light())
+    mode = resolve_theme_mode(
+        app_state.theme_mode, win_effects.system_prefers_light()
+    )
     theme.apply(style, mode)
     _configure_nav_style(style)
 

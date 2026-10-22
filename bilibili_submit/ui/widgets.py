@@ -270,7 +270,10 @@ class ExpansionPanel(ttk.Frame):
             self._header,
             text="",
             bg=theme.COLLAPSE_BG,
-            fg=theme.INK_MUTED,
+            # 收起时右侧这行是**已开启设置的摘要**（「关弹幕、杜比」）——
+            # 用户不展开面板就得靠它知道自己设了什么。是信息不是装饰，
+            # 所以用次级墨：小字号已经弱一级，不再叠弱化灰
+            fg=theme.INK_SECOND,
             font=theme.font("caption"),
         )
         self._hint.grid(row=0, column=2, sticky="e", padx=(theme.PAD_SM, 0))
@@ -283,7 +286,7 @@ class ExpansionPanel(ttk.Frame):
                 self._header,
                 text=subtitle,
                 bg=theme.COLLAPSE_BG,
-                fg=theme.INK_MUTED,
+                fg=theme.INK_SECOND,
                 font=theme.font("caption"),
             ).grid(row=1, column=1, columnspan=2, sticky="w")
 
@@ -1428,7 +1431,11 @@ class ActionBar(tk.Frame):
         )
         self._title = tk.Label(
             text_box, text="", font=theme.font("caption"),
-            background=theme.PAPER, foreground=theme.INK_MUTED,
+            # 次级墨而不是弱化灰：这句话是**引导**（「填完上面几项就能
+            # 投稿」），不是装饰。小字号已经弱了一级，颜色再淡一档就是
+            # 「双弱叠加」——看得见、看不清，正是可读性专项要拆掉的那个
+            # 组合。纯装饰性的弱化留给 INK_MUTED。
+            background=theme.PAPER, foreground=theme.INK_SECOND,
             anchor="w",
         )
         self._title.pack(anchor="w")
@@ -1452,7 +1459,9 @@ class ActionBar(tk.Frame):
         # 独占的，调用方不许自己往里塞控件。
         self._reason = tk.Label(
             self, text="", font=theme.font("caption"),
-            background=theme.PAPER, foreground=theme.INK_MUTED,
+            # 禁用原因必须读得懂——「尚未登录 · 请先到「登录」页扫码」
+            # 是用户面对灰按钮时唯一的出路，用弱化灰等于把出路也调暗了
+            background=theme.PAPER, foreground=theme.INK_SECOND,
             anchor="e", justify="right",
         )
         self._reason.grid(row=1, column=1, sticky="e", padx=(0, theme.PAD_MD))
@@ -1951,7 +1960,10 @@ class PageHeader(ttk.Frame):
 
         self._subtitle = tk.Label(
             self, text=subtitle, font=theme.font("caption"),
-            background=theme.SHELL, foreground=theme.INK_MUTED,
+            # 页面副标题是「这一页能干什么」的操作说明（投稿页那句
+            # 「填写信息后可直接投稿…」），读不清等于页面没有说明——
+            # 同 ActionBar._title：小字号 + 次级墨，不叠弱化灰
+            background=theme.SHELL, foreground=theme.INK_SECOND,
             anchor="sw", justify="left",
         )
         self._subtitle.grid(
