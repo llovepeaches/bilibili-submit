@@ -6,6 +6,7 @@
     bili-submit check     校验配置、登录态与分区
     bili-submit tid       列出可选分区
     bili-submit gui       启动图形界面
+    bili-submit web       启动 Web 界面（浏览器里操作）
     bili-submit history   查看本机投稿历史
 """
 
@@ -145,6 +146,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     # gui
     sub.add_parser("gui", help="启动图形界面")
+
+    # web
+    p_web = sub.add_parser("web", help="启动 Web 界面（浏览器里操作）")
+    p_web.add_argument("--host", default="127.0.0.1", help="监听地址（默认只听本机）")
+    p_web.add_argument("--port", type=int, default=8765, help="端口")
+    p_web.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    p_web.add_argument(
+        "-c", "--config", default=None, help="配置文件（读取其中的 account.proxy）"
+    )
+    p_web.add_argument("--proxy", default=None, help="代理地址，如 http://127.0.0.1:7890")
 
     # history
     p_hist = sub.add_parser("history", help="查看本机投稿历史")
@@ -439,6 +450,39 @@ def cmd_gui(args: argparse.Namespace) -> int:
     return launch()
 
 
+def cmd_web(args: argparse.Namespace) -> int:
+    """启动 Web 界面。
+
+    Flask 是软依赖（命令行与桌面版都不需要它），所以这里惰性 import，
+    缺了要给出可操作的提示而不是一串 traceback。
+
+    ``--host`` 默认是 127.0.0.1，这是**安全默认值**：Web 界面没有
+    账号体系、一份 cookie 共用，暴露到局域网等于把你的投稿权限给了
+    同一网段的所有人。真要让它能被别的机器访问，请自己在前面挂
+    反向代理 + 认证，而不是把这里改成 0.0.0.0。
+    """
+    from .web import web_available
+
+    ok, reason = web_available()
+    if not ok:
+        print(f"无法启动 Web 界面：{reason}", file=sys.stderr)
+        print("安装：pip install flask", file=sys.stderr)
+        return EXIT_FAIL
+
+    from .web import launch
+
+    proxy = args.proxy
+    if proxy is None and args.config:
+        proxy = load_config(args.config).account.proxy
+
+    return launch(
+        host=args.host,
+        port=args.port,
+        open_browser=not args.no_browser,
+        proxy=proxy,
+    )
+
+
 def cmd_history(args: argparse.Namespace) -> int:
     entries = read_history(args.file)
     if not entries:
@@ -482,6 +526,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "check": cmd_check,
         "tid": cmd_tid,
         "gui": cmd_gui,
+        "web": cmd_web,
         "history": cmd_history,
     }
     try:

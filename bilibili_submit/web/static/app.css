@@ -1,0 +1,197 @@
+/* Web 界面的样式。
+   配色沿用桌面端的 Material 风格语义色（蓝为主色、绿/红为状态色），
+   但不去 import 桌面端的 theme.py——那要拖进 tkinter。
+   这里手写一份，代价是两处色值可能漂移；收益是 Web 端零 Python 依赖。 */
+
+:root {
+  --primary: #1a73e8;
+  --primary-ink: #ffffff;
+  --surface: #ffffff;
+  --surface-alt: #f5f6f8;
+  --bg: #eef0f4;
+  --ink: #1f2328;
+  --ink-muted: #5f6672;
+  --line: #dfe3e8;
+  --ok: #1e8e3e;
+  --warn: #b06000;
+  --err: #c5221f;
+  --radius: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #8ab4f8;
+    --primary-ink: #10233d;
+    --surface: #1e2126;
+    --surface-alt: #262a31;
+    --bg: #14161a;
+    --ink: #e8eaed;
+    --ink-muted: #9aa0a6;
+    --line: #3a3f47;
+    --ok: #81c995;
+    --warn: #fdd663;
+    --err: #f28b82;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.6 "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+.mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+.muted { color: var(--ink-muted); }
+.warn { color: var(--warn); }
+.wrap { word-break: break-all; }
+
+/* ---------- 顶栏 ---------- */
+
+.topbar {
+  display: flex; align-items: center; gap: 20px;
+  padding: 12px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 10;
+}
+.brand { font-size: 18px; font-weight: 700; }
+.brand span { color: var(--primary); }
+.nav { display: flex; gap: 4px; }
+.nav-item {
+  border: 0; background: transparent; color: var(--ink-muted);
+  padding: 8px 16px; border-radius: 999px; cursor: pointer; font: inherit;
+}
+.nav-item:hover { background: var(--surface-alt); }
+.nav-item.is-active { background: var(--primary); color: var(--primary-ink); }
+.status { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.pill {
+  font-size: 13px; padding: 4px 12px; border-radius: 999px;
+  background: var(--surface-alt); color: var(--ink-muted);
+}
+.pill.is-ok { color: var(--ok); }
+.pill.is-bad { color: var(--err); }
+
+/* ---------- 页面 ---------- */
+
+main { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
+.page { display: none; }
+.page.is-active { display: block; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin-bottom: 20px;
+}
+.card.narrow { max-width: 460px; margin: 0 auto; }
+.card h2 { margin: 0 0 8px; font-size: 17px; }
+.hint { color: var(--ink-muted); font-size: 13px; margin: 4px 0 12px; }
+.hint b { color: var(--ink); }
+
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row.center { justify-content: center; margin-top: 16px; }
+.row > input[type=text] { flex: 1; min-width: 240px; }
+
+input[type=text], select, textarea {
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-alt);
+  color: var(--ink);
+  font: inherit;
+  width: 100%;
+}
+textarea { resize: vertical; }
+
+.btn-filled, .btn-outline, .btn-text {
+  padding: 9px 18px; border-radius: 8px; cursor: pointer; font: inherit;
+  white-space: nowrap;
+}
+.btn-filled { background: var(--primary); color: var(--primary-ink); border: 1px solid var(--primary); }
+.btn-outline { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
+.btn-text { background: transparent; color: var(--ink-muted); border: 0; padding: 4px 8px; }
+.btn-filled:disabled, .btn-outline:disabled { opacity: .45; cursor: not-allowed; }
+
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.field > span { font-size: 13px; color: var(--ink-muted); }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.grid .span2 { grid-column: span 2; }
+@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } .grid .span2 { grid-column: span 1; } }
+
+.checks { display: flex; flex-wrap: wrap; gap: 16px; margin: 8px 0 16px; font-size: 14px; }
+
+/* ---------- 目录浏览 ---------- */
+
+.browser { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.browser-head {
+  display: flex; gap: 12px; padding: 8px 12px;
+  background: var(--surface-alt); font-size: 13px;
+}
+.browser-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.browser-list li {
+  padding: 7px 12px; border-top: 1px solid var(--line);
+  cursor: pointer; font-size: 14px;
+}
+.browser-list li:hover { background: var(--surface-alt); }
+.browser-list li.dir::before { content: "📁 "; }
+.browser-list li.file::before { content: "🎬 "; }
+.browser-list li.file { cursor: default; color: var(--ink-muted); }
+
+/* ---------- 任务列表 ---------- */
+
+.tasks-head { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; }
+.grow { flex: 1; }
+.tasks-list { max-height: 420px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
+.task {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-top: 1px solid var(--line);
+}
+.task:first-child { border-top: 0; }
+.task input[type=text] { flex: 1; }
+.task .parts { font-size: 12px; color: var(--ink-muted); white-space: nowrap; }
+.task.is-done { background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.task.is-failed { background: color-mix(in srgb, var(--err) 12%, transparent); }
+
+/* ---------- 进度与日志 ---------- */
+
+.progress { height: 8px; background: var(--surface-alt); border-radius: 999px; overflow: hidden; }
+.progress-bar { height: 100%; width: 0; background: var(--primary); transition: width .3s; }
+.log {
+  margin: 12px 0 0; padding: 12px; max-height: 320px; overflow-y: auto;
+  background: var(--surface-alt); border-radius: 8px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;
+  white-space: pre-wrap;
+}
+
+/* ---------- 登录 ---------- */
+
+.qr-box { display: flex; justify-content: center; padding: 16px 0; }
+.qr { width: 260px; height: 260px; display: flex; align-items: center; justify-content: center;
+      background: var(--surface-alt); border-radius: 8px; text-align: center;
+      font-size: 13px; color: var(--ink-muted); padding: 12px; }
+.qr svg { width: 100%; height: 100%; }
+.state { text-align: center; margin: 8px 0; }
+
+/* ---------- 历史 ---------- */
+
+.history { display: flex; flex-direction: column; gap: 8px; }
+.history .item {
+  display: flex; gap: 12px; align-items: baseline;
+  padding: 10px 12px; background: var(--surface-alt); border-radius: 8px; font-size: 14px;
+}
+.history .item .when { color: var(--ink-muted); font-size: 12px; white-space: nowrap; }
+.history .item a { color: var(--primary); }
+
+/* ---------- 提示条 ---------- */
+
+.toast {
+  position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%);
+  background: var(--ink); color: var(--surface);
+  padding: 12px 20px; border-radius: 8px; font-size: 14px;
+  max-width: 80vw; z-index: 50;
+}
+.toast.is-bad { background: var(--err); }

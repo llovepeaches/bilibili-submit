@@ -1807,7 +1807,26 @@ def test_ci_provides_a_display_for_the_gui_tests():
         )
 
 
-def test_ci_runs_the_linter_with_the_same_threshold_as_local():
+def test_ci_installs_the_dev_requirements():
+    """CI 必须装 ``requirements-dev.txt``。
+
+    那里面的 flask 是 ``bili-submit web`` 的**软依赖**——不装的话
+    命令行和桌面版照常能跑，只是 Web 那批测试会被 ``importorskip``
+    静默跳过。而跳过不会让 job 变红，于是「Web 测试全绿」这个信号
+    是假的：它绿是因为一条都没跑。
+
+    这条守卫钉的是 CI 的**安装步骤**，不是 requirements 文件本身——
+    文件里写了什么不重要，CI 没装才致命。
+    """
+    steps = _test_yml_steps()
+    install = _step_named(steps, "安装依赖")
+    body = _without_comments(install)
+    assert "requirements-dev.txt" in body, (
+        "CI 没装 requirements-dev.txt：flask 不在，Web 那批测试会静默跳过"
+    )
+    assert ROOT.joinpath("requirements-dev.txt").is_file(), (
+        "requirements-dev.txt 不见了——CI 的安装步骤会直接失败"
+    )
     """静态检查要跑，且阈值与本地一致。
 
     阈值只能从命令行传（mccabe 的限制，``pylama.ini`` 里写了也不生效），

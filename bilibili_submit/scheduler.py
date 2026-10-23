@@ -55,6 +55,23 @@ class RunOptions:
     dry_run: bool = False
     history_file: str = DEFAULT_HISTORY_FILE
     on_progress: Callable[[str], None] | None = None
+    #: 每个任务**开始前**回调，参数是 ``(index, task)``。
+    #: ``index`` 是该任务在传入列表里的下标——调用方可能只传了勾选的
+    #: 几个任务，想定位到自己完整列表里的行，得自己存一份映射。
+    #:
+    #: 为什么要有它：``on_progress`` 只给字符串，而界面要的是
+    #: 「第 3 行状态变成执行中」这种结构化信息。靠解析进度文本取下标
+    #: 是最脆的一种做法（改一句文案就断），不如直接给回调。
+    on_task_start: Callable[[int, TaskConfig], None] | None = None
+    #: 每个任务**结束后**回调，参数是 ``(index, task, outcome)``。
+    on_task_done: Callable[[int, TaskConfig, TaskOutcome], None] | None = None
+    #: 返回 True 就停止后续任务——**协作式**取消。
+    #:
+    #: 已经在跑的那个任务不会被打断（分片上传没有安全的中断点，
+    #: 硬停会留下半个稿件），所以「取消」的真实语义是
+    #: **不再开始下一个任务**。调用方要把这一点说给用户听，
+    #: 否则用户点了取消却看到当前任务还在动，会以为程序坏了。
+    should_stop: Callable[[], bool] | None = None
 
 
 def build_archive_meta(
@@ -245,8 +262,16 @@ def run_all(
     outcomes: list[TaskOutcome] = []
 
     for index, task in enumerate(tasks):
+        if index and _stop_requested(options):
+            _emit(options, "已取消，停止后续任务")
+            break
+
+        if options.on_task_start:
+            options.on_task_start(index, task)
         outcome = run_task(client, task, cfg, backend=backend, options=options)
         outcomes.append(outcome)
+        if options.on_task_done:
+            options.on_task_done(index, task, outcome)
 
         if outcome.success and options.history_file and not options.dry_run:
             append_history(outcome, options.history_file)
@@ -259,10 +284,37 @@ def run_all(
         if interval > 0 and index < len(tasks) - 1:
             seconds = interval * 60
             _emit(options, f"等待 {interval:.0f} 分钟以规避频控后继续下一条")
-            if not options.dry_run:
-                time.sleep(seconds)
+            if not options.dry_run and _interruptible_sleep(seconds, options):
+                _emit(options, "已取消，停止后续任务")
+                break
 
     return outcomes
+
+
+def _stop_requested(options: RunOptions) -> bool:
+    return bool(options.should_stop and options.should_stop())
+
+
+#: 间隔等待的检查粒度（秒）。
+#: 间隔可能长达几十分钟，一次 ``time.sleep`` 睡到底的话
+#: 「取消」要等这么久才生效——那不叫取消。
+_SLEEP_SLICE = 1.0
+
+
+def _interruptible_sleep(seconds: float, options: RunOptions) -> bool:
+    """可被 :attr:`RunOptions.should_stop` 打断的 sleep。
+
+    Returns:
+        True 表示被要求停止。
+    """
+    deadline = time.time() + max(0.0, seconds)
+    while True:
+        if _stop_requested(options):
+            return True
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return False
+        time.sleep(min(_SLEEP_SLICE, remaining))
 
 
 # ---------- 历史记录 ----------

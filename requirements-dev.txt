@@ -1,0 +1,13 @@
+# 开发与测试依赖。**不进发行包**：PyInstaller 只打 requirements.txt 里的东西。
+#
+#   pip install -r requirements-dev.txt
+#   xvfb-run -a python -m pytest -q
+#
+# flask 在这里而不是 requirements.txt：它是 ``bili-submit web`` 的软依赖——
+# 命令行和桌面版都不需要它，缺了那两个命令照常能跑（只是 web 子命令会
+# 提示你装）。但**测试**需要它：不装的话所有 Web 测试会被静默跳过，
+# 而跳过不会让 CI 变红——那正是 test.yml 里那遍严格模式要防的东西。
+
+pytest>=7.0
+pylama>=8.4
+flask>=3.0

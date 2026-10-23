@@ -3,37 +3,20 @@
 刻意**不依赖 Pillow**：打包配置里 PIL 是被排除的，为一张二维码把
 Pillow 拖进来会让 exe 变大。做法是从 ``qrcode`` 拿布尔矩阵，
 再用 Canvas 逐格画方块——矩阵是纯数据，画起来也就几行。
+
+矩阵本身在 :mod:`bilibili_submit.qrmatrix`（核心层）。那里不能有
+tkinter 依赖，因为 Web 版要用同一个矩阵拼 SVG——两边各编一次矩阵
+的话，哪天调了容错级别，桌面端和 Web 端就会悄悄不一样。
 """
 
 from __future__ import annotations
 
 import tkinter as tk
 
+from ..qrmatrix import qr_matrix
 from . import theme
 
 __all__ = ["qr_matrix", "draw_qr"]
-
-
-def qr_matrix(url: str) -> list[list[bool]]:
-    """把登录链接编成二维码矩阵。
-
-    Returns:
-        二维布尔列表，``True`` 表示该模块是黑色。
-
-    Raises:
-        RuntimeError: 未安装 ``qrcode``（它是软依赖，源码运行时可能没装）。
-    """
-    try:
-        import qrcode  # type: ignore[import-untyped]
-    except ImportError as exc:  # pragma: no cover - 取决于环境
-        raise RuntimeError(
-            "缺少 qrcode 库，无法绘制二维码。安装：pip install qrcode"
-        ) from exc
-
-    qr = qrcode.QRCode(border=2, box_size=1)
-    qr.add_data(url)
-    qr.make(fit=True)
-    return [[bool(cell) for cell in row] for row in qr.get_matrix()]
 
 
 def draw_qr(

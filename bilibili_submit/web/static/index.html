@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bilibili-submit · Web 界面</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<!--
+  前端刻意不用框架、不用构建链。三个文件、不到 500 行 JS，
+  引入 npm / vite / 打包缓存换来的复杂度远超收益——而且那样
+  Python 包里就会多出一份必须和源码同步更新的构建产物，
+  是「改了却忘了重新构建」这类问题的温床。
+-->
+
+<header class="topbar">
+  <div class="brand">bilibili<span>-submit</span></div>
+  <nav class="nav">
+    <button class="nav-item is-active" data-page="submit">投稿</button>
+    <button class="nav-item" data-page="login">登录</button>
+    <button class="nav-item" data-page="history">历史</button>
+  </nav>
+  <div class="status">
+    <span id="pill-login" class="pill">登录状态：检查中</span>
+    <span id="pill-ffmpeg" class="pill">ffmpeg：检查中</span>
+  </div>
+</header>
+
+<main>
+  <!-- ---------- 投稿 ---------- -->
+  <section class="page is-active" id="page-submit">
+    <div class="card">
+      <h2>1 · 选择视频目录</h2>
+      <p class="hint">
+        视频来自<b>这台机器上的目录</b>，不是浏览器上传——大文件先搬到临时
+        目录再上传纯属浪费。
+      </p>
+      <div class="row">
+        <input id="dir-path" type="text" placeholder="例如 /home/你/Videos" spellcheck="false">
+        <button id="btn-browse" class="btn-outline">浏览</button>
+        <button id="btn-up" class="btn-outline">上一级</button>
+      </div>
+      <div id="browser" class="browser" hidden>
+        <div class="browser-head">
+          <span id="browser-path" class="mono"></span>
+          <span id="browser-count" class="muted"></span>
+        </div>
+        <ul id="browser-list" class="browser-list"></ul>
+        <p id="browser-truncated" class="warn" hidden>
+          目录里的视频超过 2000 个，只列出了前 2000 个。
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2 · 扫描并确认任务</h2>
+      <div class="row">
+        <label class="field">
+          <span>分 P 合并方式</span>
+          <select id="group-by">
+            <option value="none">不合并（每个文件一个稿件）</option>
+            <option value="prefix">按文件名前缀</option>
+            <option value="folder">按所在文件夹</option>
+            <option value="whole_dir">整个目录合成一个稿件</option>
+          </select>
+        </label>
+        <button id="btn-scan" class="btn-filled">扫描目录</button>
+      </div>
+      <p class="hint">
+        「按文件夹」会多扫一层子目录——不钻进去就看不到目录结构。
+        分组只是猜你的意图，扫完一定要看一眼列表对不对。
+      </p>
+
+      <div id="tasks" class="tasks" hidden>
+        <div class="tasks-head">
+          <span class="grow">共 <b id="tasks-count">0</b> 个稿件</span>
+          <button id="btn-select-all" class="btn-text">全选</button>
+          <button id="btn-select-none" class="btn-text">全不选</button>
+        </div>
+        <div id="tasks-list" class="tasks-list"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>3 · 统一投稿参数</h2>
+      <div class="grid">
+        <label class="field">
+          <span>分区</span>
+          <select id="c-tid"></select>
+        </label>
+        <label class="field">
+          <span>定时发布（距今小时数，需 ≥ 4）</span>
+          <input id="c-dtime" type="text" placeholder="留空 = 立即发布">
+        </label>
+        <label class="field">
+          <span>任务间隔（分钟）</span>
+          <input id="c-interval" type="text" placeholder="0">
+        </label>
+        <label class="field">
+          <span>封面</span>
+          <input id="c-cover" type="text" placeholder="留空或 auto（自动抽帧）">
+        </label>
+        <label class="field span2">
+          <span>标签（逗号分隔，最多 10 个）</span>
+          <input id="c-tag" type="text">
+        </label>
+        <label class="field span2">
+          <span>简介（最多 2000 字）</span>
+          <textarea id="c-desc" rows="3"></textarea>
+        </label>
+      </div>
+      <div class="checks">
+        <label><input id="c-close-reply" type="checkbox"> 关闭评论区</label>
+        <label><input id="c-close-danmu" type="checkbox"> 关闭弹幕</label>
+        <label><input id="c-selection" type="checkbox"> 开启精选评论</label>
+        <label><input id="c-dolby" type="checkbox"> 杜比音效</label>
+        <label><input id="c-hires" type="checkbox"> Hi-Res 无损</label>
+        <label><input id="c-stop" type="checkbox" checked> 出错即停止</label>
+      </div>
+      <div class="row">
+        <button id="btn-dry" class="btn-outline">预览（不真投）</button>
+        <button id="btn-run" class="btn-filled">开始投稿</button>
+        <button id="btn-cancel" class="btn-outline" disabled>取消</button>
+      </div>
+      <p class="hint">
+        取消是<b>协作式</b>的：已经在跑的那个任务不会被打断（分片上传没有
+        安全的中断点），只会不再开始下一个。
+      </p>
+    </div>
+
+    <div class="card" id="run-card" hidden>
+      <h2>执行进度</h2>
+      <div class="progress"><div id="progress-bar" class="progress-bar"></div></div>
+      <div id="run-state" class="muted"></div>
+      <pre id="log" class="log"></pre>
+    </div>
+  </section>
+
+  <!-- ---------- 登录 ---------- -->
+  <section class="page" id="page-login">
+    <div class="card narrow">
+      <h2>扫码登录</h2>
+      <p class="hint">
+        用手机 B 站 App 扫码，<b>扫完要在手机上点「确认登录」</b>才算完成。
+        登录状态存在本机，和命令行、桌面版共用同一份 cookie。
+      </p>
+      <div class="qr-box">
+        <div id="qr" class="qr">（尚未获取二维码）</div>
+      </div>
+      <div id="login-state" class="state">点下面的按钮开始</div>
+      <div class="row center">
+        <button id="btn-login-start" class="btn-filled">获取二维码</button>
+      </div>
+      <p id="login-url" class="mono wrap"></p>
+    </div>
+  </section>
+
+  <!-- ---------- 历史 ---------- -->
+  <section class="page" id="page-history">
+    <div class="card">
+      <h2>本机投稿历史</h2>
+      <p class="hint">只记录成功的投稿，与桌面版共用同一个历史文件。</p>
+      <div id="history" class="history"></div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
