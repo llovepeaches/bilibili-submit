@@ -8,6 +8,47 @@
 
 ## [未发布]
 
+### 新增 —— Linux 版（AppImage + 目录版）
+
+一份 spec 现在同时服务 Windows 与 Linux，`./build_linux.sh` 一键出
+四个产物（图形界面 / 命令行 × AppImage / tar.gz 目录版）：
+
+- `bili_submit.spec` 平台参数化。Windows 行为**逐字不变**（`INSTALLER`
+  那行原文保留，``test_packaging.py`` 那组源码字符串断言一条没动）；
+  Linux 由新增的 `APPIMAGE=1` 切 onedir——AppImage 本身就是「一个文件
+  装着整个目录」（squashfs 挂载而非解压），所以目录形态在这里不付
+  任何代价。
+- `icon=` / `version=` 只在 Windows 上给：前者只认 `.ico`，后者是烧进
+  exe 资源段的版本资源，ELF 里没有这东西。
+- 新增 `build_linux.sh`（八步，每步失败即停）与
+  `.github/workflows/build-linux.yml`（打完还要冒烟：命令行 `--version`、
+  图形界面真的在 X 里数出一个窗口）。
+- 新增 `tests/test_spec_linux.py` + `tests/test_build_linux.py`，
+  820 → 865 passed；12 处变异自检全部被抓住。
+
+#### 三条只在 Linux 上成立的坑
+
+- **可执行位**。Windows 上能否执行只看扩展名，Linux 看属性位。ffmpeg
+  用 `install -m 755`（而不是 `cp`）落盘：打进 squashfs 之后一个
+  mode 644 的 ffmpeg 只会报 `Permission denied`，而那句报错跟
+  「ffmpeg 坏了」一模一样。同理，Linux 内嵌 ffmpeg 走 `binaries`
+  而不是 `datas`——**datas 不保留可执行位**。
+- **tkinter 不是 Python 自带的**。Linux 上它由发行版单独打包
+  （`python3-tk`），**pip 装不了**。缺了它 PyInstaller 一声不吭，只是
+  安静产出一个不含 tkinter 的包——文件齐全、体积正常、ffmpeg 也在，
+  界面却永远起不来，而 windowed 程序没有控制台，错误全部丢失。
+  三道防线：spec 里 `import tkinter` 失败即停、构建脚本第 2 步探测、
+  第 8 步校验产物 `_internal` 里真有 tcl/tk。
+- **换行符**。`.gitattributes` 的 `* text=auto` 会在 Windows 检出时把
+  shell 脚本转成 CRLF，于是 bash 读到的 shebang 带 `\r`，报
+  `'bash\r': No such file or directory`——看不到那个 `\r`，只会以为
+  bash 没装。已把 `*.sh` 显式钉成 LF。
+
+打包那一侧还绕开了两个外部依赖：appimagetool 自己下载 runtime 失败时
+只报 `server returned status code 0`（一句看不出是网络问题的话），
+改由脚本自己 curl 后传 `--runtime-file`；appimagetool 自身也是
+AppImage，用 `--appimage-extract-and-run` 绕开 FUSE。
+
 ### 修复 —— Linux 桌面端：能跑，但有三处「一眼没做完」
 
 界面层本来就按跨平台写的，Linux 上能直接跑起来（这也是这次敢做

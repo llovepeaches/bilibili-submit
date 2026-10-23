@@ -85,6 +85,34 @@
 | 命令行图省事，一个文件拷走就用 | `cli-portable` |
 | 命令行在意启动速度 | `cli-full` |
 | 命令行只想要最小体积 | `cli-mini` 或 `cli.exe` |
+| Linux 桌面 | `bilibili-submit-gui-x86_64.AppImage` |
+| Linux 服务器 / 只要命令行 | `bilibili-submit-cli-x86_64.AppImage` |
+
+### Linux（AppImage / 目录版）
+
+打出来的两个 AppImage **自带 ffmpeg**，目标机器不需要装 Python 也不需要装 ffmpeg。
+
+| 资产 | 体积 | 说明 |
+|---|---|---|
+| `bilibili-submit-gui-x86_64.AppImage` | ~37 MB | 图形界面版。双击即可，或 `chmod +x` 后 `./` 运行 |
+| `bilibili-submit-cli-x86_64.AppImage` | ~38 MB | 命令行版。用法同 Windows 的 exe |
+| `bilibili-submit-{gui,cli}-linux-x86_64.tar.gz` | ~40 MB | 目录版。解压即用，是 AppImage 跑不了时的退路 |
+
+```bash
+chmod +x bilibili-submit-gui-x86_64.AppImage
+./bilibili-submit-gui-x86_64.AppImage          # 图形界面
+
+./bilibili-submit-cli-x86_64.AppImage --help   # 命令行
+./bilibili-submit-cli-x86_64.AppImage login
+```
+
+**AppImage 打不开时**，按顺序试：
+
+1. `./xxx.AppImage --appimage-extract-and-run` —— 解包运行，不需要 FUSE；
+2. `sudo apt install libfuse2` —— Ubuntu 23.04+ 默认不装 FUSE，而 AppImage 运行依赖它；
+3. 用目录版：`tar xzf bilibili-submit-gui-linux-x86_64.tar.gz`，进目录跑同名可执行文件。
+
+容器、受限环境、老内核上第 3 条往往是最快的。
 
 ### ffmpeg 与自动封面
 

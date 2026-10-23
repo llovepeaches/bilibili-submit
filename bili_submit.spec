@@ -2,11 +2,18 @@
 """PyInstaller 打包配置。
 
 ⚠️ PyInstaller 不是交叉编译器（官方明确说明 "it is not a cross-compiler"），
-   本 spec 必须在 Windows 上执行。Windows 一键打包：
+   本 spec **必须在目标平台上执行**：打 Windows 的 exe 要 Windows，
+   打 Linux 的 AppImage 要 Linux。平台相关的分支由 ``IS_WINDOWS`` 判定。
+
+   Windows 一键打包：
 
        build_windows.bat
 
-   没有 Windows 机器时可用 GitHub Actions 云端打包，见 .github/workflows/。
+   Linux 一键打包（产出 AppImage + tar.gz）：
+
+       ./build_linux.sh
+
+   没有对应机器时可用 GitHub Actions 云端打包，见 .github/workflows/。
 """
 
 from pathlib import Path
@@ -37,6 +44,13 @@ VERSION = "0.3.0"
 # 同一份 spec 要产出两个 exe（轻量版 + 内置 ffmpeg 版），名字靠环境变量区分。
 # 不设 EXE_NAME 时沿用 APP_NAME。
 EXE_NAME = os.environ.get("EXE_NAME", "").strip() or APP_NAME
+
+#: 平台判定。spec 现在要同时服务 Windows（exe / 安装器）与 Linux
+#: （AppImage），几处参数只在其中一个平台上有意义：
+#: ``icon=`` / ``version=`` 是 Windows 的版本资源与图标槽，Linux 上
+#: PyInstaller 根本不认 .ico；ffmpeg 的可执行文件名在 Linux 上没有
+#: ``.exe`` 后缀。统一在这里判一次，下面各处才不会各写各的。
+IS_WINDOWS = _sys.platform == "win32"
 
 datas = [
     # 配置示例随包分发，用户解压后可直接改名使用
@@ -96,6 +110,18 @@ GUI = os.environ.get("GUI") == "1"
 # 下面的 GUI 分支要拿它决定ffmpeg 是内嵌还是外置。
 ONEDIR = os.environ.get("INSTALLER") == "1"
 
+# Linux（AppImage）也走 onedir，且理由与 Windows 安装版**不同**，别照抄
+# 那边的注释：AppImage 是「一个文件装着整个目录」（squashfs，挂载而非
+# 解压），所以目录形态在这里没有任何「拷走要一起拷」的代价，反而省掉
+# onefile 每次启动把整个归档解到 /tmp 的过程。
+#
+# 用独立的环境变量而不是复用 INSTALLER：后者在 Windows 侧还连着
+# 「ffmpeg 走外置」「installer.iss 按这个名字找目录」一串约定，
+# 让 Linux 复用它会把两条平台的语义绑死。
+APPIMAGE = os.environ.get("APPIMAGE") == "1"
+if APPIMAGE:
+    ONEDIR = True
+
 if GUI:
     for _name in ("tkinter", "tk"):
         if _name in excludes:
@@ -108,6 +134,22 @@ if GUI:
         "tkinter.filedialog",
         "tkinter.commondialog",
     ]
+
+    # Linux 上 tkinter **不是** Python 自带的：Debian/Ubuntu 单独打包成
+    # ``python3-tk``，pip 装不了。缺了它 PyInstaller **一声不吭**——
+    # 它只是安静地打出一个不含 tkinter 的包，界面永远起不来，而构建
+    # 全程绿灯（文件齐全、体积正常、ffmpeg 也在）。所以这里自己先验
+    # 一次，把「打出来是坏的」变成「当场失败并说清怎么装」。
+    try:
+        import tkinter  # noqa: F401 - 只为确认构建机上真的有 tkinter
+    except ImportError as exc:
+        raise SystemExit(
+            f"[spec] GUI mode needs tkinter, but it is not importable ({exc}).\n"
+            "       Linux:   sudo apt install python3-tk     # Debian/Ubuntu\n"
+            "                sudo dnf install python3-tkinter # Fedora\n"
+            "       Windows: reinstall Python and tick 'tcl/tk and IDLE'.\n"
+            "       tkinter cannot be installed with pip."
+        ) from None
     # GUI 版打包 tkinter 后体积涨了约 2MB，体积不再是主要矛盾，
     # 换「双击就能用」更划算——用窗口界面的人不会自己去装 ffmpeg。
     # 安装版（ONEDIR）例外：ffmpeg 改成放 exe 同目录，见下方 ffmpeg 段。
@@ -184,10 +226,28 @@ if ONEDIR and _FFMPEG_EXPLICIT:
 BUNDLE_FFMPEG = _FFMPEG_EXPLICIT or (GUI and not NO_FFMPEG and not ONEDIR)
 
 
-def _resolve_ffmpeg_exe() -> Path | None:
-    """找要内嵌的 ffmpeg.exe。
+#: ffmpeg 的落点候选，按目录优先（vendor > assets > 根目录）。
+#:
+#: 两个名字都认是必须的：Linux 的可执行文件**没有扩展名**，只找
+#: ``ffmpeg.exe`` 的话 Linux 上任何需要 ffmpeg 的构建都会卡在下面的
+#: SystemExit 里，而那句报错通篇在讲 Windows 的修法。
+#:
+#: 同一目录内的**顺序也按平台分叉**，不能图省事固定成「.exe 在前」：
+#: 有人把 Windows 版拷进 vendor/ 之后（两边共用同一台构建机很常见），
+#: 固定顺序会让 Linux 挑中一个自己根本执行不了的文件——而它确实
+#: 存在、 size 也正常，一路到运行时才报 "Exec format error"。
+_FFMPEG_NAMES = ("ffmpeg.exe", "ffmpeg") if IS_WINDOWS else ("ffmpeg", "ffmpeg.exe")
+_FFMPEG_RELS = tuple(
+    f"{folder}/{name}" if folder else name
+    for folder in ("vendor", "assets", "")
+    for name in _FFMPEG_NAMES
+)
 
-    优先级：FFMPEG_EXE 环境变量 > vendor/ffmpeg.exe > assets/ffmpeg.exe > 根目录。
+
+def _resolve_ffmpeg_exe() -> Path | None:
+    """找要内嵌的 ffmpeg。
+
+    优先级：FFMPEG_EXE 环境变量 > vendor/ > assets/ > 根目录。
     vendor/ 是推荐的落点——setup_ffmpeg.py --dest vendor 就是往这放。
     """
     env = os.environ.get("FFMPEG_EXE", "").strip()
@@ -197,7 +257,7 @@ def _resolve_ffmpeg_exe() -> Path | None:
             return candidate
         print(f"[spec] WARNING: FFMPEG_EXE does not exist, ignored -> {env}")
 
-    for rel in ("vendor/ffmpeg.exe", "assets/ffmpeg.exe", "ffmpeg.exe"):
+    for rel in _FFMPEG_RELS:
         candidate = BASE / rel
         if candidate.is_file():
             return candidate
@@ -210,15 +270,24 @@ if BUNDLE_FFMPEG:
         # 不再降级打印警告：警告在几十页的 PyInstaller 输出里会被淹没，
         # 构建照样绿，坏包照样发出去。要失败，而且要说清怎么修。
         raise SystemExit(
-            "[spec] ffmpeg.exe not found, but this build requires it "
+            "[spec] ffmpeg not found, but this build requires it "
             + ("(BUNDLE_FFMPEG=1)" if _FFMPEG_EXPLICIT else "(GUI default)")
             + ".\n"
             "       Fix it:  python tools/setup_ffmpeg.py --dest vendor\n"
             "                (or set FFMPEG_EXE=<path> to point at one)\n"
             "       Skip it: NO_FFMPEG=1  -- build WITHOUT ffmpeg on purpose."
         )
-    # 放到归档根目录，运行时即 sys._MEIPASS/ffmpeg.exe
-    datas.append((str(_ffmpeg), "."))
+    # 放到归档根目录，运行时即 sys._MEIPASS/ffmpeg[.exe]。
+    #
+    # Linux 走 binaries 而不是 datas：**datas 不保留可执行位**，拷出来的
+    # ffmpeg 是个 mode 644 的普通文件，运行时报 Permission denied——
+    # 而那句报错完全看不出是权限问题，只会让人以为是 ffmpeg 坏了。
+    # Windows 反过来：能否执行只看扩展名，不经属性位，用 datas 省掉
+    # bindepend 对几十 MB 静态二进制的漫长扫描（见上方注释）。
+    if IS_WINDOWS:
+        datas.append((str(_ffmpeg), "."))
+    else:
+        binaries.append((str(_ffmpeg), "."))
     print(
         f"[spec] embedding ffmpeg: {_ffmpeg.name} "
         f"({_ffmpeg.stat().st_size / 1048576:.1f} MB)"
@@ -263,8 +332,13 @@ pyz = PYZ(a.pure)
 # 代价是「一个文件」变成「一个目录」，所以单文件版仍然保留：
 # 便携用法（拷走即用、U 盘跑）靠它，安装版靠 onedir。
 #
-# 由 INSTALLER=1 开启（定义见文件上方 GUI 段旁边）。CLI 始终是 onefile：
-# 命令行用户要的是 `scp 过去就能跑`，目录反而碍事。
+# 由 INSTALLER=1（Windows）或 APPIMAGE=1（Linux）开启，
+# 两者都定义在文件上方 GUI 段旁边。
+#
+# CLI 在 Windows 上始终是 onefile：命令行用户要的是 `scp 过去就能跑`，
+# 目录反而碍事。Linux 上 CLI **也走 onedir**——因为它最终被塞进
+# AppImage，而 AppImage 本身就是一个文件装着整个目录（squashfs 挂载，
+# 不是解压），目录形态在这里不付任何代价。
 #
 # ffmpeg 的处理已在上面 BUNDLE_FFMPEG 那里定好了（onedir 恒为外置）。
 # ---------------------------------------------------------------------------
@@ -298,9 +372,13 @@ def _make_exe():
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
-        icon=str(BASE / "assets" / f"{APP_NAME}.ico"),
+        # 这两项都是 Windows 的专属槽位：icon 只认 .ico（Linux 的窗口图标
+        # 由 AppImage 的 .desktop 文件指定，见 build_linux.sh），version
+        # 是烧进 exe 资源段的版本资源。Linux 上传过去轻则被忽略、重则
+        # 因为读不了 .ico 直接让构建失败，所以按平台给 None。
+        icon=str(BASE / "assets" / f"{APP_NAME}.ico") if IS_WINDOWS else None,
         version=str(BASE / "assets" / "version_info.txt")
-        if (BASE / "assets" / "version_info.txt").exists()
+        if IS_WINDOWS and (BASE / "assets" / "version_info.txt").exists()
         else None,
     )
 

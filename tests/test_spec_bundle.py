@@ -31,6 +31,28 @@ def _exec_head(env: dict[str, str] | None = None) -> dict:
     return ns
 
 
+def _embedded_ffmpeg(ns: dict) -> list[tuple]:
+    """取出被内嵌的 ffmpeg 条目（在 ``datas`` 或 ``binaries`` 里）。
+
+    落点**按平台分叉**，两边都是刻意的：
+
+    * Windows 走 ``datas``——能否执行只看扩展名，不经属性位，用 datas
+      能省掉 bindepend 对几十 MB 静态二进制的漫长扫描；
+    * Linux 走 ``binaries``——**datas 不保留可执行位**，拷出来的 ffmpeg
+      会变成 mode 644，运行时报 Permission denied，而那句报错完全
+      看不出是权限问题。
+
+    只在 ``datas`` 里找的话，这类断言在 Linux runner 上会红——而 CI 跑的
+    正是 Linux（见 test.yml）。反过来只认 binaries 则在 Windows 上恒红。
+    """
+    items: list[tuple] = []
+    for key in ("datas", "binaries"):
+        for item in ns.get(key, []):
+            if "ffmpeg" in Path(str(item[0])).name:
+                items.append(tuple(item))
+    return items
+
+
 def test_app_name_and_version_are_consistent():
     """spec 里的版本号要和包内 __version__ 一致，否则 --version 会骗人。"""
     ns = _exec_head()
@@ -142,9 +164,9 @@ def test_ffmpeg_is_embedded_when_requested(tmp_path):
     ns = _exec_head({"BUNDLE_FFMPEG": "1", "FFMPEG_EXE": str(fake)})
     assert ns["BUNDLE_FFMPEG"] is True
 
-    embedded = [d for d in ns["datas"] if str(d[0]).endswith("ffmpeg.exe")]
+    embedded = _embedded_ffmpeg(ns)
     assert len(embedded) == 1, f"期望内嵌一份 ffmpeg，实际 {embedded}"
-    # 目的目录是 "."，运行时即 sys._MEIPASS/ffmpeg.exe
+    # 目的目录是 "."，运行时即 sys._MEIPASS/ffmpeg[.exe]
     assert embedded[0][1] == "."
 
 
@@ -280,9 +302,9 @@ def test_gui_mode_embeds_ffmpeg_by_default(tmp_path):
     ns = _exec_head({"GUI": "1", "FFMPEG_EXE": str(fake)})
 
     assert ns["BUNDLE_FFMPEG"] is True
-    embedded = [d for d in ns["datas"] if str(d[0]).endswith("ffmpeg.exe")]
+    embedded = _embedded_ffmpeg(ns)
     assert len(embedded) == 1, f"GUI 版应内嵌 ffmpeg，实际 {embedded}"
-    assert embedded[0][1] == ".", "应落在归档根，运行时即 sys._MEIPASS/ffmpeg.exe"
+    assert embedded[0][1] == ".", "应落在归档根，运行时即 sys._MEIPASS/ffmpeg[.exe]"
     assert "imageio_ffmpeg" not in ns["excludes"], "带了 ffmpeg 就不必再排 imageio"
 
 

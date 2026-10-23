@@ -3,9 +3,11 @@
 面向**要自己出 exe 的人**。只想用程序的话看 [README](../README.md) 的
 「下载」一节即可，不用打包。
 
-> **只能在 Windows 上打包。** PyInstaller 官方明确说明它不是交叉编译器
+> **打包必须在目标平台上做。** PyInstaller 官方明确说明它不是交叉编译器
 > （"it is not a cross-compiler"），Nuitka、PyOxidizer 同样不支持——
-> 在 Linux 或 macOS 上跑 `pyinstaller` **产不出** exe。
+> 在 Linux 上跑 `pyinstaller` **产不出** exe，在 Windows 上也产不出
+> AppImage。所以：出 exe 用 Windows，出 AppImage 用 Linux，
+> 两者都在仓库里有一键脚本，也都能交给云端 Actions。
 
 ## 方式一：Windows 本地打包
 
@@ -19,7 +21,37 @@
 装了 [Inno Setup 6](https://jrsoftware.org/isinfo.php) 的话还会额外编译出
 `dist\bilibili-submit-setup.exe`；没装就跳过，图形界面版目录照样可用。
 
-## 方式二：GitHub Actions 云端打包
+## 方式二：Linux 本地打包
+
+```
+./build_linux.sh
+```
+
+产物在 `dist/` 下：图形界面与命令行各一个 AppImage，外加两个目录版
+`tar.gz`（AppImage 跑不了时的退路，见 README 的「Linux」一节）。
+
+脚本八步都会校验，卡住就停：缺 ffmpeg、ffmpeg 丢了可执行位、GUI 产物
+里没有 tcl/tk 运行时、AppImage 文件头不是 ELF，都会当场失败而不是
+给你一个坏包。
+
+三个前提值得一提，因为它们**不会自己报错**：
+
+| 前提 | 缺了会怎样 |
+|---|---|
+| `python3-tk`（`sudo apt install python3-tk`） | PyInstaller 一声不吭，产出「一启动就静默退出」的 GUI |
+| `libfuse2` | 打完包在本机跑不起来（产物本身是好的） |
+| 网络（下载 appimagetool） | 第 7 步失败；可用 `APPIMAGETOOL=...` 传入，或 `NO_APPIMAGE=1` 只出目录版 |
+
+常用开关：
+
+```bash
+ALLOW_NO_FFMPEG=1 ./build_linux.sh   # 明确产不带 ffmpeg 的包
+NO_GUI=1 ./build_linux.sh            # 只打命令行版（构建机没 tkinter 时）
+NO_APPIMAGE=1 ./build_linux.sh       # 只出目录版 tar.gz
+SKIP_VENV=1 ./build_linux.sh         # 用系统 Python，不建 .venv
+```
+
+## 方式三：GitHub Actions 云端打包
 
 推 tag 即可，Actions 会在 Windows runner 上打包并发 Release。
 仓库自带三个 workflow：
@@ -28,6 +60,8 @@
 |---|---|---|
 | `build-windows.yml` | 推 main / PR | 命令行版快速构建 |
 | `build-installer.yml` | 改了安装相关文件 | **验证安装器真能装上**（静默安装 → 启动 → 卸载全跑一遍） |
+| `build-linux.yml` | 改了打包相关文件 | 在 Ubuntu 上打 AppImage，并冒烟：命令行 `--version`、图形界面真的出窗口 |
+| `test.yml` | 每次 push | 跑全部测试（含界面用例，Xvfb） |
 | `release.yml` | 推 tag | 出正式 Release，含安装器与全部资产 |
 
 三者都带冒烟测试，**打包失败会直接标红，而不是给你一个坏 exe**。

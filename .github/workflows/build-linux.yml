@@ -1,0 +1,112 @@
+name: 打包 Linux（AppImage）
+
+# 与 build-installer.yml 同一层定位：**改打包相关时**的验证。
+# 真正发出去的那次在 release.yml（阶段 4 会接上），两者都要有——
+# 只加 release 的话「改了没触发发布」时一路溜到发版；只加这里的话
+# 产物永远没人下载。
+
+on:
+  push:
+    paths:
+      - 'bili_submit.spec'
+      - 'build_linux.sh'
+      - '.github/workflows/build-linux.yml'
+      - 'bilibili_submit/**'
+      - 'main.py'
+      - 'main_gui.py'
+      - 'requirements.txt'
+      - 'tools/**'
+  pull_request:
+    paths:
+      - 'bili_submit.spec'
+      - 'build_linux.sh'
+      - '.github/workflows/build-linux.yml'
+      - 'bilibili_submit/**'
+      - 'main.py'
+      - 'main_gui.py'
+      - 'requirements.txt'
+      - 'tools/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # 打包要跑两轮 PyInstaller + squashfs，正常 10 分钟内；卡住时
+    # （比如下载 appimagetool 挂了）别占着 runner。
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装系统依赖
+        # libx11/libxext/libxrender：tkinter 运行时要系统的 X11 库，
+        #   少了它界面起不来，而报错看不出跟 X11 有关（这是 test.yml
+        #   里已经踩过一次的坑）。
+        # libfuse2：AppImage **运行**要它。Ubuntu 24.04 起默认不装，
+        #   于是「打出来的包在本机上跑一下」这一步会先失败。
+        # xvfb：无显示环境下跑图形界面冒烟。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-6 libxext6 libxrender1 libfuse2 xvfb xdotool
+
+      - name: 安装 Python 依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: 确认 tkinter 可用
+        # 单独一步而不是留在打包里：GUI 缺 tkinter 时 PyInstaller
+        # 不报错，只会安静产出「一启动就静默退出」的包。这里先确认
+        # 构建机有，打包时 spec 还会再确认一次（双重保险）。
+        run: |
+          xvfb-run -a python -c "import tkinter; r=tkinter.Tk(); r.destroy(); print('tkinter OK', tkinter.TkVersion)"
+
+      - name: 打包
+        run: ./build_linux.sh
+
+      - name: 冒烟：命令行版能跑
+        run: |
+          ./dist/bilibili-submit-cli-x86_64.AppImage --version
+          ./dist/bilibili-submit-cli-x86_64.AppImage --help
+
+      - name: 冒烟：图形界面版能出窗口
+        # 光「进程没崩」不够——界面起不来时程序也会安静地退出（windowed
+        # 程序没有控制台，错误全部丢失）。所以要真的去 X 里数窗口。
+        run: |
+          Xvfb :99 -screen 0 1280x900x24 &
+          XPID=$!
+          sleep 2
+          DISPLAY=:99 ./dist/bilibili-submit-gui-x86_64.AppImage &
+          GPID=$!
+          sleep 15
+          if ! kill -0 $GPID 2>/dev/null; then
+            echo "::error::图形界面版启动后立即退出（窗口没起来）"
+            kill $XPID 2>/dev/null || true
+            exit 1
+          fi
+          COUNT=$(DISPLAY=:99 xdotool search --onlyvisible . | wc -l)
+          echo "X 里可见窗口数: $COUNT"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "::error::图形界面版进程在跑，但 X 里没有窗口"
+            kill $GPID $XPID 2>/dev/null || true
+            exit 1
+          fi
+          DISPLAY=:99 xdotool search --onlyvisible . | while read w; do
+            echo "  窗口 $w: $(DISPLAY=:99 xdotool getwindowname "$w" 2>/dev/null)"
+          done
+          kill $GPID $XPID 2>/dev/null || true
+          echo "[OK] 图形界面版冒烟通过"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: bilibili-submit-linux
+          path: |
+            dist/*.AppImage
+            dist/*.tar.gz

@@ -2,6 +2,12 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
+# shell 脚本反过来：CRLF 会让 bash 把 shebang 读成 `/bin/bash^M`，
+# 报 "bad interpreter: No such file or directory"——而那个报错里
+# 看不到 \r，看的人只会以为 bash 没装。上面的 `* text=auto` 会在
+# Windows 检出时统一转成 CRLF，所以这里必须显式钉成 LF。
+*.sh text eol=lf
+
 # 安装器的两个输入文件同理：ISCC 跑在 Windows 上，.isl 里的中文与
 # 段名行尾的 \r 都按 CRLF 处理最稳。写死 eol=crlf 还有个副作用是好的——
 # 仓库里存的是 LF 字节，Windows 上检出才展开成 CRLF，diff 不会因为
