@@ -30,7 +30,6 @@ from ...exceptions import BiliError
 from .. import theme
 from ..qr import draw_placeholder, draw_qr
 from ..widgets import (
-    Card,
     LogConsole,
     FilledButton,
     OutlinedButton,

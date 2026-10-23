@@ -1,0 +1,73 @@
+name: Tests
+
+# 测试与静态检查的门禁。
+#
+# 为什么需要这个文件：三个打包 workflow 全是 windows-latest 且**一条测试
+# 都不跑**，测试的通过与否长期只存在于本地某个人的终端里。任何人都可以
+# push 一行让 764 条用例变红的改动，CI 全程绿。
+#
+# 为什么放 ubuntu 而不是 windows：tests/conftest.py 的 ``needs_display``
+# 会用真的 ``tk.Tk()`` 探测 X server，仓库里 202 处界面用例要靠它决定
+# 跳过还是真跑。Linux + Xvfb 是这套机制唯一能真正生效的环境。Windows 上
+# 界面测试能不能跑是另一回事，这里不赌。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 两样东西都不可省：
+      # - xvfb：没有 X server 时 Tk() 直接抛 TclError。而 conftest 的
+      #   _QUIET_SKIP_BUDGET=5 只会在终端打一条横幅，**不会让 job 变红**——
+      #   界面用例静默跳过、job 照样绿，这是最难发现的一种假绿。
+      # - libx11：python-build-standalone 的 tkinter 编进去了，但运行时
+      #   仍要系统的 X11 库；少一个就会在 import 阶段炸在动态链接上，
+      #   报错信息完全看不出跟 Xvfb 有关。
+      - name: 安装显示环境与系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libx11-6 libxext6 libxrender1
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pylama
+
+      # 先确认 tkinter 真的可用再往下跑。
+      # 不做这一步的话，后面「大量用例被跳过」的横幅会被当成偶发噪声，
+      # 而真相是环境从头就没配好。宁可在这里红，也别让门禁自己骗自己。
+      - name: 确认 tkinter 可用
+        run: xvfb-run -a python -c "import tkinter; r=tkinter.Tk(); r.destroy(); print('tkinter OK', tkinter.TkVersion)"
+
+      # 第一步：常规跑。这一步和开发者本地的体验一致。
+      - name: 运行测试
+        run: xvfb-run -a python -m pytest -q
+
+      # 第二步：严格模式再跑一遍。
+      # BILLI_REQUIRE_DISPLAY=1 会让 conftest 在探测不到屏时**不跳过**
+      # 而是真去建窗口、真抛错。上面那步在环境坏了的时候仍然可能报绿
+      # （整片跳过），这一步是堵那个口子的。
+      # 两步都跑不是浪费：第一步定位「哪条用例挂了」，第二步确保
+      # 「没有任何一条是靠跳过蒙混过关的」。
+      - name: 运行测试（严格模式，禁止静默跳过界面用例）
+        env:
+          BILLI_REQUIRE_DISPLAY: '1'
+        run: xvfb-run -a python -m pytest -q
+
+      # 阈值与本地一致（见 pylama.ini 的注释），只在这里显式传一次——
+      # mccabe 的限制让它没法写进配置文件。
+      - name: 静态检查
+        run: pylama --max-complexity 20 bilibili_submit tests tools

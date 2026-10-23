@@ -1665,3 +1665,166 @@ def test_build_bat_verifies_ffmpeg_landed_in_the_gui_dir():
         "第 8 步应校验图形界面版目录里的 ffmpeg.exe"
     )
     assert "exit /b 1" in step, "ffmpeg 落点不对时构建要失败，不能只是提示"
+
+
+# ---------------------------------------------------------------------------
+# 测试门禁：CI 必须真的跑测试
+# ---------------------------------------------------------------------------
+
+TEST_YML = ROOT / ".github" / "workflows" / "test.yml"
+
+
+def _test_yml_steps() -> list[str]:
+    """切出 test.yml 里每个 ``- name:`` step 的正文。
+
+    按 step 切而不是全文搜关键词：全文搜的话「在某个注释里提到
+    pytest」也会通过，那这条守卫等于不存在。
+    """
+    body = TEST_YML.read_text(encoding="utf-8")
+    marks = [m.start() for m in re.finditer(r"^\s*- name:", body, re.MULTILINE)]
+    assert len(marks) >= 2, "test.yml 里没解析到 step"
+    bounds = marks + [len(body)]
+    return [body[bounds[i]: bounds[i + 1]] for i in range(len(marks))]
+
+
+def _without_comments(step: str) -> str:
+    """去掉 step 正文里夹带的 YAML 注释。
+
+    step 是按下一个 ``- name:`` 切开的，所以**下一个 step 前面的注释**
+    会算进本 step 的正文。而那些注释里常常正写着它要干什么（比如
+    「第一步：常规跑」下面就会提到 pytest），不剥掉的话「这个 step 有
+    没有执行 pytest」会恒为真——又是那种拦不住任何东西的守卫。
+    """
+    return "\n".join(
+        line for line in step.splitlines() if not line.strip().startswith("#")
+    )
+
+
+def _step_named(steps: list[str], *keywords: str) -> str:
+    """取名字里同时包含所有关键词的那个 step 的正文。"""
+    for step in steps:
+        head = step.splitlines()[0]
+        if all(k in head for k in keywords):
+            return step
+    raise AssertionError(f"test.yml 里找不到名字含 {keywords} 的 step")
+
+
+def test_ci_really_runs_the_tests():
+    """测试门禁必须存在，且真的执行 pytest。
+
+    三个打包 workflow 全是 ``windows-latest`` 且**一条测试都不跑**——
+    764 条用例的通过与否长期只存在于本地某个人的终端里。任何人都能
+    push 一行让它们变红的改动，CI 全程绿，发现的时候已经是好几个
+    提交之后了。
+
+    这里钉住的是「有一条 workflow 跑 pytest」这件最低限度的事，
+    免得以后整理 workflow 时把它当成没人用的东西删掉。
+    """
+    assert TEST_YML.is_file(), "缺少 .github/workflows/test.yml——CI 不跑测试"
+    body = TEST_YML.read_text(encoding="utf-8")
+    assert "ubuntu-latest" in body, (
+        "测试要在 Linux 上跑：界面用例靠 Xvfb 才能真跑，"
+        "Windows 上只能整片跳过"
+    )
+    steps = _test_yml_steps()
+    run_step = _step_named(steps, "运行测试")
+    assert "pytest" in _without_comments(run_step), (
+        "test.yml 里没有真的执行 pytest"
+    )
+
+
+def test_ci_runs_tests_twice_once_in_strict_mode():
+    """必须有一遍带 ``BILLI_REQUIRE_DISPLAY=1`` 的严格模式。
+
+    这是整套界面测试里最容易失效的一环，而且失效方式是**报绿**：
+    ``tests/conftest.py`` 的 ``_QUIET_SKIP_BUDGET = 5`` 在跳过数超预算时
+    只往终端打一条横幅，**不会让 job 变红**。也就是说 Xvfb 没配好时，
+    202 处 ``needs_display`` 用例会静默跳过，job 照样成功——
+    改动一行界面代码都没被验证，而所有人都以为验证过了。
+
+    严格模式下 conftest 探测不到屏时**不跳过**，而是真去建窗口、真抛
+    TclError。少了这一遍，上面那条「跑 pytest」的守卫是可以被绕过的。
+    """
+    steps = _test_yml_steps()
+    strict_step = _step_named(steps, "严格模式")
+    assert "BILLI_REQUIRE_DISPLAY" in strict_step, (
+        "必须有一遍带 BILLI_REQUIRE_DISPLAY=1 的测试："
+        "没有它，界面用例在 Xvfb 失效时会静默跳过，job 照样报绿"
+    )
+    assert "1" in strict_step.split("BILLI_REQUIRE_DISPLAY")[1][:20], (
+        "BILLI_REQUIRE_DISPLAY 要设成 1"
+    )
+    assert "pytest" in _without_comments(strict_step), (
+        "严格模式那一遍没真的执行 pytest"
+    )
+
+
+def test_ci_provides_a_display_for_the_gui_tests():
+    """界面用例要能跑，光装 pytest 不够，得有 X server。
+
+    Tk 在没有 X server 时直接从 ``Tk()`` 抛 TclError。GitHub runner 上
+    默认没有，必须装 xvfb 并用 ``xvfb-run`` 包住。少了这一步，
+    上面那两条守卫会以一种最迷惑的方式失败：不是报错，是**静默跳过**。
+    """
+    whole = TEST_YML.read_text(encoding="utf-8")
+    assert "xvfb" in whole.lower(), "test.yml 没装/没用 xvfb——界面用例跑不起来"
+    # 光装 xvfb 也可能白装：python-build-standalone 的 tkinter 运行时仍要
+    # 系统的 X11 库，少一个就炸在动态链接上，报错完全看不出跟 Xvfb 有关。
+    # 所以还要有一个「真的建一个窗口」的前置检查。
+    steps = _test_yml_steps()
+    probe = _step_named(steps, "tkinter")
+    body = _without_comments(probe)
+    assert "Tk()" in body, (
+        "缺一步确认 tkinter 真的可用：环境没配好时，"
+        "大量用例被跳过只会在终端留一条容易被忽略的横幅"
+    )
+    assert "xvfb-run" in probe, "探测 tkinter 那步本身也得在 xvfb 下跑"
+
+    # 逐个 step 判，不能全文搜 xvfb-run：它只要出现在**任何一个** step 里
+    # 就能让全文搜通过（装依赖那步总得写 xvfb），而真正跑 pytest 的那步
+    # 完全可能是裸的 `python -m pytest`。那样界面用例照样整片跳过。
+    #
+    # 这个坑是变异测试抓出来的：把「运行测试」那步的 xvfb-run 去掉，
+    # 全文搜版本的守卫依然绿。
+    #
+    # 判「调用」用 ``-m pytest`` 而不是 ``pytest``：装依赖那步也有
+    # ``pip install pytest pylama``，按裸词搜会把它也当成一次调用，然后
+    # 要求它也带 xvfb-run——装依赖当然不需要，于是守卫在**正常**配置下
+    # 反而恒红。守卫恒红和恒绿一样没用，这是变异之外还得正向跑一遍的
+    # 原因（本轮两条方向相反的坑都是这么抓到的）。
+    invocations = [
+        (step, line.strip())
+        for step in steps
+        for line in _without_comments(step).splitlines()
+        if "-m pytest" in line
+    ]
+    assert invocations, "没有任何 step 真正调用 pytest"
+    for step, line in invocations:
+        head = step.splitlines()[0].strip()
+        assert "xvfb-run" in line, (
+            f"{head} 里的 `{line}` 没有用 xvfb-run 包住——"
+            "界面用例会整片跳过，而且只是跳过，不会报错"
+        )
+
+
+def test_ci_runs_the_linter_with_the_same_threshold_as_local():
+    """静态检查要跑，且阈值与本地一致。
+
+    阈值只能从命令行传（mccabe 的限制，``pylama.ini`` 里写了也不生效），
+    所以它是**唯一**一个必须靠人来保持一致的数字。本地用 20、CI 用默认
+    值的话，会得到一个「本地干净、CI 一堆 C901」或者更糟的
+    「CI 干净、本地一堆」的分裂状态，两边都不敢信。
+
+    硬编码 20 而不是去解析 pylama.ini：那份文件里这个数字只出现在注释
+    里，解析注释脆弱且没有意义。两边都写死，谁改了另一边就会红，
+    那正是我们想要的。
+    """
+    steps = _test_yml_steps()
+    lint_step = _step_named(steps, "静态检查")
+    assert "pylama" in lint_step, "test.yml 没跑 pylama"
+    assert "--max-complexity 20" in lint_step, (
+        "CI 的 pylama 阈值必须显式写成 20 与本地一致——"
+        "这个值只能从命令行传，不写就用默认值，两边会悄悄分叉"
+    )
+    for target in ("bilibili_submit", "tests", "tools"):
+        assert target in lint_step, f"pylama 的检查范围漏了 {target}"
