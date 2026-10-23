@@ -8,6 +8,34 @@
 
 ## [未发布]
 
+### 修复 —— Linux 桌面端：能跑，但有三处「一眼没做完」
+
+界面层本来就按跨平台写的，Linux 上能直接跑起来（这也是这次敢做
+Linux 版的前提）。真跑起来后有三处不对：
+
+- **窗口没有图标**。``iconbitmap`` 读不了 ``.ico``——那是 Windows
+  专属格式。Linux / macOS 要走 ``iconphoto``，只认 PNG。新增
+  `assets/bilibili-submit.png`（`tools/make_icon.py` 顺带产出），
+  非 Windows 上改走 PNG；``PhotoImage`` 挂在窗口上防 GC——
+  被回收时图标会消失且**不报错**，是最难排查的那类 bug。
+- **HiDPI 上一切小一倍**。``launch`` 把 ``tk scaling`` 钉回 4/3 是为了
+  抵掉 Windows 的自动缩放，Linux 上没有配套动作，系统缩放被凭空抹掉
+  （``UI_SCALE`` 恒为 1.0）：字体按点数走、间距按像素走，HiDPI 屏上
+  文字直接溢出固定内边距——正是 Windows 上当年修掉的症状。现在钉之前
+  先把系统缩放读出来（``desktop.detect_system_scale``），``auto`` 档
+  时喂给 ``UI_SCALE``，按 1/4 档对齐（Xvfb 这类虚拟屏会算出 1.04 的
+  零头）。Windows 行为一字不改。
+- **中文字体缺了全是方框**。``Noto Sans CJK SC`` 不是每个发行版都装，
+  缺了 Tk 回落到默认字体，中文渲染成方框，程序不报任何错。现在按
+  候选链（Noto CJK SC → Source Han Sans SC → Noto Sans SC →
+  文泉驿 → 微软雅黑）挑一个系统里真有的，等宽字体同理。
+- 顺带：系统主题检测在 Linux 上问 GNOME 的 ``gsettings``
+  （没有 / 超时 / 不是 GNOME 都回落浅色）。
+
+新增 `bilibili_submit/ui/desktop.py`（与 `win_effects.py` 对称的
+「非 Windows 那一半」）与 `tests/test_desktop.py`（16 条）。
+803 → 820 passed。
+
 ### 新增 —— Web 界面（``bili-submit web``）
 
 给「不想装桌面环境」的场景加了一个浏览器界面：选服务器上的目录 →

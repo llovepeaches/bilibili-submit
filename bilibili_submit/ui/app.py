@@ -34,7 +34,6 @@ import logging
 import tkinter as tk
 from datetime import datetime
 from tkinter import ttk
-from pathlib import Path
 from typing import Callable
 
 from .. import __version__
@@ -45,7 +44,7 @@ from ..auth import (
     load_cookies,
 )
 from ..client import BiliClient
-from . import layout, theme, win_effects
+from . import desktop, layout, theme, win_effects
 from .environment import EnvironmentSnapshot, probe_environment
 from .state import load_app_state, resolve_theme_mode
 from .widgets import BrandMark, NavRailItem, StatusBar
@@ -554,20 +553,24 @@ def _set_dpi_aware() -> None:
         pass
 
 
-def _set_window_icon(root: tk.Tk) -> None:
-    """给窗口设图标，找不到就跳过（图标缺失不该阻止启动）。"""
-    from ..ffmpeg import app_dir
+def _apply_platform_fonts(root) -> None:
+    """在 Linux / macOS 上把中文字体换成系统里真有的那一个。
 
-    for candidate in (
-        app_dir() / f"{'bilibili-submit'}.ico",
-        Path(__file__).resolve().parent.parent.parent / "assets" / "bilibili-submit.ico",
-    ):
-        if candidate.is_file():
-            try:
-                root.iconbitmap(str(candidate))
-                return
-            except tk.TclError:
-                continue
+    ``theme`` 默认用 ``Noto Sans CJK SC``，它不是每个发行版都装。
+    缺了 Tk 会回落到某种默认字体，**中文全部渲染成方框**——整个界面
+    没法用，而且是那种「程序没报错、就是看不懂」的故障。
+
+    必须在建任何控件之前定下来：字体是注册进 Tk 的，之后改
+    ``theme.FAMILY`` 不会影响已建好的控件。
+
+    Windows / macOS 上 ``CJK_FAMILIES`` 首选就够用，探测也只是确认
+    一下，所以不做平台判断——链上没有就保持原值。
+    """
+    family, mono = desktop.resolve_families(root)
+    if family:
+        theme.FAMILY = family
+    if mono:
+        theme.MONO_FAMILY = mono
 
 
 def launch() -> int:
@@ -602,6 +605,19 @@ def launch() -> int:
     # 字体被放大而像素间距不放大——文字直接溢出固定内边距。字体放大
     # 统一交给 theme.UI_SCALE（字与间距同一个因子），这里只负责
     # 把系统自动设的那份抵掉。
+    #
+    # Linux / macOS 上这句话之前**没有配套动作**：那里的系统缩放被凭空
+    # 抹掉（UI_SCALE 恒为 1.0），HiDPI 屏上一切小一倍。所以钉之前先
+    # 把系统缩放读出来，喂给 UI_SCALE——顺序不能反，钉完读到的就永远
+    # 是 4/3 了。Windows 那边的检测在 theme._detect_ui_scale 里早就做了
+    # （读系统 DPI），这里只在非 Windows 上补，Windows 行为一字不改。
+    if desktop.IS_LINUX or desktop.IS_MAC:
+        system_scale = desktop.detect_system_scale(root)
+    else:
+        system_scale = 1.0
+    if app_state.ui_scale == "auto" and system_scale > 1.0:
+        theme.apply_ui_scale(system_scale)
+        layout.rebuild()
     root.tk.call("tk", "scaling", 4.0 / 3.0)
     root.title(f"哔哩哔哩自动投稿程序 {__version__}")
     root.geometry(f"{theme.DEFAULT_WIDTH}x{theme.DEFAULT_HEIGHT}")
@@ -617,13 +633,18 @@ def launch() -> int:
 
     # 主题必须在建界面之前定下来：tk/ttk 把颜色写进控件，之后改色板
     # 不会影响已建好的控件，所以切换主题要重启（设置页里也这么写的）
+    #
+    # 系统偏好分两路问：Windows 读注册表（win_effects），Linux 问
+    # GNOME 的 gsettings（desktop）。两边失败都回落浅色。
     mode = resolve_theme_mode(
-        app_state.theme_mode, win_effects.system_prefers_light()
+        app_state.theme_mode,
+        win_effects.system_prefers_light() and desktop.system_prefers_light(),
     )
     theme.apply(style, mode)
     _configure_nav_style(style)
 
-    _set_window_icon(root)
+    _apply_platform_fonts(root)
+    desktop.set_window_icon(root)
 
     app = App(root)
     app.pack(fill="both", expand=True)

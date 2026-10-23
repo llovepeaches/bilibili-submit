@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成打包用的应用图标 assets/bilibili-submit.ico。
+"""生成打包用的应用图标 assets/bilibili-submit.ico（同时产出一份 PNG）。
 
 只在开发/打包时运行，运行期不依赖 Pillow。
 
@@ -8,6 +8,11 @@
 文件名必须与 bili_submit.spec 里的 APP_NAME 保持一致——之前这里写的是
 bili-submit.ico，而 spec 找 bilibili-submit.ico，导致 Windows 上打包直接
 报 FileNotFoundError。改成从 spec 读，避免两处各写一个名字再次跑偏。
+
+为什么还要一份 PNG：``iconbitmap`` 在 Linux / macOS 上**读不了 .ico**
+（Windows 专属格式），而这两个平台的窗口图标要走 ``iconphoto``，
+它只认 PNG/GIF。只产 .ico 的话 Linux 上程序能跑但窗口没有图标，
+任务栏里是一片空白——不致命，但一眼看上去像没做完。
 """
 
 from __future__ import annotations
@@ -37,6 +42,8 @@ def app_name() -> str:
 
 
 OUT = ROOT / "assets" / f"{app_name()}.ico"
+#: 同款图标的 PNG 版，给 Linux / macOS 的 ``iconphoto`` 用。
+PNG_OUT = ROOT / "assets" / f"{app_name()}.png"
 
 
 def rounded_mask(size: int, radius_ratio: float = 0.22) -> Image.Image:
@@ -88,7 +95,11 @@ def main() -> None:
         format="ICO",
         sizes=[(s, s) for s in SIZES],
     )
+    # 256 一个尺寸就够：``iconphoto`` 会自己缩放，而 PNG 不进 Windows
+    # 的打包产物（那边用 .ico），没必要多占体积。
+    base.save(PNG_OUT, format="PNG")
     print(f"图标已生成: {OUT}")
+    print(f"同款 PNG:  {PNG_OUT}（Linux / macOS 的 iconphoto 用）")
     print("预览尺寸:", ", ".join(f"{s}x{s}" for s in SIZES))
 
 
